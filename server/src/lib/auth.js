@@ -96,6 +96,7 @@ export async function authenticateToken(token) {
 }
 
 export async function requireAuth(req, _res, next) {
+  if (req.employee) return next(); // already authenticated by an earlier router
   const token = getBearer(req);
   if (!token) throw unauthorized();
   const auth = await authenticateToken(token);

@@ -27,6 +27,7 @@ import printerRoutes from './routes/printers.js';
 import notificationRoutes from './routes/notifications.js';
 import reportRoutes from './routes/reports.js';
 import publicRoutes from './routes/public.js';
+import fontRoutes from './routes/fonts.js';
 
 export function createApp() {
   const app = express();
@@ -61,7 +62,11 @@ export function createApp() {
   app.use('/api', printerRoutes);
   app.use('/api', notificationRoutes);
   app.use('/api', reportRoutes);
+  app.use('/api', fontRoutes);
   app.use('/api', (_req, res) => res.status(404).json({ error: 'ไม่พบ API' }));
+
+  // Only fonts are public uploads — payment slips stay private (served through an authenticated endpoint)
+  app.use('/uploads/fonts', express.static(path.join(config.uploadDir, 'fonts'), { maxAge: '30d', setHeaders: (res) => res.setHeader('Access-Control-Allow-Origin', '*') }));
 
   // Frontend (POS, Customer Display, Booking website) — single build
   if (fs.existsSync(config.webDist)) {

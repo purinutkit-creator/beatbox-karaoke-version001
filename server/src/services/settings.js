@@ -2,6 +2,15 @@ import { pool } from '../db/index.js';
 import { config } from '../config.js';
 
 export const DEFAULT_SETTINGS = {
+  appearance: {
+    defaultLanguage: 'th', // th | en
+    thFont: 'Sarabun',
+    enFont: 'Poppins',
+    receiptThFont: 'Kanit',
+    receiptEnFont: 'Kanit',
+    displayScale: 1,
+    customFonts: [], // [{ family, url, format }]
+  },
   general: {
     primaryColor: '#8b5cf6',
     accentColor: '#ec4899',
@@ -206,6 +215,7 @@ export function publicSettings(s) {
   return {
     store: s.store,
     general: s.general,
+    appearance: s.appearance,
     tax: { vatEnabled: s.tax.vatEnabled, vatRate: s.tax.vatRate, vatMode: s.tax.vatMode, scEnabled: s.tax.scEnabled, scRate: s.tax.scRate, scBase: s.tax.scBase, rounding: s.tax.rounding },
     payment: {
       accountName: s.payment.accountName,

@@ -472,6 +472,13 @@ r.get('/payment-verifications', async (req, res) => {
   );
 });
 
+/** Staff-only view of an uploaded slip (slips are never public). */
+r.get('/payment-verifications/:id/slip', can('slip.verify'), async (req, res) => {
+  const pv = await one('SELECT slip_path FROM payment_verifications WHERE id = $1', [req.params.id]);
+  if (!pv?.slip_path) throw notFound();
+  res.sendFile(pv.slip_path);
+});
+
 r.post('/payment-verifications/:id/review', can('slip.verify'), async (req, res) => {
   const b = parse(z.object({ approve: z.boolean(), transactionRef: z.string().max(100).optional().nullable(), reason: z.string().max(300).optional() }), req.body);
   const out = await tx(async (c) => {
