@@ -1,0 +1,15 @@
+{
+  "name": "beatbox-karaoke-pos",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "workspaces": ["shared", "server", "web"],
+  "scripts": {
+    "dev": "npm run dev --workspace server & npm run dev --workspace web",
+    "build": "npm run build --workspace web",
+    "start": "npm run start --workspace server",
+    "migrate": "npm run migrate --workspace server",
+    "seed": "npm run seed --workspace server",
+    "test": "npm test --workspace shared && npm test --workspace server"
+  }
+}
