@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { pool, tx } from '../db/index.js';
 import { pinLookup, verifyPin, signToken, requireAuth, loadPermissions, signApproval, hasPerm } from '../lib/auth.js';
-import { unauthorized, forbidden, badRequest } from '../lib/errors.js';
+import { unauthorized, forbidden } from '../lib/errors.js';
 import { logActivity } from '../lib/activity.js';
 import { z, parse } from '../lib/validate.js';
 import { getSettings } from '../services/settings.js';

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { pool, tx, many, one } from '../db/index.js';
+import { tx, many, one } from '../db/index.js';
 import { requireAuth, can } from '../lib/auth.js';
 import { idempotent } from '../lib/idempotency.js';
 import { logActivity } from '../lib/activity.js';

@@ -24,7 +24,6 @@ import { getPaymentProvider } from '../providers/payment.js';
 import { lineLogin } from '../providers/line.js';
 import { sendSms } from '../providers/sms.js';
 import { redeemReward } from './members.js';
-import { cancelReservation } from './reservations.js';
 import { calculateCancellationRefund } from '@beatbox/shared/calc.js';
 import { normalizePhone, bkkDateTime, fmtDate, fmtTime } from '@beatbox/shared/format.js';
 import { round2 } from '@beatbox/shared/money.js';

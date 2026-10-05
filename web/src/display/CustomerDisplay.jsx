@@ -1,0 +1,196 @@
+// Customer Display — runs on any device (tablet, Smart TV, phone, second screen), paired with a POS by connection code.
+import { useEffect, useRef, useState } from 'react';
+import { io } from 'socket.io-client';
+import { CheckCircle2, Maximize, Mic2, Wifi, WifiOff, Globe } from 'lucide-react';
+import { useT } from '../lib/i18n.jsx';
+import { api, LS } from '../lib/api.js';
+import { useApp } from '../lib/store.jsx';
+import { QRCode, PinPad, money } from '../components/ui.jsx';
+import { formatMinutesShort } from '@beatbox/shared/roomPricing.js';
+import { PAYMENT_METHODS } from '@beatbox/shared/constants.js';
+
+function Promo({ images, autoplay }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    if (!images.length || autoplay === false) return;
+    const d = (images[i % images.length]?.duration_seconds || 8) * 1000;
+    const id = setTimeout(() => setI((x) => (x + 1) % images.length), d);
+    return () => clearTimeout(id);
+  }, [i, images, autoplay]);
+  if (!images.length)
+    return (
+      <div className="overlay">
+        <Mic2 size={120} />
+      </div>
+    );
+  return images.map((img, k) => (
+    <a key={img.id} href={img.link_url || undefined} target="_blank" rel="noreferrer">
+      <img src={img.image_url} alt={img.title || ''} style={{ opacity: k === i % images.length ? 1 : 0 }} />
+    </a>
+  ));
+}
+
+export default function CustomerDisplay() {
+  const { t, tp, lang, setLang } = useT();
+  const { publicSettings } = useApp();
+  const params = new URLSearchParams(window.location.search);
+  const [code, setCode] = useState(params.get('code') || LS.get('bb_cd_code') || '');
+  const [input, setInput] = useState('');
+  const [paired, setPaired] = useState(false);
+  const [error, setError] = useState('');
+  const [state, setState] = useState({ mode: 'IDLE' });
+  const [images, setImages] = useState([]);
+  const [online, setOnline] = useState(false);
+  const sockRef = useRef(null);
+  const successTimer = useRef(null);
+
+  useEffect(() => {
+    if (!code) return;
+    let alive = true;
+    api
+      .get(`/public/display/${code}`, { auth: false })
+      .then((d) => {
+        if (!alive) return;
+        setImages(d.images);
+        if (d.state) setState(d.state);
+      })
+      .catch((e) => {
+        setError(e.message);
+        setCode('');
+        LS.set('bb_cd_code', null);
+      });
+    const s = io({ path: '/socket.io', auth: { kind: 'display' }, transports: ['websocket', 'polling'] });
+    sockRef.current = s;
+    const join = () =>
+      s.emit('display:join', { code, clientId: LS.get('bb_device_key') || 'display' }, (r) => {
+        if (r?.ok) {
+          setPaired(true);
+          LS.set('bb_cd_code', code);
+          if (r.state) setState(r.state);
+        } else setError(r?.error || 'ไม่พบรหัสเชื่อมต่อ');
+      });
+    s.on('connect', () => {
+      setOnline(true);
+      join();
+    });
+    s.on('disconnect', () => setOnline(false));
+    s.on('display:state', (st) => setState(st || { mode: 'IDLE' }));
+    s.on('sync', () => {});
+    const imgPoll = setInterval(() => api.get(`/public/display/${code}`, { auth: false }).then((d) => setImages(d.images)).catch(() => {}), 120000);
+    return () => {
+      alive = false;
+      clearInterval(imgPoll);
+      s.disconnect();
+    };
+  }, [code]);
+
+  useEffect(() => {
+    clearTimeout(successTimer.current);
+    if (state.mode === 'SUCCESS') successTimer.current = setTimeout(() => setState({ mode: 'IDLE' }), 15000);
+  }, [state]);
+
+  const store = publicSettings?.store;
+  if (!code || !paired) {
+    return (
+      <div className="login-wrap">
+        <div className="card login-card">
+          <div className="row end"><button className="btn ghost sm" onClick={() => setLang(lang === 'th' ? 'en' : 'th')}><Globe size={16} /> {lang === 'th' ? 'EN' : 'TH'}</button></div>
+          <h2>Customer Display</h2>
+          <p className="muted">{t('กรอกรหัสเชื่อมต่อที่แสดงบนเครื่อง POS')}</p>
+          {code && !error ? <p>{t('กำลังเชื่อมต่อ')}... <span className="spinner" /></p> : (
+            <>
+              <PinPad value={input} onChange={setInput} length={6} onComplete={(v) => { setError(''); setCode(v); }} />
+              <button className="btn mt" onClick={() => { setError(''); setCode(input); }} disabled={input.length < 4}>{t('เชื่อมต่อ')}</button>
+            </>
+          )}
+          {error && <p style={{ color: 'var(--danger)' }}>{t(error)}</p>}
+        </div>
+      </div>
+    );
+  }
+
+  const mode = state.mode || 'IDLE';
+  const split = ['CART', 'PAY_CASH', 'PAY_QR', 'PAY_OTHER'].includes(mode);
+  const autoplay = publicSettings?.general?.displayAutoplay;
+  return (
+    <div className={`cd ${split ? 'split' : ''}`} onDoubleClick={() => document.documentElement.requestFullscreen?.()}>
+      <div className="promo">
+        <Promo images={images} autoplay={autoplay} />
+        {mode === 'PAY_QR' && (
+          <div className="overlay">
+            <div style={{ fontSize: 'clamp(18px,2.4vw,36px)' }}>{t('สแกนเพื่อชำระเงิน')}</div>
+            {state.qr?.data ? <QRCode value={state.qr.data} size={Math.min(window.innerHeight * 0.55, window.innerWidth * 0.4)} /> : state.qr?.imageUrl ? <img src={state.qr.imageUrl} alt="QR" style={{ position: 'static', width: '45vh', height: '45vh', objectFit: 'contain', background: '#fff', borderRadius: 16 }} /> : null}
+            <div className="huge" style={{ color: '#facc15' }}>฿{money(state.due ?? state.net)}</div>
+            <div style={{ fontSize: 'clamp(16px,2vw,30px)' }}>{state.qr?.accountName}</div>
+            <div style={{ opacity: 0.8 }}>{state.qr?.bankName} {state.qr?.accountNumber}</div>
+          </div>
+        )}
+        {mode === 'PAY_CASH' && (
+          <div className="overlay">
+            <div style={{ opacity: 0.8, fontSize: 'clamp(18px,2.5vw,40px)' }}>{t('ยอดสุทธิ')}</div>
+            <div className="huge">฿{money(state.due ?? state.net)}</div>
+            <div style={{ opacity: 0.8, fontSize: 'clamp(18px,2.5vw,40px)', marginTop: '3vh' }}>{t('รับเงินมา')}</div>
+            <div className="huge" style={{ color: '#60a5fa' }}>฿{money(state.received || 0)}</div>
+            <div style={{ opacity: 0.8, fontSize: 'clamp(18px,2.5vw,40px)', marginTop: '3vh' }}>{t('เงินทอน')}</div>
+            <div className="huge" style={{ color: '#4ade80' }}>฿{money(state.change || 0)}</div>
+          </div>
+        )}
+        {mode === 'PAY_OTHER' && (
+          <div className="overlay">
+            <div style={{ fontSize: 'clamp(18px,2.5vw,40px)' }}>{t(PAYMENT_METHODS[state.method] || state.method)}</div>
+            <div className="huge">฿{money(state.due ?? state.net)}</div>
+          </div>
+        )}
+      </div>
+      <div className="panel">
+        <div className="panel-inner">
+          <div className="cd-head">
+            {store?.logoUrl ? <img src={store.logoUrl} alt="" style={{ width: 64, height: 64, borderRadius: 14, objectFit: 'cover' }} /> : <div className="brand-logo" style={{ width: 64, height: 64 }}><Mic2 size={30} /></div>}
+            <div className="grow">
+              <div style={{ fontSize: 'clamp(18px,2vw,32px)', fontWeight: 800 }}>{store?.name}</div>
+              <div style={{ opacity: 0.7 }}>{state.roomName ? `${state.roomName} · ${state.roomType || ''}` : store?.branchName}</div>
+            </div>
+            {state.queueNo && <div style={{ fontSize: 'clamp(20px,2.4vw,40px)', fontWeight: 800, background: '#ffffff1a', padding: '6px 14px', borderRadius: 12 }}>{state.queueNo}</div>}
+          </div>
+          <div className="cd-items">
+            {(state.items || []).map((it, k) => (
+              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.6vh 0', borderBottom: '1px solid #ffffff1a' }}>
+                <span>{it.type && it.type !== 'PRODUCT' ? tp(it.name) : it.name} {it.qty !== 1 && <span style={{ opacity: 0.6 }}>× {it.qty} @{money(it.unitPrice)}</span>}</span>
+                <b>{money(it.total)}</b>
+              </div>
+            ))}
+            {state.minutes > 0 && <div style={{ opacity: 0.7, marginTop: 8 }}>{t('จำนวนเวลา')} {formatMinutesShort(state.minutes)} · {t('ยอดค่าห้อง')} {money(state.roomCharge)}</div>}
+          </div>
+          <div style={{ fontSize: 'clamp(14px,1.5vw,24px)' }}>
+            <div className="row between"><span>{t('ยอดรวม')}</span><span>{money(state.subtotal)}</span></div>
+            {state.discount > 0 && <div className="row between" style={{ color: '#4ade80' }}><span>{t('ส่วนลด')}</span><span>-{money(state.discount)}</span></div>}
+            {state.serviceCharge > 0 && <div className="row between"><span>Service Charge</span><span>{money(state.serviceCharge)}</span></div>}
+            {state.vat > 0 && <div className="row between"><span>VAT</span><span>{money(state.vat)}</span></div>}
+            {state.deposit > 0 && <div className="row between"><span>{t('เงินมัดจำ')}</span><span>-{money(state.deposit)}</span></div>}
+          </div>
+          <div className="row between" style={{ marginTop: '1vh' }}>
+            <span style={{ fontSize: 'clamp(18px,2vw,32px)' }}>{t('ยอดสุทธิ')}</span>
+            <span className="cd-total">฿{money(state.net ?? state.total)}</span>
+          </div>
+          {state.method && <div style={{ opacity: 0.7 }}>{t('ช่องทางชำระเงิน')}: {t(PAYMENT_METHODS[state.method] || state.method)}</div>}
+        </div>
+      </div>
+      {mode === 'SUCCESS' && (
+        <div className="overlay" style={{ zIndex: 5 }}>
+          <div className="check-anim"><CheckCircle2 size="70%" color="#fff" /></div>
+          <div className="huge" style={{ marginTop: '3vh' }}>{t('ชำระเงินเรียบร้อย')}</div>
+          <div style={{ fontSize: 'clamp(20px,3vw,48px)' }}>{t('ยอดที่ชำระ')} ฿{money(state.total)}</div>
+          {state.change > 0 && <div style={{ fontSize: 'clamp(24px,4vw,64px)', color: '#4ade80', fontWeight: 800 }}>{t('เงินทอน')} ฿{money(state.change)}</div>}
+          {state.points > 0 && <div style={{ fontSize: 'clamp(16px,2vw,30px)', color: '#facc15' }}>+{state.points} {t('คะแนน')}</div>}
+          <div style={{ fontSize: 'clamp(18px,2.5vw,40px)', marginTop: '2vh' }}>{publicSettings?.receipt?.thankYou || t('ขอบคุณที่ใช้บริการ')}</div>
+        </div>
+      )}
+      <div style={{ position: 'fixed', bottom: 8, right: 8, opacity: 0.4, display: 'flex', gap: 8, zIndex: 9 }}>
+        {online ? <Wifi size={16} /> : <WifiOff size={16} color="#ef4444" />}
+        <button className="btn ghost sm" onClick={() => setLang(lang === 'th' ? 'en' : 'th')}>{lang === 'th' ? 'EN' : 'TH'}</button>
+        <button className="btn ghost sm" onClick={() => document.documentElement.requestFullscreen?.()}><Maximize size={14} /></button>
+        <button className="btn ghost sm" onClick={() => { LS.set('bb_cd_code', null); window.location.href = '/display'; }}>{code}</button>
+      </div>
+    </div>
+  );
+}

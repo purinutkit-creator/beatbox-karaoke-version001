@@ -48,6 +48,21 @@ export async function addProductItem(client, order, { productId, qty = 1, option
     unitPrice += opts.reduce((s, o) => s + Number(o.price_delta), 0);
   }
   const name = opts.length ? `${p.name} (${opts.map((o) => o.name).join(', ')})` : p.name;
+  // same plain product already in the bill (not yet sent to the kitchen) → increase quantity instead of a new line
+  if (!opts.length && !note && !Number(discountValue)) {
+    const same = (
+      await client.query(
+        `SELECT id FROM order_items WHERE order_id = $1 AND product_id = $2 AND voided_at IS NULL AND kitchen_status = 'NONE'
+           AND options = '[]'::jsonb AND note IS NULL AND COALESCE(discount_value,0) = 0 AND unit_price = $3 ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+        [order.id, p.id, round2(unitPrice)],
+      )
+    ).rows[0];
+    if (same) {
+      const u = await client.query('UPDATE order_items SET qty = qty + $2 WHERE id = $1 RETURNING *', [same.id, qty]);
+      if (clientOpId) await client.query('UPDATE order_items SET client_op_id = COALESCE(client_op_id, $2) WHERE id = $1', [same.id, clientOpId]).catch(() => {});
+      return u.rows[0];
+    }
+  }
   const r = await client.query(
     `INSERT INTO order_items(order_id, item_type, product_id, category_id, name, qty, unit_price, unit_cost, options, note, discount_type, discount_value,
                              sc_exempt, points_eligible, station, created_by, client_op_id)
@@ -390,7 +405,7 @@ export function buildReceiptSnapshot({ settings, order, calc, session, member, p
           billedMinutes: calc.lines.filter((l) => ['ROOM', 'PACKAGE', 'EXTENSION', 'OVERTIME'].includes(l.type)).reduce((a, l) => a + Number(l.minutes || 0), 0),
         }
       : null,
-    lines: calc.lines.map((l) => ({ type: l.type, name: l.name, qty: l.qty, unitPrice: l.unitPrice, gross: l.gross, discount: l.discount, net: l.net, note: l.note, detail: l.detail })),
+    lines: calc.lines.map((l) => ({ id: typeof l.id === 'number' ? l.id : null, type: l.type, name: l.name, qty: l.qty, unitPrice: l.unitPrice, gross: l.gross, discount: l.discount, net: l.net, note: l.note, detail: l.detail })),
     discounts: calc.discounts,
     totals: {
       grossTotal: calc.grossTotal,

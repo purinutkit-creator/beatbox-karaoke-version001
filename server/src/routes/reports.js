@@ -2,7 +2,7 @@ import { Router } from 'express';
 import ExcelJS from 'exceljs';
 import { pool, many, one } from '../db/index.js';
 import { requireAuth, can, hasPerm } from '../lib/auth.js';
-import { badRequest, forbidden } from '../lib/errors.js';
+import { badRequest } from '../lib/errors.js';
 import { getSettings } from '../services/settings.js';
 import { getRoomBoard } from '../services/rooms.js';
 import { bkkDateStr } from '@beatbox/shared/format.js';

@@ -1,12 +1,13 @@
 export const TZ = 'Asia/Bangkok';
+const loc = () => globalThis.__BB_LOCALE || 'th-TH';
 
 export function fmtDate(d, opts = {}) {
   if (!d) return '-';
-  return new Date(d).toLocaleDateString('th-TH', { timeZone: TZ, day: 'numeric', month: 'short', year: 'numeric', ...opts });
+  return new Date(d).toLocaleDateString(loc(), { timeZone: TZ, day: 'numeric', month: 'short', year: 'numeric', ...opts });
 }
 export function fmtTime(d) {
   if (!d) return '-';
-  return new Date(d).toLocaleTimeString('th-TH', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+  return new Date(d).toLocaleTimeString(loc(), { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
 }
 export function fmtDateTime(d) {
   if (!d) return '-';

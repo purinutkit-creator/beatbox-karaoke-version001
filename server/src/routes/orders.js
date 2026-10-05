@@ -83,7 +83,7 @@ r.get('/orders/:id', async (req, res) => {
   res.json({ ...data, receipt, payments, refunds, needsApproval: data.order.status === 'OPEN' ? discountNeedsApproval(req, settings, data.calc) && !data.order.discount_approved_by : false, now: Date.now() });
 });
 
-r.post('/orders/:id/items', can('pos.access'), async (req, res) => {
+r.post('/orders/:id/items', can('pos.access'), idempotent('order-item', { required: false }), async (req, res) => {
   const b = parse(itemSchema, req.body);
   const item = await tx(async (c) => {
     const o = await openOrderOrThrow(c, req.params.id);

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { pool, tx, many, one } from '../db/index.js';
+import { pool, tx, many } from '../db/index.js';
 import { requireAuth, can, hashPin, pinLookup, clearPermCache, loadPermissions } from '../lib/auth.js';
 import { logActivity } from '../lib/activity.js';
 import { z, parse, zUrl } from '../lib/validate.js';
