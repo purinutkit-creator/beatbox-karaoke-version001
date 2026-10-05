@@ -1,7 +1,8 @@
 // Customer Display — runs on any device (tablet, Smart TV, phone, second screen), paired with a POS by connection code.
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
-import { CheckCircle2, Maximize, Mic2, Wifi, WifiOff, Globe } from 'lucide-react';
+import { CheckCircle2, Maximize, Mic2, Wifi, WifiOff, Globe, CreditCard, Camera, Phone, ArrowLeft, Delete, Search, XCircle } from 'lucide-react';
+import { useCameraScanner } from '../lib/scanner.js';
 import { useT } from '../lib/i18n.jsx';
 import { api, LS } from '../lib/api.js';
 import { useApp } from '../lib/store.jsx';
@@ -110,6 +111,7 @@ export default function CustomerDisplay() {
   }
 
   const mode = state.mode || 'IDLE';
+  if (mode === 'CHECKIN' || mode === 'CHECKIN_RESULT') return <CheckInScreen state={state} socket={sockRef.current} store={store} />;
   const split = ['CART', 'PAY_CASH', 'PAY_QR', 'PAY_OTHER'].includes(mode);
   const autoplay = publicSettings?.general?.displayAutoplay;
   return (
@@ -119,10 +121,18 @@ export default function CustomerDisplay() {
         {mode === 'PAY_QR' && (
           <div className="overlay">
             <div style={{ fontSize: 'clamp(18px,2.4vw,36px)' }}>{t('สแกนเพื่อชำระเงิน')}</div>
-            {state.qr?.data ? <QRCode value={state.qr.data} size={Math.min(window.innerHeight * 0.55, window.innerWidth * 0.4)} /> : state.qr?.imageUrl ? <img src={state.qr.imageUrl} alt="QR" style={{ position: 'static', width: '45vh', height: '45vh', objectFit: 'contain', background: '#fff', borderRadius: 16 }} /> : null}
+            {state.qr?.data ? <QRCode value={state.qr.data} size={480} className="cd-qr" /> : state.qr?.imageUrl ? <img src={state.qr.imageUrl} alt="QR" className="cd-qr" /> : null}
             <div className="huge" style={{ color: '#facc15' }}>฿{money(state.due ?? state.net)}</div>
             <div style={{ fontSize: 'clamp(16px,2vw,30px)' }}>{state.qr?.accountName}</div>
             <div style={{ opacity: 0.8 }}>{state.qr?.bankName} {state.qr?.accountNumber}</div>
+          </div>
+        )}
+        {mode === 'PAY_TERMINAL' && (
+          <div className="overlay">
+            <CreditCard size={90} />
+            <div style={{ fontSize: 'clamp(20px,2.6vw,40px)', marginTop: '2vh' }}>{t('กรุณาชำระเงินที่เครื่องรับชำระเงิน')}</div>
+            <div style={{ opacity: 0.8, fontSize: 'clamp(16px,1.8vw,28px)' }}>{state.method === 'CARD' ? t('แตะ/เสียบบัตร') : t('สแกน QR ที่เครื่อง')}</div>
+            <div className="huge" style={{ color: '#facc15' }}>฿{money(state.due ?? state.net)}</div>
           </div>
         )}
         {mode === 'PAY_CASH' && (
@@ -190,6 +200,85 @@ export default function CustomerDisplay() {
         <button className="btn ghost sm" onClick={() => setLang(lang === 'th' ? 'en' : 'th')}>{lang === 'th' ? 'EN' : 'TH'}</button>
         <button className="btn ghost sm" onClick={() => document.documentElement.requestFullscreen?.()}><Maximize size={14} /></button>
         <button className="btn ghost sm" onClick={() => { LS.set('bb_cd_code', null); window.location.href = '/display'; }}>{code}</button>
+      </div>
+    </div>
+  );
+}
+
+/** POS asked the customer to check in on this display: scan the booking QR with the camera or type the phone number. */
+function CheckInScreen({ state, socket, store }) {
+  const { t } = useT();
+  const [how, setHow] = useState(null); // null | CAMERA | PHONE | SENT
+  const [phone, setPhone] = useState('');
+  const [err, setErr] = useState('');
+  const videoRef = useRef();
+  useEffect(() => {
+    setHow(null);
+    setPhone('');
+    setErr('');
+  }, [state.requestId]);
+  const send = (kind, value) => {
+    socket?.emit('display:checkin', { requestId: state.requestId, kind, value });
+    setHow('SENT');
+  };
+  useCameraScanner(videoRef, how === 'CAMERA', (v) => send('SCAN', v), (e) => { setErr(t(e.message)); setHow(null); });
+  const result = state.mode === 'CHECKIN_RESULT' ? state : null;
+  return (
+    <div className="cd">
+      <div className="promo">
+        <div className="overlay">
+          <div className="cd-head" style={{ marginBottom: '3vh' }}>
+            {store?.logoUrl ? <img src={store.logoUrl} alt="" style={{ width: 64, height: 64, borderRadius: 14, objectFit: 'cover' }} /> : <div className="brand-logo" style={{ width: 64, height: 64 }}><Mic2 size={30} /></div>}
+            <div style={{ fontSize: 'clamp(20px,2.4vw,36px)', fontWeight: 800 }}>{store?.name}</div>
+          </div>
+          {result ? (
+            <div className="cd-checkin">
+              {result.found ? <CheckCircle2 size={110} color="#4ade80" /> : <XCircle size={110} color="#f87171" />}
+              <div style={{ fontSize: 'clamp(24px,3.2vw,52px)', fontWeight: 800 }}>{result.found ? t('พบการจองของคุณ') : t('ไม่พบการจอง')}</div>
+              {result.found ? (
+                <div style={{ fontSize: 'clamp(18px,2.2vw,34px)' }}>
+                  <div>{result.customerName}</div>
+                  <div style={{ opacity: 0.85 }}>{result.bookingNo} · {result.roomName}</div>
+                  <div style={{ opacity: 0.85 }}>{result.time}</div>
+                </div>
+              ) : <div style={{ opacity: 0.8 }}>{t('กรุณาติดต่อพนักงาน')}</div>}
+            </div>
+          ) : (
+            <div className="cd-checkin">
+              <div style={{ fontSize: 'clamp(22px,3vw,48px)', fontWeight: 800 }}>{t('ตรวจสอบการจอง')}</div>
+              {how === null && (
+                <>
+                  <div style={{ opacity: 0.85, fontSize: 'clamp(16px,1.8vw,26px)' }}>{t('สแกน QR การจองในโทรศัพท์ของคุณ หรือกรอกเบอร์โทรที่ใช้จอง')}</div>
+                  <button className="btn primary" onClick={() => setHow('CAMERA')}><Camera size={28} /> {t('เปิดกล้องสแกน QR การจอง')}</button>
+                  <button className="btn" onClick={() => setHow('PHONE')}><Phone size={28} /> {t('กรอกเบอร์โทรศัพท์')}</button>
+                  {err && <div style={{ color: '#fca5a5' }}>{err}</div>}
+                </>
+              )}
+              {how === 'CAMERA' && (
+                <>
+                  <video ref={videoRef} muted playsInline />
+                  <div style={{ opacity: 0.85 }}>{t('หันหน้าจอ QR การจองเข้าหากล้อง')}</div>
+                  <button className="btn ghost" onClick={() => setHow(null)}><ArrowLeft size={22} /> {t('ย้อนกลับ')}</button>
+                </>
+              )}
+              {how === 'PHONE' && (
+                <>
+                  <div className="cd-total" style={{ letterSpacing: 4, minHeight: '1.2em' }}>{phone.replace(/(\d{3})(\d{3})(\d{0,4})/, '$1-$2-$3') || '0__-___-____'}</div>
+                  <div className="numpad" style={{ width: 'min(80vw, 420px)' }}>
+                    {['1', '2', '3', '4', '5', '6', '7', '8', '9', 'C', '0', '⌫'].map((k) => (
+                      <button key={k} type="button" style={{ fontSize: 'clamp(22px,3vw,40px)' }} onClick={() => setPhone(k === 'C' ? '' : k === '⌫' ? phone.slice(0, -1) : (phone + k).slice(0, 10))}>{k === '⌫' ? <Delete size={26} /> : k}</button>
+                    ))}
+                  </div>
+                  <div className="row" style={{ justifyContent: 'center' }}>
+                    <button className="btn ghost" style={{ width: 'auto' }} onClick={() => setHow(null)}><ArrowLeft size={22} /> {t('ย้อนกลับ')}</button>
+                    <button className="btn primary" style={{ width: 'auto' }} disabled={phone.length < 9} onClick={() => send('PHONE', phone)}><Search size={22} /> {t('ค้นหาการจอง')}</button>
+                  </div>
+                </>
+              )}
+              {how === 'SENT' && <div style={{ fontSize: 'clamp(18px,2.2vw,32px)' }}><span className="spinner lg" /> {t('กำลังค้นหาการจอง')}...</div>}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

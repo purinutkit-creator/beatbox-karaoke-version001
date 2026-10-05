@@ -162,6 +162,13 @@ r.post('/print-jobs', async (req, res) => {
   res.json(row);
 });
 
+/** A POS device claims a server-queued job (e.g. kitchen ticket of an in-room QR order) so it prints exactly once. */
+r.post('/print-jobs/:id/claim', async (req, res) => {
+  const device = String(req.body?.device || req.deviceId || req.employee.id).slice(0, 100);
+  const row = await one(`UPDATE print_jobs SET status = 'PRINTING', claimed_by = $2, claimed_at = now() WHERE id = $1 AND (status = 'QUEUED' OR (status = 'PRINTING' AND claimed_at < now() - interval '2 minutes')) RETURNING *`, [req.params.id, device]);
+  res.json(row ? { claimed: true, job: row } : { claimed: false });
+});
+
 r.patch('/print-jobs/:id', async (req, res) => {
   const b = parse(z.object({ status: z.enum(['PRINTED', 'FAILED', 'CANCELLED']), error: z.string().optional().nullable() }), req.body);
   const row = await one(`UPDATE print_jobs SET status = $2, error = $3, printed_at = CASE WHEN $2 = 'PRINTED' THEN now() ELSE printed_at END WHERE id = $1 RETURNING *`, [req.params.id, b.status, b.error || null]);

@@ -10,7 +10,7 @@ import { getSettings } from '../services/settings.js';
 import { lockRoom, assertRoomFree } from '../services/availability.js';
 import { getRoomBoard, refreshRoomStatuses, SESSION_SELECT, sessionCharges } from '../services/rooms.js';
 import { createOrder, addProductItem, computeOrder } from '../services/orders.js';
-import { nextSessionNo, nextDepositNo } from '../services/numbers.js';
+import { nextSessionNo, nextDepositNo, randomToken } from '../services/numbers.js';
 import { sessionTiming } from '@beatbox/shared/roomPricing.js';
 import { notify, queueLineMessage, bookingMessage } from '../services/notifications.js';
 
@@ -71,6 +71,7 @@ const openSchema = z.object({
   customerName: z.string().max(200).optional().nullable(),
   phone: z.string().max(20).optional().nullable(),
   guestCount: z.coerce.number().int().min(1).max(500),
+  extraMics: z.coerce.number().int().min(0).max(20).default(0),
   packageId: z.coerce.number().int().optional().nullable(),
   minutes: z.coerce.number().int().min(0).max(24 * 60).default(0),
   startMode: z.enum(['NOW', 'SCHEDULED']).default('NOW'),
@@ -126,9 +127,9 @@ export async function openSession(c, req, b, settings) {
     await c.query(
       `INSERT INTO room_sessions(session_no, room_id, room_type_id, reservation_id, member_id, customer_name, phone, guest_count, room_capacity,
          package_id, package_name, package_minutes, package_price, booked_minutes, price_hour, price_half, extra_guest_fee, started_at, scheduled_end_at,
-         status, opened_by, client_op_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING *`,
-      [await nextSessionNo(c), room.id, room.room_type_id, reservation?.id || null, b.memberId || reservation?.member_id || null, b.customerName || reservation?.customer_name || null, b.phone || reservation?.phone || null, b.guestCount, room.capacity, pkg?.id || null, pkg?.name || null, pkgMinutes, pkg ? Number(pkg.price) : 0, b.minutes, room.price_hour, room.price_half, settings.room.extraGuestFee, start, end, status, req.employee.id, b.clientOpId || null],
+         status, opened_by, client_op_id, extra_mics, mic_fee, order_token)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING *`,
+      [await nextSessionNo(c), room.id, room.room_type_id, reservation?.id || null, b.memberId || reservation?.member_id || null, b.customerName || reservation?.customer_name || null, b.phone || reservation?.phone || null, b.guestCount, room.capacity, pkg?.id || null, pkg?.name || null, pkgMinutes, pkg ? Number(pkg.price) : 0, b.minutes, room.price_hour, room.price_half, settings.room.extraGuestFee, start, end, status, req.employee.id, b.clientOpId || null, b.extraMics || 0, Number(settings.room.extraMicFee || 0), randomToken(24)],
     )
   ).rows[0];
   const order = await createOrder(c, { sessionId: session.id, reservationId: reservation?.id || null, memberId: session.member_id, customerName: session.customer_name, phone: session.phone, employeeId: req.employee.id, deviceId: req.deviceId, shiftId: req.shiftId || null, branchId: room.branch_id });
@@ -152,7 +153,7 @@ export async function openSession(c, req, b, settings) {
   }
   for (const it of b.items || []) await addProductItem(c, order, { ...it, employeeId: req.employee.id });
   await c.query(`INSERT INTO room_time_adjustments(session_id, type, minutes, after, employee_id, reason) VALUES ($1,'OPEN',$2,$3,$4,$5)`, [session.id, total, { started_at: start, scheduled_end_at: end, package: pkg?.name }, req.employee.id, b.note]);
-  await logActivity(c, req, 'ROOM_OPEN', 'room_session', session.id, { room: room.name, guests: b.guestCount, minutes: total, package: pkg?.name, reservationId: reservation?.id, deposit: b.deposit?.amount || 0 });
+  await logActivity(c, req, 'ROOM_OPEN', 'room_session', session.id, { room: room.name, guests: b.guestCount, mics: b.extraMics || 0, minutes: total, package: pkg?.name, reservationId: reservation?.id, deposit: b.deposit?.amount || 0 });
   return session;
 }
 
@@ -355,6 +356,21 @@ r.post('/sessions/:id/guests', can('room.operate'), async (req, res) => {
     if (!ACTIVE.includes(s.status)) throw conflict('ไม่สามารถแก้ไขได้');
     const u = (await c.query('UPDATE room_sessions SET guest_count = $2, updated_at = now() WHERE id = $1 RETURNING *', [s.id, guestCount])).rows[0];
     await logActivity(c, req, 'ROOM_GUESTS_UPDATE', 'room_session', s.id, { from: s.guest_count, to: guestCount });
+    return u;
+  });
+  await afterChange(settings);
+  res.json(out);
+});
+
+r.post('/sessions/:id/mics', can('room.operate'), async (req, res) => {
+  const { extraMics } = parse(z.object({ extraMics: z.coerce.number().int().min(0).max(20) }), req.body);
+  const settings = await getSettings();
+  const out = await tx(async (c) => {
+    const s = await loadSession(c, req.params.id, true);
+    if (!ACTIVE.includes(s.status)) throw conflict('ไม่สามารถแก้ไขได้');
+    const fee = Number(s.mic_fee) > 0 ? Number(s.mic_fee) : Number(settings.room.extraMicFee || 0);
+    const u = (await c.query('UPDATE room_sessions SET extra_mics = $2, mic_fee = $3, version = version + 1, updated_at = now() WHERE id = $1 RETURNING *', [s.id, extraMics, fee])).rows[0];
+    await logActivity(c, req, 'ROOM_MICS_UPDATE', 'room_session', s.id, { from: s.extra_mics, to: extraMics, fee });
     return u;
   });
   await afterChange(settings);

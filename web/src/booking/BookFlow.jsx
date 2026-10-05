@@ -56,9 +56,10 @@ export default function BookFlow() {
   const { me } = useMember();
   const cat = useCatalog();
   const b = publicSettings?.booking || {};
+  const rs = publicSettings?.room || {};
   const durations = b.durations?.length ? b.durations : [60, 90, 120, 180];
   const [step, setStep] = useState(0);
-  const [q, setQ] = useState({ branchId: '', date: bkkDateStr(), time: '20:00', durationMinutes: 120, guests: 4, roomTypeId: params.get('type') || '' });
+  const [q, setQ] = useState({ branchId: '', date: bkkDateStr(), time: '20:00', durationMinutes: 120, guests: 4, extraMics: 0, roomTypeId: params.get('type') || '' });
   const [result, setResult] = useState(null);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState(null); // { room, packageId }
@@ -99,7 +100,7 @@ export default function BookFlow() {
   const search = async (silent = false) => {
     if (!silent) setSearching(true);
     try {
-      const qs = new URLSearchParams({ date: q.date, time: q.time, durationMinutes: q.durationMinutes, guests: q.guests, ...(q.branchId ? { branchId: q.branchId } : {}), ...(q.roomTypeId ? { roomTypeId: q.roomTypeId } : {}) });
+      const qs = new URLSearchParams({ date: q.date, time: q.time, durationMinutes: q.durationMinutes, guests: q.guests, extraMics: q.extraMics || 0, ...(q.branchId ? { branchId: q.branchId } : {}), ...(q.roomTypeId ? { roomTypeId: q.roomTypeId } : {}) });
       const r = await api.get(`/public/availability?${qs}`, { auth: false });
       setResult(r);
       if (!silent) setStep(1);
@@ -121,7 +122,7 @@ export default function BookFlow() {
   const choose = async (room, packageId) => {
     setBusy(true);
     try {
-      const h = await api.post('/public/holds', { roomId: room.id, startAt: result.startAt, durationMinutes: Number(q.durationMinutes), guestCount: Number(q.guests), packageId: packageId || null }, { member: true });
+      const h = await api.post('/public/holds', { roomId: room.id, startAt: result.startAt, durationMinutes: Number(q.durationMinutes), guestCount: Number(q.guests), extraMics: Number(q.extraMics) || 0, packageId: packageId || null }, { member: true });
       setHold({ ...h, room });
       setSelected({ room, packageId });
       setStep(2);
@@ -211,7 +212,12 @@ export default function BookFlow() {
             <Field label="2. วันที่ต้องการใช้บริการ"><Input type="date" min={bkkDateStr()} value={q.date} onChange={(e) => setQ2('date', e.target.value)} /></Field>
             <Field label="3. เวลาเริ่มต้น"><Input type="time" step={1800} value={q.time} onChange={(e) => setQ2('time', e.target.value)} /></Field>
             <Field label="4. ระยะเวลา"><Select value={q.durationMinutes} onChange={(e) => setQ2('durationMinutes', Number(e.target.value))} options={durations.map((m) => ({ value: m, label: formatMinutesShort(m) }))} /></Field>
-            <Field label="5. จำนวนผู้ใช้บริการ"><Input type="number" min={1} value={q.guests} onChange={(e) => setQ2('guests', e.target.value)} /></Field>
+            <Field label="5. จำนวนผู้ใช้บริการ" hint={Number(rs.extraGuestFee) > 0 ? `${t('มาเกินจำนวนที่ห้องรองรับได้ คิดเพิ่มท่านละ')} ฿${money(rs.extraGuestFee, 0)}` : ''}><Input type="number" min={1} value={q.guests} onChange={(e) => setQ2('guests', e.target.value)} /></Field>
+            {Number(rs.maxExtraMics) > 0 && (
+              <Field label={`${t('ไมค์เพิ่ม')} (${t('มีให้ในห้อง')} ${rs.includedMics ?? 2} ${t('ตัว')})`} hint={`${t('ไมค์เพิ่ม')} ฿${money(rs.extraMicFee, 0)} / ${t('ตัว')}`}>
+                <Select value={q.extraMics} onChange={(e) => setQ2('extraMics', Number(e.target.value))} options={Array.from({ length: Number(rs.maxExtraMics) + 1 }, (_, i) => ({ value: i, label: i ? `+${i} ${t('ตัว')} (฿${money(i * rs.extraMicFee, 0)})` : t('ไม่เพิ่ม') }))} />
+              </Field>
+            )}
             <Field label="Type ห้อง (ไม่บังคับ)"><Select value={q.roomTypeId} onChange={(e) => setQ2('roomTypeId', e.target.value)} options={(cat?.types || []).map((x) => ({ value: x.id, label: x.name }))} placeholder="ทุก Type" /></Field>
           </div>
           <div className="small muted mt">{t('ร้านเปิด')} {publicSettings?.store?.openTime}–{publicSettings?.store?.closeTime} {t('น.')}</div>
@@ -267,6 +273,7 @@ export default function BookFlow() {
             <div className="sum-line"><span>{t('วันที่')}</span><b>{fmtDate(result?.startAt || bk?.startAt)}</b></div>
             <div className="sum-line"><span>{t('เวลา')}</span><b>{fmtTime(result?.startAt || bk?.startAt)}–{fmtTime(result?.endAt || bk?.endAt)}</b></div>
             <div className="sum-line"><span>{t('จำนวนลูกค้า')}</span><b>{q.guests}</b></div>
+            {Number(q.extraMics) > 0 && <div className="sum-line"><span>{t('ไมค์เพิ่ม')}</span><b>{q.extraMics} {t('ตัว')}</b></div>}
             {(hold.estimate?.lines || []).map((l, i) => <div key={i} className="sum-line small"><span>{l.name}</span><span>{money(l.net)}</span></div>)}
             {hold.estimate?.discounts?.map((d, i) => <div key={i} className="sum-line small" style={{ color: 'var(--ok)' }}><span>{d.name}</span><span>-{money(d.amount)}</span></div>)}
             <div className="sum-line total"><span>{t('ยอดรวมโดยประมาณ')}</span><span>฿{money(hold.estimate?.grandTotal)}</span></div>
@@ -341,6 +348,7 @@ function RoomOption({ room, q, cat, busy, onChoose }) {
       <div className="body">
         <div className="row between"><h3 style={{ margin: 0 }}>{room.name}</h3><Badge color={room.typeColor}>{room.typeName}</Badge></div>
         <div className="small muted"><Users size={13} /> {t('รองรับ')} {room.capacity} {t('คน')} · {(room.amenities || []).join(' · ')}</div>
+        {room.extraGuests > 0 && <div className="small" style={{ color: 'var(--warn)' }}>{t('เกินจำนวนห้อง')} {room.extraGuests} {t('คน')} · {t('คิดเพิ่มท่านละ')} ฿{money(room.extraGuestFee, 0)} ({t('รวมในยอดแล้ว')})</div>}
         <div className="row between small"><span>{t('ราคาต่อชั่วโมง')} <b>฿{money(room.priceHour, 0)}</b></span><span>{t('30 นาที')} <b>฿{money(room.priceHalf, 0)}</b></span></div>
         {pkgs.length > 0 && (
           <Select value={pkg} onChange={(e) => setPkg(e.target.value)} options={pkgs.map((p) => ({ value: p.id, label: `${p.name} ฿${money(p.price, 0)}` }))} placeholder="9. เลือกแพ็กเกจ (ไม่บังคับ)" />

@@ -28,6 +28,8 @@ import notificationRoutes from './routes/notifications.js';
 import reportRoutes from './routes/reports.js';
 import publicRoutes from './routes/public.js';
 import fontRoutes, { serveFont } from './routes/fonts.js';
+import integrationRoutes, { terminalPublic } from './routes/integrations.js';
+import roomServiceRoutes, { publicRoom } from './routes/roomService.js';
 
 export function createApp() {
   const app = express();
@@ -41,6 +43,7 @@ export function createApp() {
   app.use('/api/', rateLimit({ windowMs: 60000, limit: 600, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'มีการเรียกใช้งานถี่เกินไป กรุณาลองใหม่ภายหลัง' } }));
   app.use('/api/auth/login', rateLimit({ windowMs: 5 * 60000, limit: 20, message: { error: 'พยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอ 5 นาที' } }));
   app.use('/api/public/auth', rateLimit({ windowMs: 10 * 60000, limit: 30, message: { error: 'มีการขอรหัสบ่อยเกินไป กรุณาลองใหม่ภายหลัง' } }));
+  app.use('/api/public/room', rateLimit({ windowMs: 60000, limit: 120, message: { error: 'มีการเรียกใช้งานถี่เกินไป กรุณาลองใหม่ภายหลัง' } }));
   app.use('/api/public/holds', rateLimit({ windowMs: 60000, limit: 20, message: { error: 'มีการจองถี่เกินไป กรุณาลองใหม่ภายหลัง' } }));
 
   app.get('/api/health', async (_req, res) => {
@@ -49,6 +52,8 @@ export function createApp() {
   });
   app.get('/api/time', (_req, res) => res.json({ now: Date.now(), iso: new Date().toISOString() }));
 
+  app.use('/api/public', publicRoom);
+  app.use('/api/public', terminalPublic);
   app.use('/api/public', publicRoutes);
   app.use('/api/auth', authRoutes);
   app.use('/api', settingsRoutes);
@@ -63,6 +68,8 @@ export function createApp() {
   app.use('/api', notificationRoutes);
   app.use('/api', reportRoutes);
   app.use('/api', fontRoutes);
+  app.use('/api', integrationRoutes);
+  app.use('/api', roomServiceRoutes);
   app.use('/api', (_req, res) => res.status(404).json({ error: 'ไม่พบ API' }));
 
   // Only fonts are public uploads — payment slips stay private (served through an authenticated endpoint)

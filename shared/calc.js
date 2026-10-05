@@ -13,7 +13,7 @@
 //  9. Payments                = deducted from net total → balance / change
 import { round2, applyRounding } from './money.js';
 
-const ROOM_TYPES = new Set(['ROOM', 'PACKAGE', 'EXTENSION', 'OVERTIME', 'EXTRA_GUEST']);
+const ROOM_TYPES = new Set(['ROOM', 'PACKAGE', 'EXTENSION', 'OVERTIME', 'EXTRA_GUEST', 'EXTRA_MIC']);
 
 export function lineGroup(type) {
   if (ROOM_TYPES.has(type)) return type === 'PACKAGE' ? 'PACKAGE' : 'ROOM';

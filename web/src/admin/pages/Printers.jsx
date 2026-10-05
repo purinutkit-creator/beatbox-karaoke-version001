@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Printer, Search, Bluetooth, Usb, Network, Cable, Activity, FileText, Wallet } from 'lucide-react';
 import { CrudPage } from '../../components/Crud.jsx';
-import { Button, Modal, Badge, Input, Field, Loading, useToast } from '../../components/ui.jsx';
+import { Button, Modal, Badge, Input, Field, Loading, Switch, useToast } from '../../components/ui.jsx';
 import { TestPage } from '../../components/Receipt.jsx';
 import { usePrint } from '../../components/PrintPreview.jsx';
 import { useT } from '../../lib/i18n.jsx';
@@ -26,6 +26,7 @@ export default function Printers() {
   const [discover, setDiscover] = useState(null);
   const [local, setLocal] = useState(getLocalPrinterId());
   const [key, setKey] = useState(0);
+  const [qrPrint, setQrPrint] = useState(localStorage.getItem('bb_print_qr_orders') !== 'false');
   const test = async (p) => {
     const r = await printElement(<TestPage store={settings.store} printer={p} />, p, { jobType: 'TEST', copies: 1 });
     r.ok ? toast.success('ส่งงานทดสอบพิมพ์แล้ว') : toast.error(`${t('พิมพ์ไม่สำเร็จ')}: ${r.error}`);
@@ -70,6 +71,10 @@ export default function Printers() {
   };
   return (
     <>
+      <div className="card flat mb">
+        <Switch checked={qrPrint} onChange={(x) => { localStorage.setItem('bb_print_qr_orders', String(x)); setQrPrint(x); }} label={t('เครื่องนี้พิมพ์ใบสั่งครัว/บาร์ของลูกค้าที่สั่งผ่าน QR ในห้องอัตโนมัติ')} />
+        <div className="xs muted">{t('ทุกเครื่องที่เปิดไว้ช่วยกันพิมพ์ได้ ระบบรับประกันว่าแต่ละใบพิมพ์เพียงครั้งเดียว')}</div>
+      </div>
       <CrudPage
         key={key}
         title="เครื่องพิมพ์"

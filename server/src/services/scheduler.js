@@ -3,17 +3,19 @@ import { pool } from '../db/index.js';
 import { getSettings } from './settings.js';
 import { refreshRoomStatuses } from './rooms.js';
 import { expireStaleHolds } from './availability.js';
-import { notify, dispatchPendingMessages, queueLineMessage, bookingMessage } from './notifications.js';
+import { notify, dispatchPendingMessages, queueLineMessage, bookingMessage, sendBookingSms } from './notifications.js';
 import { emitStaff, emitSync } from '../lib/realtime.js';
 import { sessionTiming } from '@beatbox/shared/roomPricing.js';
 import { runBackup } from './backup.js';
 import { addPointTx } from './points.js';
 import { logActivity } from '../lib/activity.js';
+import { autoAcceptRoomOrders } from './roomService.js';
 
 let running = false;
 
 async function roomTick() {
   const settings = await getSettings();
+  await autoAcceptRoomOrders(settings).catch((e) => console.error('[scheduler] room orders', e.message));
   // activate scheduled sessions
   const act = await pool.query(`UPDATE room_sessions SET status = 'ACTIVE', updated_at = now() WHERE status = 'SCHEDULED' AND started_at <= now() RETURNING id`);
   if (act.rows.length) emitSync(['rooms']);
@@ -89,13 +91,14 @@ async function reservationTick() {
   const hours = Number(settings.booking.reminderHours || 0);
   if (hours > 0) {
     const rem = await pool.query(
-      `SELECT r.*, rm.name AS room_name FROM reservations r JOIN rooms rm ON rm.id = r.room_id WHERE r.status IN ('CONFIRMED','DEPOSIT_PAID') AND r.member_id IS NOT NULL
+      `SELECT r.*, rm.name AS room_name FROM reservations r JOIN rooms rm ON rm.id = r.room_id WHERE r.status IN ('CONFIRMED','DEPOSIT_PAID')
          AND r.reminder_sent_at IS NULL AND r.start_at BETWEEN now() AND now() + ($1 || ' hours')::interval`,
       [String(hours)],
     );
     for (const r of rem.rows) {
       await pool.query('UPDATE reservations SET reminder_sent_at = now() WHERE id = $1', [r.id]);
-      await queueLineMessage({ memberId: r.member_id, type: 'BOOKING_REMINDER', title: 'แจ้งเตือนการจอง', message: bookingMessage('BOOKING_REMINDER', r), reservationId: r.id, dedupeKey: `remind:${r.id}` });
+      if (r.member_id) await queueLineMessage({ memberId: r.member_id, type: 'BOOKING_REMINDER', title: 'แจ้งเตือนการจอง', message: bookingMessage('BOOKING_REMINDER', r), reservationId: r.id, dedupeKey: `remind:${r.id}` });
+      sendBookingSms('BOOKING_REMINDER', r).catch((e) => console.error('[sms] reminder', e.message));
     }
   }
   await dispatchPendingMessages();

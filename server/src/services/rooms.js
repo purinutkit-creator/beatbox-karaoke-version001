@@ -13,7 +13,7 @@ export const SESSION_SELECT = `
   LEFT JOIN members m ON m.id = rs.member_id`;
 
 export function chargeSettings(settings) {
-  return { partialRule: settings.room.partialRule, graceMinutes: settings.room.graceMinutes, extraGuestFee: settings.room.extraGuestFee };
+  return { partialRule: settings.room.partialRule, graceMinutes: settings.room.graceMinutes, extraGuestFee: settings.room.extraGuestFee, extraMicFee: settings.room.extraMicFee };
 }
 
 export function sessionCharges(session, settings, nowMs = Date.now()) {
@@ -75,6 +75,13 @@ export async function getRoomBoard(settings, { branchId = null } = {}) {
        WHERE d.status = 'RECEIVED' AND d.verification_status = 'VERIFIED' GROUP BY d.session_id, d.reservation_id`,
     )
   ).rows;
+  const issues = (await pool.query(`SELECT id, room_id, category, message, status, created_at FROM room_issues WHERE status <> 'RESOLVED' ORDER BY id`)).rows;
+  const prepay = (
+    await pool.query(
+      `SELECT rs.room_id, COUNT(*)::int AS n, SUM(o.amount) AS amount FROM room_customer_orders o JOIN room_sessions rs ON rs.id = o.session_id
+       WHERE o.payment_status IN ('PENDING','AUTO_ACCEPTED') AND o.status IN ('VERIFYING','PLACED') GROUP BY rs.room_id`,
+    )
+  ).rows;
   const now = Date.now();
   return rooms.map((room) => {
     const session = sessions.find((s) => s.room_id === room.id) || null;
@@ -99,7 +106,17 @@ export async function getRoomBoard(settings, { branchId = null } = {}) {
         overtimeMinutes: ch.overtimeMinutes,
       };
     }
-    return { ...room, status: deriveRoomStatus(room, session, nextReservation, settings, now), stored_status: room.status, session, live, nextReservation };
+    const pp = prepay.find((p) => p.room_id === room.id);
+    return {
+      ...room,
+      status: deriveRoomStatus(room, session, nextReservation, settings, now),
+      stored_status: room.status,
+      session,
+      live,
+      nextReservation,
+      issues: issues.filter((i) => i.room_id === room.id),
+      pendingPrepay: pp ? { count: pp.n, amount: Number(pp.amount) } : null,
+    };
   });
 }
 

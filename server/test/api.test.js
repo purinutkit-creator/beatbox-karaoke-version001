@@ -137,8 +137,9 @@ test('online booking: hold → details → slip (demo) → confirmed; slip reuse
   const d = new Date(start.getTime() + 7 * 3600000).toISOString().slice(0, 10);
   const av = await api('GET', `/public/availability?date=${d}&time=20:00&durationMinutes=120&guests=8`, null, { auth: false });
   assert.equal(av.status, 200, JSON.stringify(av.body));
-  assert.ok(av.body.rooms.every((r) => r.capacity >= 8));
-  const roomId = av.body.rooms[0].id;
+  // rooms smaller than the group are offered with a per-person extra charge (up to the admin's limit)
+  assert.ok(av.body.rooms.every((r) => r.capacity + 10 >= 8 && r.extraGuests === Math.max(0, 8 - r.capacity)));
+  const roomId = av.body.rooms.find((r) => r.extraGuests === 0).id;
   const h = await api('POST', '/public/holds', { roomId, startAt: av.body.startAt, durationMinutes: 120, guestCount: 8 }, { auth: false });
   assert.equal(h.status, 200, JSON.stringify(h.body));
   const h2 = await api('POST', '/public/holds', { roomId, startAt: av.body.startAt, durationMinutes: 120, guestCount: 8 }, { auth: false });

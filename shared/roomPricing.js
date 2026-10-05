@@ -113,7 +113,7 @@ export function sessionTiming(session, nowMs = Date.now()) {
 /**
  * Compute the room charge lines of a session.
  * session needs: package_id, package_name, package_minutes, package_price, booked_minutes, extension_minutes,
- * price_hour, price_half, guest_count, room_capacity, extra_guest_fee + timing fields.
+ * price_hour, price_half, guest_count, room_capacity, extra_guest_fee, extra_mics, mic_fee + timing fields.
  */
 export function computeSessionCharges(session, settings = {}, nowMs = Date.now()) {
   const timing = sessionTiming(session, nowMs);
@@ -158,6 +158,11 @@ export function computeSessionCharges(session, settings = {}, nowMs = Date.now()
   const extra = capacity > 0 ? Math.max(0, guests - capacity) : 0;
   if (extra > 0 && fee > 0) {
     lines.push({ type: 'EXTRA_GUEST', name: `ค่าลูกค้าเกินจำนวน ${extra} คน`, qty: extra, unitPrice: fee, detail: `ห้องรองรับ ${capacity} คน ลูกค้า ${guests} คน เกิน ${extra} × ${fee} = ${extra * fee}` });
+  }
+  const mics = Number(session.extra_mics || 0);
+  const micFee = Number(session.mic_fee ?? settings.extraMicFee ?? 0);
+  if (mics > 0 && micFee > 0) {
+    lines.push({ type: 'EXTRA_MIC', name: 'ไมค์เพิ่ม', qty: mics, unitPrice: micFee, detail: `${mics} × ${micFee} = ${mics * micFee}` });
   }
   const totalMinutes = Math.max(scheduled, timing.usedMinutes);
   const roomTotal = round2(lines.reduce((s, l) => s + l.qty * l.unitPrice, 0));

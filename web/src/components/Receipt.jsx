@@ -1,4 +1,5 @@
 // 80mm thermal receipt templates (font = receipt font chosen in Admin, default Kanit).
+import QRCodeLib from 'qrcode';
 import { QRCode, Barcode, money } from './ui.jsx';
 import { useT } from '../lib/i18n.jsx';
 import { fmtDate, fmtTime, fmtDateTime } from '@beatbox/shared/format.js';
@@ -279,4 +280,64 @@ export function TestPage({ store, printer }) {
       <Barcode value="BEATBOX-TEST" height={40} className="barcode" />
     </div>
   );
+}
+
+/** Ticket printed when a room is opened: STORE copy (room, start, end, hours) and CUSTOMER copy (+ in-room ordering QR). */
+export function RoomTicket({ data, copy = 'STORE' }) {
+  const { t } = useT();
+  const customer = copy === 'CUSTOMER';
+  const orderUrl = data.orderToken ? `${window.location.origin}/order/${data.orderToken}` : null;
+  return (
+    <div className="receipt">
+      <div className="store">{data.store?.name}</div>
+      {data.store?.branchName && <div className="c">{data.store.branchName}</div>}
+      <div className="hr2" />
+      <div className="c big">{customer ? t('ใบเปิดห้อง (สำหรับลูกค้า)') : t('ใบเปิดห้อง (สำหรับร้าน)')}</div>
+      <div className="queue">{data.room}</div>
+      <KV k={t('เวลาเริ่ม')} v={fmtTime(data.startAt)} bold />
+      <KV k={t('เวลาหมด')} v={fmtTime(data.endAt)} bold />
+      <KV k={t('จำนวนชั่วโมง')} v={formatMinutesShort(data.minutes)} bold />
+      <KV k={t('วันที่')} v={fmtDate(data.startAt)} />
+      {!customer && (
+        <>
+          <div className="hr" />
+          <KV k={t('เลขที่')} v={data.sessionNo} />
+          <KV k={t('ประเภทห้อง')} v={data.type} />
+          {data.customer && <KV k={t('ลูกค้า')} v={data.customer} />}
+          <KV k={t('จำนวนลูกค้า')} v={`${data.guests}${data.capacity && data.guests > data.capacity ? ` (${t('เกิน')} ${data.guests - data.capacity})` : ''}`} />
+          {data.extraMics > 0 && <KV k={t('ไมค์เพิ่ม')} v={`${data.extraMics} ${t('ตัว')}`} />}
+          {data.packageName && <KV k={t('แพ็กเกจ')} v={data.packageName} />}
+          <KV k={t('พนักงาน')} v={data.employee} />
+        </>
+      )}
+      {customer && orderUrl && data.roomServiceEnabled && (
+        <>
+          <div className="hr" />
+          <div className="c bold">{t('สั่งอาหาร · ดูเวลาคงเหลือ · เรียกพนักงาน')}</div>
+          <div className="c" style={{ margin: '4px 0' }}>
+            <SyncQR value={orderUrl} size={170} />
+          </div>
+          <div className="c">{data.ticket?.customerNote}</div>
+          <div className="c" style={{ fontSize: 10 }}>{t('QR นี้ใช้ได้เฉพาะรอบนี้ และหมดอายุเมื่อปิดห้อง')}</div>
+        </>
+      )}
+      <div className="hr" />
+      <div className="c">{fmtDateTime(new Date())}</div>
+    </div>
+  );
+}
+
+/** QR rendered synchronously (data URL ready at first render) so raster printing never misses it. */
+function SyncQR({ value, size = 160 }) {
+  const qr = QRCodeLib.create(String(value), { errorCorrectionLevel: 'M' });
+  const n = qr.modules.size;
+  const scale = Math.max(2, Math.floor((size * 2) / (n + 4)));
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = (n + 4) * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#000';
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (qr.modules.get(x, y)) ctx.fillRect((x + 2) * scale, (y + 2) * scale, scale, scale);
+  return <img src={canvas.toDataURL('image/png')} width={size} height={size} alt="QR" style={{ imageRendering: 'pixelated' }} />;
 }

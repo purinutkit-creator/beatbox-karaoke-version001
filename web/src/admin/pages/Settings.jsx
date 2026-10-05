@@ -13,6 +13,7 @@ import { renderNumber, renderQueue } from '@beatbox/shared/numbering.js';
 import { PARTIAL_RULES } from '@beatbox/shared/roomPricing.js';
 import { ROUNDING_MODES } from '@beatbox/shared/money.js';
 import { fmtDateTime } from '@beatbox/shared/format.js';
+import { IntegrationsTab, RoomServiceTab } from './Integrations.jsx';
 
 function useSection(key) {
   const { settings, setSettings } = useAuth();
@@ -337,7 +338,7 @@ function PaymentTab() {
   const m = s.v.methods || {};
   return (
     <div className="card">
-      <div className="row mb"><Badge color={settings.runtime.paymentMode === 'PRODUCTION' ? '#dc2626' : '#f97316'}>Payment Mode: {settings.runtime.paymentMode}</Badge><Badge>Slip Provider: {settings.runtime.slipProvider}</Badge><span className="xs muted">{t('ตั้งค่าโหมดและ API Key ฝั่งเซิร์ฟเวอร์ (Environment Variables) เท่านั้น')}</span></div>
+      <div className="row mb"><Badge color={settings.runtime.paymentMode === 'PRODUCTION' ? '#dc2626' : '#f97316'}>Payment Mode: {settings.runtime.paymentMode}</Badge><Badge>Slip Provider: {settings.runtime.slipProvider}</Badge><span className="xs muted">{t('ตั้งค่าโหมดการชำระเงินและระบบตรวจสลิปได้ที่แท็บ "การเชื่อมต่อ"')}</span></div>
       <Grid v={s.v} set={s.set} fields={[
         { key: 'accountName', label: 'ชื่อบัญชี' },
         { key: 'accountNumber', label: 'เลขบัญชี' },
@@ -364,6 +365,10 @@ function RoomTab() {
     <div className="card">
       <Grid v={s.v} set={s.set} fields={[
         { key: 'extraGuestFee', label: 'ค่าบริการลูกค้าที่เกินจำนวนห้อง (บาท/คน)', type: 'money' },
+        { key: 'maxExtraGuests', label: 'จองเกินจำนวนห้องได้สูงสุด (คน, 0 = ไม่ให้เกิน)', type: 'number' },
+        { key: 'includedMics', label: 'ไมค์ที่มีให้ในห้อง (ตัว)', type: 'number' },
+        { key: 'extraMicFee', label: 'ค่าไมค์เพิ่ม (บาท/ตัว)', type: 'money' },
+        { key: 'maxExtraMics', label: 'เพิ่มไมค์ได้สูงสุด (ตัว)', type: 'number' },
         { key: 'partialRule', label: 'วิธีคิดเวลาที่ไม่ครบ 30 นาที', type: 'select', options: Object.entries(PARTIAL_RULES).map(([value, label]) => ({ value, label })) },
         { key: 'graceMinutes', label: 'Grace Period (นาที)', type: 'number', hidden: (f) => f.partialRule !== 'GRACE' },
         { key: 'nearEndMinutes', label: 'ถือว่า "ใกล้หมดเวลา" เมื่อเหลือ (นาที)', type: 'number' },
@@ -484,7 +489,7 @@ function LineTab() {
   const s = useSection('line');
   return (
     <div className="card">
-      <div className="row mb"><Badge color={settings.runtime.lineLoginEnabled ? '#16a34a' : '#6b7280'}>LINE Login: {settings.runtime.lineLoginEnabled ? 'Connected' : 'Not configured'}</Badge><span className="xs muted">{t('Channel ID/Secret และ Messaging Access Token ตั้งค่าใน Environment Variables ฝั่งเซิร์ฟเวอร์เท่านั้น')}</span></div>
+      <div className="row mb"><Badge color={settings.runtime.lineLoginEnabled ? '#16a34a' : '#6b7280'}>LINE Login: {settings.runtime.lineLoginEnabled ? 'Connected' : 'Not configured'}</Badge><span className="xs muted">{t('Channel ID/Secret และ Access Token ตั้งค่าได้ที่แท็บ "การเชื่อมต่อ"')}</span></div>
       <Grid v={s.v} set={s.set} fields={[
         { key: 'messagingEnabled', label: 'LINE Messaging API', type: 'switch', switchLabel: 'ส่งข้อความแจ้งเตือนผ่าน LINE OA' },
         ...[['notifyBookingConfirmed', 'ยืนยันการจอง'], ['notifyDeposit', 'แจ้งรับเงินมัดจำ'], ['notifyReminder', 'แจ้งเตือนก่อนถึงเวลาจอง'], ['notifyRoomChange', 'แจ้งเปลี่ยนห้อง'], ['notifyCancel', 'แจ้งยกเลิก'], ['notifyRefund', 'แจ้งคืนเงินมัดจำ'], ['notifyPoints', 'แจ้งคะแนนที่ได้รับ'], ['notifyRewards', 'แจ้ง Reward'], ['notifyPromotions', 'แจ้งโปรโมชั่น']].map(([key, label]) => ({ key, label, type: 'switch', switchLabel: 'ส่ง' })),
@@ -528,6 +533,8 @@ export default function Settings() {
         { value: 'receipt', label: 'ใบเสร็จ & เลขคิว' },
         { value: 'payment', label: 'การชำระเงิน & QR Code' },
         { value: 'room', label: 'ห้อง เวลา & แจ้งเตือน' },
+        { value: 'roomService', label: 'ใบเปิดห้อง & สั่งอาหาร QR' },
+        { value: 'integrations', label: 'การเชื่อมต่อ (LINE · SMS · สลิป · EDC)' },
         { value: 'points', label: 'มัดจำ คะแนน & ความปลอดภัย' },
         { value: 'booking', label: 'การจองออนไลน์' },
         { value: 'line', label: 'LINE' },
@@ -539,6 +546,8 @@ export default function Settings() {
       {tab === 'receipt' && <ReceiptQueueTab />}
       {tab === 'payment' && <PaymentTab />}
       {tab === 'room' && <RoomTab />}
+      {tab === 'roomService' && <RoomServiceTab useSection={useSection} SaveBar={SaveBar} />}
+      {tab === 'integrations' && <IntegrationsTab />}
       {tab === 'points' && <PointsDepositTab />}
       {tab === 'booking' && <BookingTab />}
       {tab === 'line' && <LineTab />}

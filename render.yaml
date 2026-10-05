@@ -18,6 +18,8 @@ services:
         generateValue: true
       - key: PIN_PEPPER
         generateValue: true
+      - key: SETTINGS_ENCRYPTION_KEY
+        generateValue: true
       # First admin 4-digit login code — Render asks for it when the Blueprint is created
       - key: ADMIN_PIN
         sync: false

@@ -8,7 +8,7 @@ import { nextOrderNo, nextReceiptNo, nextQueueNo, nextPaymentNo } from './number
 import { moveStock } from './stock.js';
 import { addPointTx, evaluateTier } from './points.js';
 import { readApproval, verifyToken } from '../lib/auth.js';
-import { config } from '../config.js';
+import { paymentMode } from '../providers/slip.js';
 
 export async function createOrder(client, { sessionId = null, reservationId = null, memberId = null, customerName = null, phone = null, employeeId, deviceId = null, shiftId = null, branchId = null, clientOpId = null }) {
   if (clientOpId) {
@@ -133,7 +133,7 @@ export async function computeOrder(client, orderId, settings, { lock = false, no
     });
   }
   if (frozen && order.calc_snapshot) {
-    return { order, items: lines, session, member, calc: order.calc_snapshot, charges: null, deposits: [], promotions: [] };
+    return { order, items: lines, session, member, calc: order.calc_snapshot, charges: null, deposits: [], promotions: [], pendingPrepayments: [] };
   }
 
   // Discounts: tier benefits, promotions, rewards
@@ -188,6 +188,16 @@ export async function computeOrder(client, orderId, settings, { lock = false, no
   }
 
   const deposits = await availableDeposits(client, order);
+  // in-room QR prepayments the cashier has not verified yet (not deducted until verified)
+  const pendingPrepayments = order.session_id
+    ? (
+        await client.query(
+          `SELECT rco.id, rco.amount, rco.items, rco.payment_status, rco.slip_ref IS NOT NULL AS has_slip, rco.submitted_at FROM room_customer_orders rco
+           WHERE rco.session_id = $1 AND rco.payment_status IN ('PENDING','AUTO_ACCEPTED') AND rco.status IN ('VERIFYING','PLACED') ORDER BY rco.id`,
+          [order.session_id],
+        )
+      ).rows
+    : [];
   const depositTotal = round2(deposits.reduce((s, d) => s + Number(d.amount) - Number(d.refunded_amount), 0));
   const calc = calculateBill({
     items: lines,
@@ -199,7 +209,7 @@ export async function computeOrder(client, orderId, settings, { lock = false, no
   calc.pointsUsed = pointsUsed;
   const multiplier = member ? Number(member.point_multiplier || 1) : 1;
   calc.pointsPreview = member ? calculatePoints(calc, settings.points, multiplier).points : 0;
-  return { order, items: lines, session, member, calc, charges, deposits, promotions: promotionResults, redemptions };
+  return { order, items: lines, session, member, calc, charges, deposits, promotions: promotionResults, redemptions, pendingPrepayments };
 }
 
 /** Validate whether a discount needs manager approval. */
@@ -242,6 +252,7 @@ export async function payOrder(client, req, settings, orderId, { payments, idemp
   }
   const bundle = await computeOrder(client, orderId, settings, { nowMs: now.getTime() });
   const { calc, session, member, items } = bundle;
+  if (bundle.pendingPrepayments?.length) throw conflict('มีการชำระเงินล่วงหน้าจากในห้องที่ยังไม่ได้ตรวจสลิป กรุณาตรวจสอบก่อนชำระเงิน', 'PENDING_PREPAYMENT', { pending: bundle.pendingPrepayments });
   if (!items.some((l) => !l.voided)) throw badRequest('ไม่มีรายการในบิล');
 
   // manager approval for large discounts
@@ -264,7 +275,7 @@ export async function payOrder(client, req, settings, orderId, { payments, idemp
       if (!v || v.typ !== 'slip' || Number(v.orderId) !== Number(orderId) || round2(v.amount) < t.amount) {
         throw badRequest('กรุณาตรวจสอบสลิปก่อนยืนยันการชำระเงิน', 'SLIP_NOT_VERIFIED');
       }
-      if (config.paymentMode === 'PRODUCTION' && v.mode === 'DEMO') throw badRequest('Production Mode ต้องตรวจสลิปจากผู้ให้บริการจริงหรือพนักงานยืนยัน');
+      if (v.mode === 'DEMO' && (await paymentMode()) === 'PRODUCTION') throw badRequest('Production Mode ต้องตรวจสลิปจากผู้ให้บริการจริงหรือพนักงานยืนยัน');
       t.reference = t.reference || v.ref;
       t.verifiedBy = v.eid;
     }

@@ -53,6 +53,13 @@ export function initRealtime(httpServer, corsOrigins) {
       await pool.query('UPDATE customer_displays SET last_state = $2, last_seen_at = now() WHERE pair_code = $1', [c, state]).catch(() => {});
     });
 
+    // Customer Display → POS: the customer scanned their booking QR or typed their phone on the display
+    socket.on('display:checkin', ({ requestId, kind, value } = {}) => {
+      const c = socket.data.displayCode;
+      if (!c || !value) return;
+      io.to('staff').emit('display:checkin', { code: c, requestId: String(requestId || ''), kind: kind === 'PHONE' ? 'PHONE' : 'SCAN', value: String(value).slice(0, 200) });
+    });
+
     socket.on('display:watch', ({ code } = {}, ack) => {
       if (!socket.data.employee) return;
       const c = String(code || '');

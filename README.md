@@ -90,6 +90,39 @@ web/      React (Vite): admin/POS, Customer Display, booking website, receipts, 
 * Images (logo, rooms, products, promotions, QR, background) are always **image URLs**. Payment slips are the only uploads besides font files:
   they are transaction documents, stored privately in the database and visible only to staff with `slip.verify`.
 
+### Connections (Admin → ตั้งค่าร้าน → การเชื่อมต่อ)
+All keys are entered on the website. Secrets are AES-256-GCM encrypted in the database (key from `SETTINGS_ENCRYPTION_KEY`, or derived from
+`JWT_SECRET`) and are never sent back to the browser; environment variables still work as fallbacks.
+* **Slip verification — real money check.** Every slip's bank mini-QR is decoded on the server (transaction reference + sending bank), so a
+  re-used slip is rejected even if it is photographed again. The reference is then checked with the bank or a verification service:
+  **SlipOK**, **EasySlip**, **RDCW Slip Verify**, **SCB Open API** (the bank's own API — verifies transfers from every Thai bank), or a custom
+  webhook. Amount, receiving account / PromptPay and slip date are checked against the order. "Manual" = staff check the bank app.
+  A test box lets the admin upload a real slip and see what was read. Demo Mode (every slip passes) is a switch on the same page.
+* **Payment terminal.** Beam Bolt+ (Beam Checkout Bolt Intent API, webhook + polling), any bank EDC through a small HTTP "EDC bridge"
+  (`POST /sale`, `GET /sale/{id}`), or "manual" (cashier enters the EDC approval code). When a terminal is set, QR/card payments are sent to it and
+  the Customer Display shows "pay on the terminal"; otherwise the PromptPay QR is shown on the Customer Display.
+* **LINE** Login channel ID/secret + Messaging API token, with test buttons. **SMS** provider (THSMS, ThaiBulkSMS, SMSMKT, Twilio or webhook),
+  on/off switch, sender name, editable OTP / booking confirmation / reminder messages, test SMS.
+
+### Room tickets, in-room QR ordering and problem reports
+* Opening a room prints two tickets: **store copy** (room, start, end, hours, guests, extra mics) and **customer copy** with a QR to `/order/<token>`.
+  The token belongs to that session only and expires when the room is closed.
+* The in-room page shows the remaining time and the menu. Customers pay **now** (PromptPay QR with a save button + slip upload) or **at the counter**.
+  Pay-now slips are checked by the slip provider; otherwise the cashier gets a sound + popup with the slip. If nobody checks within the configured
+  time (default 60 s) the customer sees "paid" and the kitchen ticket prints, but the prepayment is only deducted after the cashier verifies it,
+  and checkout is blocked until every pending slip is verified or rejected.
+* Kitchen/bar tickets of QR orders are claimed by one POS device and printed exactly once.
+* **Report a problem:** admin-defined buttons + "Other" with free text. The POS plays a sound, shows a popup, and the room card flashes
+  red "ลูกค้าพบปัญหา กดเพื่อดู" until staff acknowledge and resolve it.
+
+### Extra guests & extra mics
+More people than the room capacity can book (up to the admin's limit) and pay the per-person fee; extra microphones have an admin-set price.
+Both can be chosen on the booking website, in the staff booking form and when opening a room, and flow through the one calculation engine.
+
+### Customer Display check-in
+From Check-in, staff can hand over to the Customer Display: the customer scans their booking QR with the display's camera or types their phone
+number on a keypad, and the result appears on both screens.
+
 ### Printing (80 mm thermal)
 * **Browser/USB via OS driver** (`window.print`, `@page 80mm`), **WebUSB**, **Web Serial**, **Web Bluetooth**, and **Network (IP:9100)**,
   where the server sends ESC/POS raw data.

@@ -3,11 +3,11 @@ import { calculateBill, calculateDeposit } from '@beatbox/shared/calc.js';
 import { evaluatePromotion } from '@beatbox/shared/promotions.js';
 import { taxSnapshot } from './settings.js';
 import { nextDepositNo } from './numbers.js';
-import { notify, queueLineMessage, bookingMessage } from './notifications.js';
+import { notify, queueLineMessage, bookingMessage, sendBookingSms } from './notifications.js';
 import { conflict } from '../lib/errors.js';
 
 /** Estimated bill of a reservation using the central Calculation Engine. */
-export function estimateReservation({ room, pkg = null, durationMinutes, guestCount = 1, settings, promotion = null, member = null, startAt = new Date() }) {
+export function estimateReservation({ room, pkg = null, durationMinutes, guestCount = 1, extraMics = 0, settings, promotion = null, member = null, startAt = new Date() }) {
   const priceHour = Number(room.price_hour);
   const priceHalf = Number(room.price_half) || halfHourPrice(priceHour);
   const pkgMin = pkg ? pkg.hours * 60 + pkg.minutes : 0;
@@ -20,6 +20,7 @@ export function estimateReservation({ room, pkg = null, durationMinutes, guestCo
   }
   const extra = Math.max(0, Number(guestCount) - Number(room.capacity));
   if (extra > 0 && Number(settings.room.extraGuestFee) > 0) items.push({ type: 'EXTRA_GUEST', name: `ค่าลูกค้าเกินจำนวน ${extra} คน`, qty: extra, unitPrice: Number(settings.room.extraGuestFee) });
+  if (Number(extraMics) > 0 && Number(settings.room.extraMicFee) > 0) items.push({ type: 'EXTRA_MIC', name: 'ไมค์เพิ่ม', qty: Number(extraMics), unitPrice: Number(settings.room.extraMicFee) });
   const extraDiscounts = [];
   let promoResult = null;
   if (promotion) {
@@ -80,6 +81,8 @@ export async function confirmOnlineDeposit(client, { reservation, paymentTx, amo
   await client.query(`UPDATE reservation_holds SET released_at = now(), release_reason = 'CONFIRMED' WHERE reservation_id = $1 AND released_at IS NULL`, [reservation.id]);
   const full = (await client.query('SELECT r.*, rm.name AS room_name FROM reservations r JOIN rooms rm ON rm.id = r.room_id WHERE r.id = $1', [reservation.id])).rows[0];
   await notify({ type: 'DEPOSIT_RECEIVED', level: 'success', title: 'รับมัดจำสำเร็จ', message: `${full.booking_no} ${full.customer_name} มัดจำ ${amount} บาท (${full.room_name})`, reservationId: full.id, roomId: full.room_id, dedupeKey: `dep:${paymentTx.id}` }, client);
+  // SMS goes out after the transaction (provider latency must not hold DB locks)
+  setImmediate(() => sendBookingSms('BOOKING_CONFIRMED', full).catch((e) => console.error('[sms] booking', e.message)));
   if (full.member_id) {
     await queueLineMessage({ memberId: full.member_id, type: 'BOOKING_CONFIRMED', title: 'ยืนยันการจอง', message: bookingMessage('BOOKING_CONFIRMED', full), reservationId: full.id, dedupeKey: `line-confirm:${full.id}` }, client);
   }

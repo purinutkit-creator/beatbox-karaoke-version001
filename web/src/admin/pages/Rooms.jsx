@@ -2,13 +2,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   DoorOpen, Users, Clock, Plus, Pause, Play, ArrowRightLeft, ShoppingCart, CreditCard, XCircle, Sparkles, Wrench, Ban, CheckCircle2, Timer,
-  Pencil, Send, Trash2, UserPlus, Wallet, LayoutGrid, History, CalendarClock, User, Minus,
+  Pencil, Send, Trash2, UserPlus, Wallet, LayoutGrid, History, CalendarClock, User, Minus, AlertTriangle, Mic, Printer,
 } from 'lucide-react';
 import { Button, Drawer, Modal, Field, Input, Select, Seg, Badge, Loading, Empty, PageHead, Tabs, money, useToast, useDialog, Switch, Textarea } from '../../components/ui.jsx';
 import { MemberPicker } from '../../components/MemberPicker.jsx';
 import { ProductCatalog } from '../../components/ProductCatalog.jsx';
 import Checkout, { QrPayPanel } from '../../components/Checkout.jsx';
 import { KitchenTicket } from '../../components/Receipt.jsx';
+import { PrepayReview, IssueItem } from '../../components/RoomService.jsx';
+import { usePrintRoomTickets } from '../../lib/roomTickets.jsx';
 import { usePrint } from '../../components/PrintPreview.jsx';
 import { useT } from '../../lib/i18n.jsx';
 import { api, uid } from '../../lib/api.js';
@@ -19,7 +21,7 @@ import { ROOM_STATUS_LABEL, ROOM_STATUS_COLOR, RESERVATION_STATUS_LABEL } from '
 import { sessionTiming, computeSessionCharges, formatMinutesShort, priceForMinutes } from '@beatbox/shared/roomPricing.js';
 import { fmtTime, fmtCountdown, fmtDateTime, bkkDateStr } from '@beatbox/shared/format.js';
 
-function RoomCard({ room, now, settings, onClick }) {
+function RoomCard({ room, now, settings, onClick, onFlag }) {
   const { t } = useT();
   const s = room.session;
   const timing = s ? sessionTiming(s, now) : null;
@@ -31,8 +33,20 @@ function RoomCard({ room, now, settings, onClick }) {
   const total = timing ? timing.endMs - timing.startMs - Number(s.total_paused_seconds || 0) * 1000 : 1;
   const pct = timing ? Math.min(100, Math.max(0, (timing.usedMs / Math.max(1, total)) * 100)) : 0;
   const label = s?.status === 'CLOSED' ? 'รอชำระเงิน' : s?.status === 'PAUSED' ? 'หยุดเวลา' : ROOM_STATUS_LABEL[status];
+  const openIssues = (room.issues || []).filter((i) => i.status === 'OPEN');
+  const issues = room.issues || [];
   return (
-    <div className={`room-card ${status === 'NEAR_END' ? 'near' : ''} ${status === 'TIME_UP' ? 'over' : ''}`} style={{ '--status': color }} onClick={onClick}>
+    <div className={`room-card ${status === 'NEAR_END' ? 'near' : ''} ${status === 'TIME_UP' ? 'over' : ''} ${openIssues.length ? 'has-issue' : ''}`} style={{ '--status': color }} onClick={onClick}>
+      {issues.length > 0 && (
+        <div className={`flag ${openIssues.length ? 'issue' : 'pay'}`} onClick={(e) => { e.stopPropagation(); onFlag?.('issues'); }}>
+          <AlertTriangle size={16} /> {openIssues.length ? t('ลูกค้าพบปัญหา กดเพื่อดู') : t('กำลังแก้ไขปัญหา')} · {issues[issues.length - 1].category}
+        </div>
+      )}
+      {room.pendingPrepay && (
+        <div className="flag pay" onClick={(e) => { e.stopPropagation(); onFlag?.('prepay'); }}>
+          <Wallet size={16} /> {t('ชำระเงินมา รอตรวจสลิป')} ฿{money(room.pendingPrepay.amount, 0)}
+        </div>
+      )}
       <div className="head">
         <div>
           <div className="name">{room.name}</div>
@@ -82,6 +96,12 @@ export default function Rooms() {
   const [params, setParams] = useSearchParams();
   const rooms = data?.rooms || [];
   useEffect(() => {
+    const rid = Number(params.get('room'));
+    if (rid && rooms.length) {
+      setSelected({ id: rid, tab: params.get('tab') || undefined });
+      setParams({}, { replace: true });
+      return;
+    }
     const sid = Number(params.get('session'));
     if (sid && rooms.length) {
       const r = rooms.find((x) => x.session?.id === sid);
@@ -108,15 +128,15 @@ export default function Rooms() {
       </div>
       {loading ? <Loading /> : !shown.length ? <Empty /> : (
         <div className="room-grid">
-          {shown.map((r) => <RoomCard key={r.id} room={r} now={now} settings={settings} onClick={() => setSelected({ id: r.id })} />)}
+          {shown.map((r) => <RoomCard key={r.id} room={r} now={now} settings={settings} onClick={() => setSelected({ id: r.id })} onFlag={(tab) => setSelected({ id: r.id, tab })} />)}
         </div>
       )}
-      {room && <RoomDrawer room={room} rooms={rooms} openCheckout={selected.checkout} onClose={() => setSelected(null)} reload={reload} />}
+      {room && <RoomDrawer key={`${room.id}-${selected.tab || ''}`} room={room} rooms={rooms} openCheckout={selected.checkout} initialTab={selected.tab} onClose={() => setSelected(null)} reload={reload} />}
     </div>
   );
 }
 
-function RoomDrawer({ room, rooms, onClose, reload, openCheckout }) {
+function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) {
   const { t, tp } = useT();
   const toast = useToast();
   const { confirm, prompt } = useDialog();
@@ -131,7 +151,10 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout }) {
     setModal('checkout');
   };
   const [detail, setDetail] = useState(null);
-  const [tab, setTab] = useState('bill');
+  const [tab, setTab] = useState(initialTab || 'bill');
+  const printTickets = usePrintRoomTickets();
+  const { data: rsState, reload: reloadRs } = useLive(() => api.get('/room-service', { passive: true }), ['room-service', 'rooms'], []);
+  const prepays = (rsState?.payments || []).filter((p) => p.room_id === room.id);
   const loadDetail = async () => {
     if (!s) return setDetail(null);
     try {
@@ -207,7 +230,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout }) {
               <div className="bold"><CalendarClock size={16} /> {t('การจองที่กำลังจะมาถึง')}</div>
               <div>{room.nextReservation.booking_no} · {room.nextReservation.customer_name} ({room.nextReservation.phone})</div>
               <div className="small">{fmtDateTime(room.nextReservation.start_at)} – {fmtTime(room.nextReservation.end_at)} · {room.nextReservation.guest_count} {t('คน')} · {t('มัดจำ')} {money(room.nextReservation.deposit_paid)}</div>
-              {can('room.operate') && room.status !== 'CLEANING' && <Button className="mt" variant="primary" icon={DoorOpen} onClick={() => act(() => api.post(`/reservations/${room.nextReservation.id}/open`, { clientOpId: uid() }), 'เปิดห้องจากการจองแล้ว')}>{t('เปิดห้องจากการจอง')}</Button>}
+              {can('room.operate') && room.status !== 'CLEANING' && <Button className="mt" variant="primary" icon={DoorOpen} onClick={() => act(async () => { const ss = await api.post(`/reservations/${room.nextReservation.id}/open`, { clientOpId: uid() }); printTickets(ss.id, { auto: true }); }, 'เปิดห้องจากการจองแล้ว')}>{t('เปิดห้องจากการจอง')}</Button>}
             </div>
           )}
           {can('room.operate') && (
@@ -256,6 +279,8 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout }) {
               {can('room.move') && <Button icon={LayoutGrid} onClick={() => setModal('type')}>{t('เปลี่ยน Type ห้อง')}</Button>}
               <Button icon={ShoppingCart} onClick={() => setModal('products')}>{t('เพิ่มสินค้า')}</Button>
               <Button icon={Users} onClick={async () => { const v = await prompt({ title: 'จำนวนลูกค้า', type: 'number', defaultValue: String(s.guest_count) }); if (v) act(() => api.post(`/sessions/${s.id}/guests`, { guestCount: Number(v) })); }}>{t('จำนวนลูกค้า')}</Button>
+              <Button icon={Mic} onClick={async () => { const v = await prompt({ title: `${t('ไมค์เพิ่ม')} (${money(s.mic_fee || settings.room.extraMicFee, 0)} ${t('บาท/ตัว')})`, type: 'number', defaultValue: String(s.extra_mics || 0) }); if (v !== null && v !== undefined && v !== '') act(() => api.post(`/sessions/${s.id}/mics`, { extraMics: Number(v) }), 'บันทึกเรียบร้อย'); }}>{t('ไมค์เพิ่ม')}{s.extra_mics ? ` (${s.extra_mics})` : ''}</Button>
+              <Button icon={Printer} onClick={() => printTickets(s.id)}>{t('พิมพ์ใบเปิดห้อง')}</Button>
               <Button icon={UserPlus} onClick={() => setModal('member')}>{t('ลูกค้า/สมาชิก')}</Button>
               <Button icon={Wallet} onClick={() => setModal('deposit')}>{t('รับมัดจำ')}</Button>
               {can('room.time_edit') && <Button icon={Pencil} onClick={() => setModal('adjust')}>{t('แก้ไขเวลา')}</Button>}
@@ -266,7 +291,30 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout }) {
             {s.status !== 'CLOSED' && <Button size="xl" icon={DoorOpen} onClick={closeRoom}>{t('ปิดห้อง')}</Button>}
             <Button size="xl" variant="primary" icon={CreditCard} onClick={openCheckoutFor} style={s.status === 'CLOSED' ? { gridColumn: '1/-1' } : undefined}>{t('ชำระเงิน')}</Button>
           </div>
-          <Tabs value={tab} onChange={setTab} tabs={[{ value: 'bill', label: 'รายละเอียดค่าห้อง' }, { value: 'items', label: 'รายการสินค้า', count: items.length }, { value: 'log', label: 'ประวัติเวลา' }]} />
+          {((room.issues || []).length > 0 || prepays.length > 0) && tab !== 'issues' && tab !== 'prepay' && (
+            <div className="card flat" style={{ borderColor: 'var(--danger)', cursor: 'pointer' }} onClick={() => setTab((room.issues || []).length ? 'issues' : 'prepay')}>
+              <AlertTriangle size={16} color="var(--danger)" /> {(room.issues || []).length ? `${t('ลูกค้าพบปัญหา กดเพื่อดู')} (${room.issues.length})` : `${t('ชำระเงินมา รอตรวจสลิป')} (${prepays.length})`}
+            </div>
+          )}
+          <Tabs value={tab} onChange={setTab} tabs={[
+            { value: 'bill', label: 'รายละเอียดค่าห้อง' },
+            { value: 'items', label: 'รายการสินค้า', count: items.length },
+            { value: 'issues', label: 'แจ้งปัญหา', count: (room.issues || []).length },
+            { value: 'prepay', label: 'ชำระจาก QR', count: prepays.length },
+            { value: 'log', label: 'ประวัติเวลา' },
+          ]} />
+          {tab === 'issues' && (
+            <div className="col">
+              {!(room.issues || []).length && <Empty text="ไม่มีปัญหาที่ลูกค้าแจ้ง" />}
+              {(room.issues || []).map((i) => <IssueItem key={i.id} issue={i} onDone={reload} />)}
+            </div>
+          )}
+          {tab === 'prepay' && (
+            <div className="col">
+              {!prepays.length && <Empty text="ไม่มีรายการรอตรวจสลิป" />}
+              {prepays.map((p) => <PrepayReview key={p.id} p={p} onDone={() => { reloadRs(); reload(); loadDetail(); }} />)}
+            </div>
+          )}
           {tab === 'bill' && (
             <div className="card flat">
               {charges.lines.map((l, i) => (
@@ -275,7 +323,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout }) {
                   <b className="num">{money(l.qty * l.unitPrice)}</b>
                 </div>
               ))}
-              <div className="xs muted mt">{t('ราคาต่อชั่วโมง')} {money(s.price_hour)} · {t('30 นาที')} {money(s.price_half)} · {t('ค่าลูกค้าเกินจำนวน')} {money(s.extra_guest_fee)}/{t('คน')}</div>
+              <div className="xs muted mt">{t('ราคาต่อชั่วโมง')} {money(s.price_hour)} · {t('30 นาที')} {money(s.price_half)} · {t('ค่าลูกค้าเกินจำนวน')} {money(s.extra_guest_fee)}/{t('คน')} · {t('ไมค์เพิ่ม')} {money(s.mic_fee)}/{t('ตัว')}</div>
             </div>
           )}
           {tab === 'items' && (
@@ -317,7 +365,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout }) {
           )}
         </div>
       )}
-      {modal === 'open' && <OpenRoomModal room={room} onClose={() => setModal(null)} onOpened={() => { setModal(null); reload(); }} />}
+      {modal === 'open' && <OpenRoomModal room={room} onClose={() => setModal(null)} onOpened={(session) => { setModal(null); reload(); if (session?.id) printTickets(session.id, { auto: true }); }} />}
       {modal === 'checkout' && checkoutOrderId && <Checkout orderId={checkoutOrderId} onClose={() => { setModal(null); setCheckoutOrderId(null); reload(); }} onPaid={() => reload()} />}
       {modal === 'products' && (
         <Modal title={`${t('เพิ่มสินค้า')} · ${room.name}`} size="xwide" onClose={() => setModal(null)}>
@@ -461,7 +509,7 @@ export function OpenRoomModal({ room: initialRoom, onClose, onOpened }) {
   const [roomId, setRoomId] = useState(initialRoom?.id || '');
   const room = (board?.rooms || []).find((r) => r.id === Number(roomId)) || initialRoom;
   const [member, setMember] = useState(null);
-  const [f, setF] = useState({ customerName: '', phone: '', guestCount: 2, packageId: '', minutes: 60, startMode: 'NOW', startAt: '', depositAmount: '', depositMethod: 'CASH', note: '' });
+  const [f, setF] = useState({ customerName: '', phone: '', guestCount: 2, extraMics: 0, packageId: '', minutes: 60, startMode: 'NOW', startAt: '', depositAmount: '', depositMethod: 'CASH', note: '' });
   const [items, setItems] = useState([]);
   const [token, setToken] = useState(null);
   const [step, setStep] = useState('info');
@@ -472,7 +520,8 @@ export function OpenRoomModal({ room: initialRoom, onClose, onOpened }) {
   const pkgMin = pkg ? pkg.hours * 60 + pkg.minutes : 0;
   const extra = room ? Math.max(0, Number(f.guestCount) - room.capacity) : 0;
   const timePrice = room ? priceForMinutes(Number(f.minutes) || 0, { priceHour: room.price_hour, priceHalf: room.price_half, partialRule: settings.room.partialRule }).amount : 0;
-  const estimate = (pkg ? Number(pkg.price) : 0) + timePrice + extra * Number(settings.room.extraGuestFee) + items.reduce((s, i) => s + i.qty * Number(i.product.price), 0);
+  const micFee = Number(settings.room.extraMicFee || 0);
+  const estimate = (pkg ? Number(pkg.price) : 0) + timePrice + extra * Number(settings.room.extraGuestFee) + Number(f.extraMics) * micFee + items.reduce((s, i) => s + i.qty * Number(i.product.price), 0);
   const usablePkgs = (packages || []).filter((p) => p.is_active && (!p.room_type_ids?.length || p.room_type_ids.includes(room?.room_type_id)));
   const freeRooms = (board?.rooms || []).filter((r) => !r.session && ['AVAILABLE', 'RESERVED', 'WAITING'].includes(r.status));
   const submit = async () => {
@@ -481,8 +530,9 @@ export function OpenRoomModal({ room: initialRoom, onClose, onOpened }) {
     if (Number(f.depositAmount) > 0 && !shift) return toast.error('กรุณาเปิดรอบการขายก่อนรับเงินมัดจำ');
     setBusy(true);
     try {
-      await api.post('/sessions/open', {
+      const session = await api.post('/sessions/open', {
         roomId: room.id,
+        extraMics: Number(f.extraMics) || 0,
         memberId: member?.id || null,
         customerName: f.customerName || (member ? `${member.first_name} ${member.last_name || ''}`.trim() : null),
         phone: f.phone || member?.phone || null,
@@ -497,7 +547,7 @@ export function OpenRoomModal({ room: initialRoom, onClose, onOpened }) {
         clientOpId: opKey,
       });
       toast.success(`${t('เปิดห้อง')} ${room.name} ${t('เรียบร้อย')}`);
-      onOpened();
+      onOpened(session);
     } catch (e) {
       toast.error(e);
     } finally {
@@ -553,6 +603,14 @@ export function OpenRoomModal({ room: initialRoom, onClose, onOpened }) {
               </div>
             </Field>
             {extra > 0 && <div className="card flat" style={{ borderColor: 'var(--warn)' }}>{t('ลูกค้าเกินจำนวน')} {extra} {t('คน')} × {money(settings.room.extraGuestFee, 0)} = <b>฿{money(extra * settings.room.extraGuestFee, 0)}</b></div>}
+            <Field label={`${t('ไมค์เพิ่ม')} (${t('มีให้ในห้อง')} ${settings.room.includedMics ?? 2} ${t('ตัว')} · ${money(micFee, 0)} ${t('บาท/ตัว')})`}>
+              <div className="row nowrap">
+                <Button icon={Minus} onClick={() => set('extraMics', Math.max(0, Number(f.extraMics) - 1))} />
+                <Input className="lg center" type="number" value={f.extraMics} onChange={(e) => set('extraMics', e.target.value)} />
+                <Button icon={Plus} onClick={() => set('extraMics', Math.min(Number(settings.room.maxExtraMics ?? 10), Number(f.extraMics) + 1))} />
+              </div>
+            </Field>
+            {Number(f.extraMics) > 0 && <div className="small">{t('ไมค์เพิ่ม')} {f.extraMics} × {money(micFee, 0)} = <b>฿{money(Number(f.extraMics) * micFee, 0)}</b></div>}
           </div>
           <div className="col">
             <Field label="6. เลือกแพ็กเกจหรือจำนวนเวลา">

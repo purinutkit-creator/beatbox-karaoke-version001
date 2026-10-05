@@ -33,7 +33,7 @@ export function idleDisplay() {
 export function orderToDisplay(o, extra = {}) {
   if (!o?.calc) return { mode: 'IDLE' };
   const c = o.calc;
-  const roomLines = c.lines.filter((l) => ['ROOM', 'PACKAGE', 'EXTENSION', 'OVERTIME', 'EXTRA_GUEST'].includes(l.type));
+  const roomLines = c.lines.filter((l) => ['ROOM', 'PACKAGE', 'EXTENSION', 'OVERTIME', 'EXTRA_GUEST', 'EXTRA_MIC'].includes(l.type));
   return {
     mode: 'CART',
     queueNo: o.order?.queue_no,

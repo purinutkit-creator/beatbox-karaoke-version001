@@ -4,7 +4,7 @@ function f(id, value) {
   return id + String(v.length).padStart(2, '0') + v;
 }
 
-function crc16(str) {
+export function crc16(str) {
   let crc = 0xffff;
   for (let i = 0; i < str.length; i++) {
     crc ^= str.charCodeAt(i) << 8;

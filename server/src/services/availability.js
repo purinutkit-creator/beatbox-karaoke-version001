@@ -65,7 +65,7 @@ export async function assertRoomFree(client, roomId, startAt, endAt, opts = {}) 
 /**
  * Rooms with availability flag for a time range.
  */
-export async function searchRooms(client, { branchId = null, startAt, endAt, guests = 0, roomTypeId = null, onlineOnly = false }) {
+export async function searchRooms(client, { branchId = null, startAt, endAt, guests = 0, roomTypeId = null, onlineOnly = false, maxExtraGuests = 0 }) {
   const r = await client.query(
     `SELECT r.*, rt.name AS type_name, rt.code AS type_code, rt.color AS type_color, rt.amenities, rt.description AS type_description,
             rt.image_url AS type_image_url, rt.default_deposit AS type_deposit,
@@ -85,8 +85,10 @@ export async function searchRooms(client, { branchId = null, startAt, endAt, gue
   return r.rows.map((room) => {
     // a room still being cleaned is not available for an immediate start
     const cleaningNow = room.status === 'CLEANING' && new Date(startAt).getTime() < nowMs + 15 * 60000;
-    const fits = Number(room.capacity) >= Number(guests || 0);
-    return { ...room, fits, available: !room.reserved && !room.in_use && !cleaningNow };
+    // more people than the room capacity may book (charged per extra person) up to the admin's limit
+    const extraGuests = Math.max(0, Number(guests || 0) - Number(room.capacity));
+    const fits = extraGuests <= Number(maxExtraGuests || 0);
+    return { ...room, fits, extraGuests, available: !room.reserved && !room.in_use && !cleaningNow };
   });
 }
 

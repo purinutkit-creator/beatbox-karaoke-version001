@@ -102,6 +102,7 @@ const createSchema = z.object({
   phone: z.string().min(9, 'กรุณากรอกเบอร์โทร').max(20),
   memberId: z.coerce.number().int().optional().nullable(),
   guestCount: z.coerce.number().int().min(1).max(500),
+  extraMics: z.coerce.number().int().min(0).max(20).default(0),
   packageId: z.coerce.number().int().optional().nullable(),
   promotionId: z.coerce.number().int().optional().nullable(),
   note: z.string().max(1000).optional().nullable(),
@@ -123,7 +124,7 @@ r.post('/reservations', can('booking.manage'), attachShift, idempotent('reservat
     await assertRoomFree(c, room.id, start, end);
     const pkg = b.packageId ? (await c.query('SELECT * FROM room_packages WHERE id = $1', [b.packageId])).rows[0] : null;
     const promo = b.promotionId ? (await c.query('SELECT * FROM promotions WHERE id = $1', [b.promotionId])).rows[0] : null;
-    const est = estimateReservation({ room, pkg, durationMinutes: b.durationMinutes, guestCount: b.guestCount, settings, promotion: promo, startAt: start });
+    const est = estimateReservation({ room, pkg, durationMinutes: b.durationMinutes, guestCount: b.guestCount, extraMics: b.extraMics, settings, promotion: promo, startAt: start });
     const phone = normalizePhone(b.phone);
     let memberId = b.memberId || null;
     if (!memberId) memberId = (await c.query('SELECT id FROM members WHERE phone = $1 AND deleted_at IS NULL', [phone])).rows[0]?.id || null;
@@ -131,9 +132,9 @@ r.post('/reservations', can('booking.manage'), attachShift, idempotent('reservat
     const rv = (
       await c.query(
         `INSERT INTO reservations(booking_no, branch_id, room_id, room_type_id, member_id, customer_name, phone, guest_count, package_id, promotion_id, start_at, end_at,
-           duration_minutes, estimated_total, estimate_snapshot, deposit_required, status, source, note, check_in_token, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
-        [await nextBookingNo(c), room.branch_id, room.id, room.room_type_id, memberId, b.customerName, phone, b.guestCount, pkg?.id || null, promo?.id || null, start, end, b.durationMinutes, est.calc.grandTotal, est.calc, depositRequired, b.status, b.source, b.note, randomToken(18), req.employee.id],
+           duration_minutes, estimated_total, estimate_snapshot, deposit_required, status, source, note, check_in_token, created_by, extra_mics)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING *`,
+        [await nextBookingNo(c), room.branch_id, room.id, room.room_type_id, memberId, b.customerName, phone, b.guestCount, pkg?.id || null, promo?.id || null, start, end, b.durationMinutes, est.calc.grandTotal, est.calc, depositRequired, b.status, b.source, b.note, randomToken(18), req.employee.id, b.extraMics],
       )
     ).rows[0];
     if (b.deposit && b.deposit.amount > 0) {
@@ -166,6 +167,7 @@ r.put('/reservations/:id', can('booking.manage'), async (req, res) => {
       endAt: z.string().optional(),
       durationMinutes: z.coerce.number().int().min(30).optional(),
       guestCount: z.coerce.number().int().min(1).optional(),
+      extraMics: z.coerce.number().int().min(0).max(20).optional(),
       customerName: z.string().max(200).optional(),
       phone: z.string().max(20).optional(),
       note: z.string().max(1000).optional().nullable(),
@@ -192,7 +194,9 @@ r.put('/reservations/:id', can('booking.manage'), async (req, res) => {
     const pkgId = b.packageId !== undefined ? b.packageId : rv.package_id;
     const pkg = pkgId ? (await c.query('SELECT * FROM room_packages WHERE id = $1', [pkgId])).rows[0] : null;
     const guests = b.guestCount || rv.guest_count;
-    const est = estimateReservation({ room, pkg, durationMinutes: duration, guestCount: guests, settings, startAt: start });
+    const mics = b.extraMics ?? rv.extra_mics;
+    const est = estimateReservation({ room, pkg, durationMinutes: duration, guestCount: guests, extraMics: mics, settings, startAt: start });
+    await c.query('UPDATE reservations SET extra_mics = $2 WHERE id = $1', [rv.id, mics]);
     const u = (
       await c.query(
         `UPDATE reservations SET room_id = $2, room_type_id = $3, start_at = $4, end_at = $5, duration_minutes = $6, guest_count = $7, customer_name = COALESCE($8, customer_name),
@@ -274,6 +278,7 @@ r.post('/reservations/:id/open', can('room.operate'), attachShift, async (req, r
         customerName: rv.customer_name,
         phone: rv.phone,
         guestCount: req.body?.guestCount || rv.guest_count,
+        extraMics: req.body?.extraMics ?? rv.extra_mics ?? 0,
         packageId: rv.package_id,
         minutes: Math.max(0, rv.duration_minutes - pkgMin),
         startMode: 'NOW',

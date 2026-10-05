@@ -1,5 +1,6 @@
 import { pool } from '../db/index.js';
 import { config } from '../config.js';
+import { getIntegrations } from './integrations.js';
 
 export const DEFAULT_SETTINGS = {
   appearance: {
@@ -56,6 +57,10 @@ export const DEFAULT_SETTINGS = {
   },
   room: {
     extraGuestFee: 50,
+    maxExtraGuests: 10, // how many people above the room capacity may book / open (0 = not allowed)
+    includedMics: 2,
+    extraMicFee: 50, // price per extra microphone (per visit)
+    maxExtraMics: 4,
     partialRule: 'ROUND_UP', // NONE | ROUND_UP | PER_MINUTE | GRACE
     graceMinutes: 5,
     alertMinutes: [30, 15, 10, 5],
@@ -118,6 +123,22 @@ export const DEFAULT_SETTINGS = {
     mapUrl: '',
     contactEmail: '',
   },
+  // Tickets printed when a room is opened: one for the store, one for the customer (with the in-room ordering QR)
+  roomTicket: {
+    printOnOpen: true,
+    storeCopy: true,
+    customerCopy: true,
+    customerNote: 'สแกน QR เพื่อสั่งอาหาร/เครื่องดื่ม ดูเวลาคงเหลือ และเรียกพนักงาน',
+  },
+  // In-room QR ordering + problem reports
+  roomService: {
+    enabled: true,
+    allowPayNow: true,
+    allowPayAtCounter: true,
+    autoAcceptSeconds: 60, // if the cashier hasn't checked the slip within this time the customer sees "paid" (cashier must still verify)
+    issueOptions: ['ไมค์ไม่มีเสียง / ไมค์เสีย', 'เครื่องเสียง / ลำโพงมีปัญหา', 'จอ / ระบบคาราโอเกะมีปัญหา', 'แอร์ร้อนหรือเย็นเกินไป', 'ขอแก้ว / น้ำแข็งเพิ่ม', 'ต้องการเพิ่มเวลา'],
+    issueSoundUrl: '',
+  },
   security: {
     sessionIdleMinutes: 30,
     maxLoginAttempts: 5,
@@ -175,7 +196,14 @@ export async function getSettings(client) {
     openTime: branch.open_time ? String(branch.open_time).slice(0, 5) : '12:00',
     closeTime: branch.close_time ? String(branch.close_time).slice(0, 5) : '02:00',
   };
-  s.runtime = { paymentMode: config.paymentMode, slipProvider: config.slipProvider, lineLoginEnabled: !!(config.lineLoginChannelId && config.lineLoginChannelSecret), appEnv: config.appEnv };
+  const integ = await getIntegrations();
+  s.runtime = {
+    paymentMode: integ.slip.mode === 'PRODUCTION' ? 'PRODUCTION' : 'DEMO',
+    slipProvider: integ.slip.provider,
+    lineLoginEnabled: !!(integ.line.loginEnabled !== false && integ.line.loginChannelId && integ.line.loginChannelSecret),
+    terminalProvider: integ.terminal.provider,
+    appEnv: config.appEnv,
+  };
   if (!client) {
     cache = s;
     cacheAt = Date.now();
@@ -229,7 +257,7 @@ export function publicSettings(s) {
     booking: s.booking,
     deposit: s.deposit,
     points: { enabled: s.points.enabled, amountPerPoint: s.points.amountPerPoint, pointsPerUnit: s.points.pointsPerUnit },
-    room: { extraGuestFee: s.room.extraGuestFee, partialRule: s.room.partialRule, graceMinutes: s.room.graceMinutes },
+    room: { extraGuestFee: s.room.extraGuestFee, maxExtraGuests: s.room.maxExtraGuests, includedMics: s.room.includedMics, extraMicFee: s.room.extraMicFee, maxExtraMics: s.room.maxExtraMics, partialRule: s.room.partialRule, graceMinutes: s.room.graceMinutes },
     queue: { prefix: s.queue.prefix },
     receipt: { slogan: s.receipt.slogan, thankYou: s.receipt.thankYou },
     runtime: { paymentMode: s.runtime.paymentMode, lineLoginEnabled: s.runtime.lineLoginEnabled },

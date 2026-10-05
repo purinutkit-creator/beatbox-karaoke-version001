@@ -5,6 +5,7 @@ import { Banknote, QrCode, CreditCard, Wallet, ArrowRightLeft, MoreHorizontal, C
 import { Modal, Button, Input, Field, Seg, NumPad, QRCode, Spinner, Badge, money, useToast, useDialog, useApprovalAction, Loading } from './ui.jsx';
 import { MemberPicker } from './MemberPicker.jsx';
 import { SaleReceipt } from './Receipt.jsx';
+import { PrepayReview } from './RoomService.jsx';
 import { usePrint } from './PrintPreview.jsx';
 import { useT } from '../lib/i18n.jsx';
 import { api, uid } from '../lib/api.js';
@@ -88,6 +89,88 @@ export function QrPayPanel({ amount, orderId, depositRef, onVerified, method = '
   );
 }
 
+/** Send the amount to the payment terminal (Beam Bolt / bank EDC) and wait for approval. */
+export function TerminalPayPanel({ amount, orderId, method, provider, onVerified }) {
+  const { t } = useT();
+  const toast = useToast();
+  const { prompt } = useDialog();
+  const [tp, setTp] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const start = async () => {
+    setBusy(true);
+    try {
+      setTp(await api.post('/terminal/payments', { orderId, amount, method }));
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  useEffect(() => {
+    if (!tp || tp.status !== 'PENDING') return;
+    const id = setInterval(async () => {
+      try {
+        const r = await api.get(`/terminal/payments/${tp.id}`, { passive: true });
+        setTp(r);
+      } catch {
+        /* keep polling */
+      }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [tp?.id, tp?.status]);
+  useEffect(() => {
+    if (tp?.status === 'APPROVED' && tp.verificationToken) onVerified({ verificationToken: tp.verificationToken, reference: tp.approval_code || tp.provider_ref });
+  }, [tp?.status]);
+  const manual = async () => {
+    const code = await prompt({ title: 'ยืนยันการชำระที่เครื่อง EDC', message: 'กรอกรหัสอนุมัติ (Approval Code) จากสลิปเครื่อง EDC' });
+    if (!code) return;
+    try {
+      setTp(await api.post(`/terminal/payments/${tp.id}/confirm`, { approvalCode: code }));
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+  const cancel = async () => {
+    await api.post(`/terminal/payments/${tp.id}/cancel`).catch(() => {});
+    setTp(null);
+  };
+  if (!tp)
+    return (
+      <div className="center card flat">
+        <CreditCard size={48} />
+        <div className="big-money">฿{money(amount)}</div>
+        <Button variant="primary" size="lg" loading={busy} onClick={start}>{provider === 'beam' ? t('ส่งยอดไปเครื่อง Beam Bolt') : t('ส่งยอดไปเครื่อง EDC')}</Button>
+        <div className="xs muted mt">{method === 'QR' ? t('ลูกค้าสแกน QR ที่เครื่องรับชำระเงิน') : t('ลูกค้าแตะ/เสียบบัตรที่เครื่องรับชำระเงิน')}</div>
+      </div>
+    );
+  if (tp.status === 'APPROVED')
+    return (
+      <div className="center card flat"><CheckCircle2 size={80} color="var(--ok)" /><h2>{t('เครื่องรับชำระเงินอนุมัติแล้ว')}</h2><div className="small muted">{tp.approval_code || tp.provider_ref}</div></div>
+    );
+  if (tp.status !== 'PENDING')
+    return (
+      <div className="center card flat" style={{ borderColor: 'var(--danger)' }}>
+        <h3 style={{ color: 'var(--danger)' }}>{t({ DECLINED: 'ชำระเงินไม่สำเร็จ', CANCELLED: 'ยกเลิกแล้ว', EXPIRED: 'หมดเวลารอการชำระ', ERROR: 'เกิดข้อผิดพลาด' }[tp.status] || tp.status)}</h3>
+        <div className="row" style={{ justifyContent: 'center' }}>
+          <Button onClick={() => setTp(null)}>{t('ลองใหม่')}</Button>
+          {tp.status === 'EXPIRED' && <Button onClick={manual}>{t('ยืนยันด้วยรหัสอนุมัติ')}</Button>}
+        </div>
+      </div>
+    );
+  return (
+    <div className="center card flat">
+      <Spinner lg />
+      <h2 className="mt">{t('รอลูกค้าชำระที่เครื่องรับชำระเงิน')}</h2>
+      <div className="big-money">฿{money(tp.amount)}</div>
+      {tp.deep_link && <a className="btn primary" href={tp.deep_link}>{t('เปิดหน้าชำระเงินบน Beam Bolt')}</a>}
+      <div className="row mt" style={{ justifyContent: 'center' }}>
+        <Button onClick={manual}>{t('ยืนยันด้วยรหัสอนุมัติ')}</Button>
+        <Button variant="ghost" onClick={cancel}>{t('ยกเลิก')}</Button>
+      </div>
+    </div>
+  );
+}
+
 export default function Checkout({ orderId, onClose, onPaid }) {
   const { t, tp } = useT();
   const toast = useToast();
@@ -110,6 +193,11 @@ export default function Checkout({ orderId, onClose, onPaid }) {
   const idemKey = useRef(uid());
   const approvalRef = useRef(null);
   const [autoPay, setAutoPay] = useState(false);
+  const [terminal, setTerminal] = useState({ provider: 'none', methods: [] });
+  useEffect(() => {
+    api.get('/terminal/methods', { passive: true }).then(setTerminal).catch(() => {});
+  }, []);
+  const useTerminal = terminal.methods.includes(method);
 
   const load = async () => {
     try {
@@ -137,11 +225,12 @@ export default function Checkout({ orderId, onClose, onPaid }) {
     if (!data || done) return;
     const base = orderToDisplay(data);
     if (method === 'CASH') pushDisplay({ ...base, mode: 'PAY_CASH', method: 'CASH', received: cashReceived, change, due: remaining });
+    else if (terminal.methods.includes(method)) pushDisplay({ ...base, mode: 'PAY_TERMINAL', method, due: remaining });
     else if (method === 'QR') {
       const p = settings?.payment || {};
       pushDisplay({ ...base, mode: 'PAY_QR', method: 'QR', due: remaining, qr: { data: p.useDynamicPromptPay && p.promptPayId ? promptPayPayload(p.promptPayId, remaining) : null, imageUrl: p.qrImageUrl, accountName: p.accountName, accountNumber: p.accountNumber, bankName: p.bankName } });
     } else pushDisplay({ ...base, mode: 'PAY_OTHER', method, due: remaining });
-  }, [method, cashInput, remaining, data]);
+  }, [method, cashInput, remaining, data, terminal]);
 
   const addTender = (tender) => {
     setTenders((x) => [...x, tender]);
@@ -200,8 +289,8 @@ export default function Checkout({ orderId, onClose, onPaid }) {
       if (method === 'CASH') {
         if (cashReceived + 0.001 < remaining) return toast.error(`${t('รับเงินไม่พอ')} (${t('ขาดอีก')} ${money(remaining - cashReceived)})`);
         list.push({ method: 'CASH', amount: remaining, received: cashReceived });
-      } else if (method === 'QR' || method === 'TRANSFER') {
-        return toast.warning('กรุณาตรวจสอบสลิปก่อน');
+      } else if (method === 'QR' || method === 'TRANSFER' || useTerminal) {
+        return toast.warning(useTerminal ? 'กรุณารอเครื่องรับชำระเงินอนุมัติ' : 'กรุณาตรวจสอบสลิปก่อน');
       } else list.push({ method, amount: remaining, reference: ref || null });
     }
     confirm(list);
@@ -368,6 +457,11 @@ export default function Checkout({ orderId, onClose, onPaid }) {
                 {cashReceived > 0 && cashReceived < remaining && <Button onClick={() => addTender({ method: 'CASH', amount: cashReceived, received: cashReceived })}>{t('รับเงินสดบางส่วน แล้วชำระช่องทางอื่น')}</Button>}
               </div>
             </div>
+          ) : useTerminal ? (
+            <div className="col">
+              <Field label="จำนวนเงิน (กรณีชำระบางส่วน)"><Input type="number" value={amountInput} placeholder={String(remaining)} onChange={(e) => setAmountInput(e.target.value)} /></Field>
+              <TerminalPayPanel key={`${method}-${remaining}-${amountInput}`} method={method} provider={terminal.provider} amount={Number(amountInput) || remaining} orderId={orderId} onVerified={(r) => { const amt = Number(amountInput) || remaining; addTender({ method, amount: amt, verificationToken: r.verificationToken, reference: r.reference }); if (amt >= remaining) setAutoPay(true); }} />
+            </div>
           ) : method === 'QR' || method === 'TRANSFER' ? (
             <div className="col">
               <Field label="จำนวนเงิน (กรณีชำระบางส่วน)"><Input type="number" value={amountInput} placeholder={String(remaining)} onChange={(e) => setAmountInput(e.target.value)} /></Field>
@@ -381,7 +475,13 @@ export default function Checkout({ orderId, onClose, onPaid }) {
               {Number(amountInput) > 0 && Number(amountInput) < remaining && <Button onClick={() => addTender({ method, amount: Number(amountInput), reference: ref })}>{t('เพิ่มช่องทางนี้ แล้วชำระส่วนที่เหลือ')}</Button>}
             </div>
           )}
-          <Button variant="success" size="xl" block loading={busy} disabled={busy || (remaining > 0 && ['QR', 'TRANSFER'].includes(method))} onClick={pay} icon={CheckCircle2}>
+          {data.pendingPrepayments?.length > 0 && (
+            <div className="col">
+              <div className="card flat" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }}>{t('มีการชำระเงินล่วงหน้าจากในห้องที่ยังไม่ได้ตรวจสลิป กรุณาตรวจสอบก่อนชำระเงิน')}</div>
+              {data.pendingPrepayments.map((p) => <PrepayReview key={p.id} p={{ ...p, room_name: s?.room_name }} onDone={load} />)}
+            </div>
+          )}
+          <Button variant="success" size="xl" block loading={busy} disabled={busy || data.pendingPrepayments?.length > 0 || (remaining > 0 && (['QR', 'TRANSFER'].includes(method) || useTerminal))} onClick={pay} icon={CheckCircle2}>
             {t('ยืนยันชำระเงิน')} ฿{money(net)}
           </Button>
         </div>

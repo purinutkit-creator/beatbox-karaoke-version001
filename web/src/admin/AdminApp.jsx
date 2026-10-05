@@ -10,7 +10,9 @@ import { useT } from '../lib/i18n.jsx';
 import { api, offlineQueue } from '../lib/api.js';
 import { useServerNow, useSocketEvent, useSync, getSocket } from '../lib/socket.js';
 import { Button, Modal, Loading, PinPad, useToast, Badge } from '../components/ui.jsx';
-import { PrintProvider } from '../components/PrintPreview.jsx';
+import { PrintProvider, usePrint } from '../components/PrintPreview.jsx';
+import { KitchenTicket } from '../components/Receipt.jsx';
+import { PrepayReview } from '../components/RoomService.jsx';
 import { fmtTime, fmtDateTime } from '@beatbox/shared/format.js';
 
 const pages = {
@@ -237,6 +239,109 @@ function AlertCenter() {
   );
 }
 
+/** Customer problem reports and in-room prepayments → sound + popup on every POS. */
+function RoomServiceAlerts() {
+  const { t, lang } = useT();
+  const nav = useNavigate();
+  const [queue, setQueue] = useState([]); // [{ kind: 'ISSUE' | 'PAY', ... }]
+  const loopRef = useRef(null);
+  const ring = (a) => {
+    if (a.soundUrl) new Audio(a.soundUrl).play().catch(() => beep(3));
+    else beep(3);
+    setTimeout(() => speak(a.kind === 'ISSUE' ? (lang === 'en' ? `Room ${a.roomName} needs help: ${a.category}` : `ห้อง ${a.roomName} ลูกค้าพบปัญหา ${a.category}`) : lang === 'en' ? `Room ${a.roomName} paid, please check the slip` : `ห้อง ${a.roomName} ชำระเงินมา กรุณาตรวจสอบสลิป`, lang), 700);
+  };
+  useSocketEvent('room:issue', (a) => {
+    const item = { kind: 'ISSUE', key: `i${a.id}`, ...a };
+    setQueue((q) => [...q.filter((x) => x.key !== item.key), item]);
+    ring(item);
+  });
+  useSocketEvent('room:payment', (a) => {
+    const item = { kind: 'PAY', key: `p${a.roomOrderId}`, at: Date.now(), ...a };
+    setQueue((q) => [...q.filter((x) => x.key !== item.key), item]);
+    ring(item);
+  });
+  useSocketEvent('room:payment-resolved', ({ roomOrderId }) => setQueue((q) => q.filter((x) => x.key !== `p${roomOrderId}`)));
+  useSocketEvent('room:issue-updated', ({ id }) => setQueue((q) => q.filter((x) => x.key !== `i${id}`)));
+  const cur = queue[0];
+  // repeat the sound every 20s while something is waiting
+  useEffect(() => {
+    clearInterval(loopRef.current);
+    if (cur) loopRef.current = setInterval(() => ring(cur), 20000);
+    return () => clearInterval(loopRef.current);
+  }, [cur?.key]);
+  const [pay, setPay] = useState(null);
+  useEffect(() => {
+    setPay(null);
+    if (cur?.kind === 'PAY') api.get('/room-service').then((s) => setPay(s.payments.find((p) => p.id === cur.roomOrderId) || null)).catch(() => {});
+  }, [cur?.key]);
+  const now = useServerNow(1000);
+  if (!cur) return null;
+  const dismiss = () => setQueue((q) => q.slice(1));
+  const ack = async () => {
+    try {
+      await api.post(`/room-issues/${cur.id}/ack`);
+    } catch {
+      /* already handled */
+    }
+    dismiss();
+  };
+  const left = cur.kind === 'PAY' ? Math.max(0, Math.ceil(cur.autoAcceptSeconds - (now - cur.at) / 1000)) : 0;
+  return (
+    <Modal onClose={dismiss} closeOnBack={false} title={cur.kind === 'ISSUE' ? `${t('ห้อง')} ${cur.roomName}: ${t('ลูกค้าพบปัญหา')}` : `${t('ห้อง')} ${cur.roomName}: ${t('ชำระเงินมา กรุณาตรวจสอบสลิป')}`}>
+      {cur.kind === 'ISSUE' ? (
+        <div className="center">
+          <AlertTriangle size={70} color="var(--danger)" style={{ animation: 'pulse 1s infinite' }} />
+          <h1 style={{ margin: '8px 0', color: 'var(--danger)' }}>{t('ห้อง')} {cur.roomName}</h1>
+          <div style={{ fontSize: '1.6rem', fontWeight: 800 }}>{cur.category}</div>
+          {cur.message && <div className="card flat mt" style={{ fontSize: '1.1rem' }}>{cur.message}</div>}
+          <div className="small muted mt">{fmtTime(cur.createdAt)}</div>
+          <div className="grid grid-2 mt">
+            <Button size="lg" variant="primary" onClick={ack}>{t('รับเรื่อง (กำลังไปที่ห้อง)')}</Button>
+            <Button size="lg" onClick={() => { dismiss(); nav(`/admin/rooms?room=${cur.roomId}&tab=issues`); }}>{t('ไปหน้าห้อง')}</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="col">
+          {left > 0 ? <div className="small" style={{ color: 'var(--warn)' }}>{t('ถ้าไม่ตรวจภายใน')} {left}s {t('ลูกค้าจะเห็นว่าชำระสำเร็จ (ยังต้องตรวจสลิปภายหลัง)')}</div> : <div className="small" style={{ color: 'var(--danger)' }}>{t('ระบบแจ้งลูกค้าว่าชำระสำเร็จแล้ว กรุณาตรวจสลิปให้เรียบร้อย')}</div>}
+          {pay ? <PrepayReview p={pay} onDone={dismiss} /> : <div className="center"><span className="spinner" /></div>}
+          <Button variant="ghost" onClick={dismiss}>{t('ตรวจภายหลัง')}</Button>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/** Prints kitchen tickets of in-room QR orders. Every POS can print; a server-side claim makes sure each job prints once. */
+function QueuedPrintWorker() {
+  const { printNow } = usePrint();
+  const busy = useRef(false);
+  const enabled = () => localStorage.getItem('bb_print_qr_orders') !== 'false';
+  const run = useCallback(async () => {
+    if (busy.current || !enabled()) return;
+    busy.current = true;
+    try {
+      const jobs = (await api.get('/print-jobs?status=QUEUED', { passive: true })).filter((j) => j.source && j.payload);
+      for (const j of jobs.reverse()) {
+        const c = await api.post(`/print-jobs/${j.id}/claim`, { device: localStorage.getItem('bb_device_key') || '' });
+        if (!c.claimed) continue;
+        const r = await printNow(<KitchenTicket ticket={j.payload} />, { jobType: 'KITCHEN', station: j.payload.station, reference: j.reference });
+        await api.patch(`/print-jobs/${j.id}`, { status: r.ok ? 'PRINTED' : 'FAILED', error: r.ok ? null : r.error }).catch(() => {});
+      }
+    } catch {
+      /* retry on next tick */
+    } finally {
+      busy.current = false;
+    }
+  }, [printNow]);
+  useSocketEvent('print:queued', run);
+  useEffect(() => {
+    run();
+    const id = setInterval(run, 30000);
+    return () => clearInterval(id);
+  }, [run]);
+  return null;
+}
+
 function IdleGuard() {
   const { settings, logout } = useAuth();
   const last = useRef(Date.now());
@@ -403,6 +508,8 @@ function Layout() {
         </main>
       </div>
       <AlertCenter />
+      <RoomServiceAlerts />
+      <QueuedPrintWorker />
       <IdleGuard />
     </div>
   );

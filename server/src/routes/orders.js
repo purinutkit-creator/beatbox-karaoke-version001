@@ -15,7 +15,7 @@ import { nextRefundNo } from '../services/numbers.js';
 import { moveStock } from '../services/stock.js';
 import { addPointTx, evaluateTier } from '../services/points.js';
 import { refreshRoomStatuses } from '../services/rooms.js';
-import { getSlipProvider, fileHash } from '../providers/slip.js';
+import { verifySlip, paymentMode } from '../providers/slip.js';
 import { notify } from '../services/notifications.js';
 import { config } from '../config.js';
 import { round2 } from '@beatbox/shared/money.js';
@@ -237,25 +237,33 @@ const upload = multer({
 
 /**
  * POS slip check.
- * DEMO: simulated ~5 seconds then success (clearly marked demo).
- * PRODUCTION: real provider when a slip image is uploaded, otherwise a staff with slip.verify confirms manually (logged).
+ * DEMO: simulated wait then success (clearly marked demo).
+ * PRODUCTION: the slip image is verified for real (slip QR + bank / provider, amount, receiver, date — see providers/slip.js);
+ * when the provider cannot decide, a staff member with slip.verify confirms manually (logged).
  */
 r.post('/payments/verify-slip', can('slip.verify'), upload.single('slip'), async (req, res) => {
   const b = parse(z.object({ orderId: z.coerce.number().int().optional().nullable(), depositRef: z.string().optional().nullable(), amount: z.coerce.number().positive(), method: z.enum(['QR', 'TRANSFER']).default('QR'), manualConfirm: z.coerce.boolean().optional() }), req.body);
   const settings = await getSettings();
+  const mode = await paymentMode();
   let result;
-  if (config.paymentMode !== 'PRODUCTION') {
+  if (mode !== 'PRODUCTION' && !req.file) {
     await new Promise((rs) => setTimeout(rs, Math.min(10, Number(settings.payment.slipCheckSeconds || 5)) * 1000));
     result = { ok: true, mode: 'DEMO', ref: `DEMO-${Date.now()}` };
   } else if (req.file) {
-    const provider = getSlipProvider();
-    const v = await provider.verify({ buffer: req.file.buffer, expectedAmount: b.amount });
-    const hash = fileHash(req.file.buffer);
-    if (v.ok && Math.abs(Number(v.amount) - b.amount) > 0.01) result = { ok: false, reason: 'ยอดเงินไม่ตรง' };
-    else if (v.ok) {
-      const slip = await saveFile(null, { kind: 'SLIP', name: req.file.originalname, mime: req.file.mimetype, buffer: req.file.buffer });
-      await pool.query(`INSERT INTO payment_verifications(provider, transaction_ref, amount, slip_path, slip_hash, result, verified_at, raw_provider_ref, reviewed_by) VALUES ($1,$2,$3,$4,$5,'PASSED',now(),$6,$7)`, [provider.name, v.transactionRef, v.amount, slip.ref, hash, v.raw || {}, req.employee.id]);
-      result = { ok: true, mode: 'PROVIDER', ref: v.transactionRef };
+    const order = b.orderId ? await one('SELECT created_at FROM orders WHERE id = $1', [b.orderId]) : null;
+    const v = await verifySlip({ buffer: req.file.buffer, mime: req.file.mimetype, expectedAmount: b.amount, notBefore: order?.created_at || null, settings });
+    if (v.ok) {
+      try {
+        const slip = await saveFile(null, { kind: 'SLIP', name: req.file.originalname, mime: req.file.mimetype, buffer: req.file.buffer });
+        await pool.query(
+          `INSERT INTO payment_verifications(provider, transaction_ref, amount, slip_path, slip_hash, result, verified_at, raw_provider_ref, reviewed_by) VALUES ($1,$2,$3,$4,$5,'PASSED',now(),$6,$7)`,
+          [v.provider, v.transactionRef, v.amount, slip.ref, v.hash, { ...(v.raw || {}), qr: v.qr, mode: v.mode }, req.employee.id],
+        );
+        result = { ok: true, mode: v.mode, ref: v.transactionRef };
+      } catch (e) {
+        if (e.code !== '23505') throw e;
+        result = { ok: false, reason: 'พบรายการนี้ถูกใช้แล้ว' };
+      }
     } else result = { ok: false, reason: v.reason || 'ไม่สามารถตรวจสอบรายการได้', manualReview: v.manualReview };
   } else if (b.manualConfirm) {
     result = { ok: true, mode: 'MANUAL', ref: `MANUAL-${Date.now()}` };

@@ -18,10 +18,11 @@ import { estimateReservation, confirmOnlineDeposit, assertBookable } from '../se
 import { nextBookingNo, nextMemberCode, randomToken } from '../services/numbers.js';
 import { refreshRoomStatuses } from '../services/rooms.js';
 import { notify } from '../services/notifications.js';
-import { getSlipProvider, fileHash } from '../providers/slip.js';
+import { getSlipProvider, fileHash, verifySlip } from '../providers/slip.js';
 import { getPaymentProvider } from '../providers/payment.js';
 import { lineLogin } from '../providers/line.js';
-import { sendSms } from '../providers/sms.js';
+import { sendSms, smsConfig } from '../providers/sms.js';
+import { fillTemplate } from '../services/integrations.js';
 import { redeemReward } from './members.js';
 import { calculateCancellationRefund } from '@beatbox/shared/calc.js';
 import { normalizePhone, bkkDateTime, fmtDate, fmtTime } from '@beatbox/shared/format.js';
@@ -74,6 +75,7 @@ const availSchema = z.object({
   time: z.string().regex(/^\d{2}:\d{2}$/),
   durationMinutes: z.coerce.number().int().min(30).max(12 * 60),
   guests: z.coerce.number().int().min(1).max(100),
+  extraMics: z.coerce.number().int().min(0).max(20).default(0),
   roomTypeId: z.coerce.number().int().optional(),
 });
 
@@ -94,12 +96,12 @@ r.get('/availability', async (req, res) => {
   const end = new Date(start.getTime() + q.durationMinutes * 60000);
   validateWindow(settings, start, end);
   await expireStaleHolds(pool);
-  const rooms = await searchRooms(pool, { branchId: q.branchId || null, startAt: start, endAt: end, guests: q.guests, roomTypeId: q.roomTypeId || null });
+  const rooms = await searchRooms(pool, { branchId: q.branchId || null, startAt: start, endAt: end, guests: q.guests, roomTypeId: q.roomTypeId || null, maxExtraGuests: settings.room.maxExtraGuests });
   const packages = await many('SELECT * FROM room_packages WHERE is_active AND is_online AND deleted_at IS NULL ORDER BY sort_order');
   const out = rooms
     .filter((x) => x.fits)
     .map((room) => {
-      const est = estimateReservation({ room, durationMinutes: q.durationMinutes, guestCount: q.guests, settings, startAt: start });
+      const est = estimateReservation({ room, durationMinutes: q.durationMinutes, guestCount: q.guests, extraMics: Math.min(q.extraMics, Number(settings.room.maxExtraMics || 0)), settings, startAt: start });
       const pk = packages.filter((p) => !p.room_type_ids?.length || p.room_type_ids.includes(room.room_type_id));
       return {
         id: room.id,
@@ -110,6 +112,8 @@ r.get('/availability', async (req, res) => {
         typeName: room.type_name,
         typeColor: room.type_color,
         capacity: room.capacity,
+        extraGuests: room.extraGuests,
+        extraGuestFee: Number(settings.room.extraGuestFee || 0),
         amenities: room.amenities,
         priceHour: Number(room.price_hour),
         priceHalf: Number(room.price_half),
@@ -157,6 +161,7 @@ const holdSchema = z.object({
   startAt: z.string(),
   durationMinutes: z.coerce.number().int().min(30).max(12 * 60),
   guestCount: z.coerce.number().int().min(1).max(100),
+  extraMics: z.coerce.number().int().min(0).max(20).default(0),
   packageId: z.coerce.number().int().optional().nullable(),
 });
 
@@ -171,12 +176,14 @@ r.post('/holds', optionalMember, async (req, res) => {
       await expireStaleHolds(c);
       const room = await lockRoom(c, b.roomId);
       if (!room || !room.is_active || ['MAINTENANCE', 'DISABLED'].includes(room.status)) throw notFound('ไม่พบห้อง');
-      if (room.capacity < b.guestCount) throw badRequest(`ห้องนี้รองรับได้ ${room.capacity} คน`);
+      const maxGuests = room.capacity + Number(settings.room.maxExtraGuests || 0);
+      if (b.guestCount > maxGuests) throw badRequest(`ห้องนี้รองรับได้สูงสุด ${maxGuests} คน (${room.capacity} คน + เพิ่มได้ ${settings.room.maxExtraGuests} คน)`);
+      if (b.extraMics > Number(settings.room.maxExtraMics || 0)) throw badRequest(`เพิ่มไมค์ได้สูงสุด ${settings.room.maxExtraMics} ตัว`);
       await assertRoomFree(c, room.id, start, end);
       const pkg = b.packageId ? (await c.query('SELECT * FROM room_packages WHERE id = $1 AND is_active AND is_online', [b.packageId])).rows[0] : null;
       if (b.packageId && !pkg) throw badRequest('แพ็กเกจนี้ไม่สามารถจองออนไลน์ได้');
       if (pkg && pkg.hours * 60 + pkg.minutes > b.durationMinutes) throw badRequest('ระยะเวลาน้อยกว่าเวลาของแพ็กเกจ');
-      const est = estimateReservation({ room: { ...room, type_deposit: 0 }, pkg, durationMinutes: b.durationMinutes, guestCount: b.guestCount, settings, startAt: start });
+      const est = estimateReservation({ room: { ...room, type_deposit: 0 }, pkg, durationMinutes: b.durationMinutes, guestCount: b.guestCount, extraMics: b.extraMics, settings, startAt: start });
       const holdMin = Number(settings.booking.holdMinutes || 10);
       const expires = new Date(Date.now() + holdMin * 60000);
       const holdToken = randomToken(24);
@@ -184,9 +191,9 @@ r.post('/holds', optionalMember, async (req, res) => {
       const rv = (
         await c.query(
           `INSERT INTO reservations(booking_no, branch_id, room_id, room_type_id, member_id, customer_name, phone, guest_count, package_id, start_at, end_at, duration_minutes,
-             estimated_total, estimate_snapshot, deposit_required, status, source, check_in_token, hold_expires_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'HOLD','ONLINE',$16,$17) RETURNING *`,
-          [await nextBookingNo(c), room.branch_id, room.id, room.room_type_id, m?.id || null, m ? `${m.first_name} ${m.last_name || ''}`.trim() : 'ลูกค้าออนไลน์', m?.phone || '-', b.guestCount, pkg?.id || null, start, end, b.durationMinutes, est.calc.grandTotal, est.calc, est.deposit, randomToken(18), expires],
+             estimated_total, estimate_snapshot, deposit_required, status, source, check_in_token, hold_expires_at, extra_mics)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'HOLD','ONLINE',$16,$17,$18) RETURNING *`,
+          [await nextBookingNo(c), room.branch_id, room.id, room.room_type_id, m?.id || null, m ? `${m.first_name} ${m.last_name || ''}`.trim() : 'ลูกค้าออนไลน์', m?.phone || '-', b.guestCount, pkg?.id || null, start, end, b.durationMinutes, est.calc.grandTotal, est.calc, est.deposit, randomToken(18), expires, b.extraMics],
         )
       ).rows[0];
       await c.query('INSERT INTO reservation_holds(reservation_id, hold_token, expires_at) VALUES ($1,$2,$3)', [rv.id, holdToken, expires]);
@@ -232,6 +239,8 @@ function publicBooking(rv, extra = {}) {
     endAt: rv.end_at,
     durationMinutes: rv.duration_minutes,
     guestCount: rv.guest_count,
+    roomCapacity: rv.room_capacity ?? null,
+    extraMics: rv.extra_mics || 0,
     estimatedTotal: Number(rv.estimated_total),
     depositRequired: Number(rv.deposit_required),
     depositPaid: Number(rv.deposit_paid),
@@ -298,7 +307,7 @@ r.post('/holds/:token/details', optionalMember, async (req, res) => {
     const room = (await c.query('SELECT r.*, rt.default_deposit AS type_deposit FROM rooms r JOIN room_types rt ON rt.id = r.room_type_id WHERE r.id = $1', [rv.room_id])).rows[0];
     const pkg = rv.package_id ? (await c.query('SELECT * FROM room_packages WHERE id = $1', [rv.package_id])).rows[0] : null;
     const member = memberId ? (await c.query('SELECT * FROM members WHERE id = $1', [memberId])).rows[0] : null;
-    const est = estimateReservation({ room, pkg, durationMinutes: rv.duration_minutes, guestCount: rv.guest_count, settings, promotion: promo ? { ...promo, code: b.promoCode || promo.code } : null, member, startAt: rv.start_at });
+    const est = estimateReservation({ room, pkg, durationMinutes: rv.duration_minutes, guestCount: rv.guest_count, extraMics: rv.extra_mics, settings, promotion: promo ? { ...promo, code: b.promoCode || promo.code } : null, member, startAt: rv.start_at });
     if (promo && !est.promotion?.eligible) throw badRequest(`ไม่สามารถใช้โปรโมชั่นนี้ได้: ${est.promotion?.reason || ''}`);
     await c.query(
       `UPDATE reservations SET customer_name = $2, phone = $3, member_id = $4, note = $5, promotion_id = $6, estimated_total = $7, estimate_snapshot = $8, deposit_required = $9, updated_at = now() WHERE id = $1`,
@@ -342,6 +351,7 @@ r.post('/holds/:token/slip', (req, res, next) => slipUpload.single('slip')(req, 
   if (!req.file) throw badRequest('กรุณาอัปโหลดสลิป (JPG/PNG)');
   const settings = await getSettings();
   const hash = fileHash(req.file.buffer);
+  const providerName = (await getSlipProvider()).name;
   // phase 1: validate + create verification record
   const pre = await tx(async (c) => {
     await expireStaleHolds(c);
@@ -354,7 +364,7 @@ r.post('/holds/:token/slip', (req, res, next) => slipUpload.single('slip')(req, 
     const dup = (await c.query(`SELECT 1 FROM payment_verifications WHERE slip_hash = $1 AND result = 'PASSED'`, [hash])).rows[0];
     const slip = await saveFile(c, { kind: 'SLIP', name: req.file.originalname, mime: req.file.mimetype, buffer: req.file.buffer });
     const pv = (
-      await c.query(`INSERT INTO payment_verifications(payment_transaction_id, reservation_id, provider, amount, slip_path, slip_hash, result) VALUES ($1,$2,$3,$4,$5,$6,'PENDING') RETURNING *`, [ptx.id, rv.id, getSlipProvider().name, ptx.amount, slip.ref, hash])
+      await c.query(`INSERT INTO payment_verifications(payment_transaction_id, reservation_id, provider, amount, slip_path, slip_hash, result) VALUES ($1,$2,$3,$4,$5,$6,'PENDING') RETURNING *`, [ptx.id, rv.id, providerName, ptx.amount, slip.ref, hash])
     ).rows[0];
     if (dup) {
       await c.query(`UPDATE payment_verifications SET result = 'FAILED', failure_reason = $2, verified_at = now() WHERE id = $1`, [pv.id, 'พบรายการนี้ถูกใช้แล้ว']);
@@ -365,18 +375,9 @@ r.post('/holds/:token/slip', (req, res, next) => slipUpload.single('slip')(req, 
   });
   if (pre.duplicate) return res.status(422).json({ error: 'พบรายการนี้ถูกใช้แล้ว', code: 'SLIP_DUPLICATE' });
   const { rv, ptx, pv } = pre;
-  // phase 2: provider call (outside the DB transaction)
-  let v;
-  try {
-    v = await getSlipProvider().verify({ buffer: req.file.buffer, expectedAmount: Number(ptx.amount), receiver: settings.payment });
-  } catch (e) {
-    v = { ok: false, manualReview: true, reason: 'ไม่สามารถเชื่อมต่อระบบตรวจสอบสลิปได้', raw: { error: e.message } };
-  }
-  if (v.ok) {
-    if (Math.abs(Number(v.amount) - Number(ptx.amount)) > 0.009) v = { ...v, ok: false, reason: `ยอดเงินไม่ตรง (สลิป ${v.amount} บาท / ต้องชำระ ${ptx.amount} บาท)` };
-    else if (v.paidAt && new Date(v.paidAt).getTime() < new Date(ptx.created_at).getTime() - 30 * 60000) v = { ...v, ok: false, reason: 'วันที่/เวลาในสลิปไม่ตรงกับรายการนี้' };
-    else if (v.receiverAccount && settings.payment.accountNumber && !String(v.receiverAccount).replace(/\D/g, '').includes(String(settings.payment.accountNumber).replace(/\D/g, '').slice(-4))) v = { ...v, ok: false, reason: 'บัญชีผู้รับเงินไม่ตรง' };
-  }
+  // phase 2: real verification (slip QR → bank / provider → amount, receiver, date rules), outside the DB transaction
+  const v = await verifySlip({ buffer: req.file.buffer, mime: req.file.mimetype, expectedAmount: Number(ptx.amount), notBefore: ptx.created_at, settings });
+  if (v.raw && v.qr) v.raw = { ...v.raw, qr: v.qr };
   // phase 3: record result atomically (unique constraints stop slip reuse / races)
   let result;
   try {
@@ -498,13 +499,14 @@ r.post('/auth/otp/request', async (req, res) => {
   const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
   await pool.query(`INSERT INTO otp_codes(phone, purpose, code_hash, expires_at) VALUES ($1,$2,$3, now() + interval '5 minutes')`, [p, purpose, await bcrypt.hash(code, 8)]);
   const s = await getSettings();
+  const sms = await smsConfig();
   let delivered = false;
   try {
-    delivered = (await sendSms(p, `รหัส OTP ${s.store.name}: ${code} (ใช้ได้ 5 นาที)`)).delivered;
+    delivered = (await sendSms(p, fillTemplate(sms.otpTemplate, { store: s.store.name, code, minutes: 5 }))).delivered;
   } catch (e) {
     console.warn('[otp] sms failed', e.message);
   }
-  res.json({ sent: true, delivered, expiresInSeconds: 300, ...(config.otpDebug ? { debugCode: code } : {}) });
+  res.json({ sent: true, delivered, expiresInSeconds: 300, ...(sms.otpDebug ? { debugCode: code } : {}) });
 });
 
 async function checkOtp(c, phone, code, purpose) {
@@ -600,13 +602,13 @@ r.post('/auth/profile', async (req, res) => {
 
 r.get('/auth/line/start', async (req, res) => {
   const redirect = String(req.query.redirect || '/book/account');
-  if (!lineLogin.enabled()) {
+  if (!(await lineLogin.enabled())) {
     if (config.isProd) throw badRequest('ยังไม่ได้ตั้งค่า LINE Login');
     return res.redirect(`/book/line-demo?redirect=${encodeURIComponent(redirect)}`);
   }
   const nonce = randomToken(12);
   const state = signToken({ typ: 'line-state', nonce, redirect }, '10m');
-  res.redirect(lineLogin.authorizeUrl(state, nonce));
+  res.redirect(await lineLogin.authorizeUrl(state, nonce));
 });
 
 async function handleLineProfile(profile, redirect) {
@@ -641,7 +643,7 @@ r.get('/auth/line/callback', async (req, res) => {
 
 // Development-only LINE simulator (when LINE Login is not configured)
 r.post('/auth/line/demo', async (req, res) => {
-  if (config.isProd || lineLogin.enabled()) throw forbidden();
+  if (config.isProd || (await lineLogin.enabled())) throw forbidden();
   const b = parse(z.object({ lineUserId: z.string().min(3).max(64), displayName: z.string().max(100), redirect: z.string().default('/book/account') }), req.body);
   res.json({ url: await handleLineProfile({ lineUserId: `Udemo${b.lineUserId}`, displayName: b.displayName, pictureUrl: null }, b.redirect) });
 });
@@ -656,7 +658,7 @@ r.get('/me', requireMember, async (req, res) => {
   );
   const nextTier = await one(`SELECT * FROM member_tiers WHERE is_active AND sort_order > COALESCE((SELECT sort_order FROM member_tiers WHERE id = $1), -1) ORDER BY sort_order LIMIT 1`, [m.tier_id]);
   const line = await one(`SELECT line_user_id, display_name, picture_url, messaging_consent, linked_at, last_login_at, status FROM line_connections WHERE member_id = $1 AND status = 'CONNECTED' ORDER BY id DESC LIMIT 1`, [m.id]);
-  res.json({ ...m, nextTier, line, lineLoginEnabled: lineLogin.enabled() || !config.isProd });
+  res.json({ ...m, nextTier, line, lineLoginEnabled: (await lineLogin.enabled()) || !config.isProd });
 });
 
 r.put('/me', requireMember, async (req, res) => {

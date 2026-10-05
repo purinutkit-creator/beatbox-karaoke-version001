@@ -4,6 +4,7 @@ import { Modal, Drawer, Button, Field, Input, Select, Textarea, Badge, Tabs, Loa
 import { MemberPicker } from './MemberPicker.jsx';
 import { DepositSlip } from './Receipt.jsx';
 import { usePrint } from './PrintPreview.jsx';
+import { usePrintRoomTickets } from '../lib/roomTickets.jsx';
 import { DepositModal } from '../admin/pages/Rooms.jsx';
 import { useT } from '../lib/i18n.jsx';
 import { api, uid } from '../lib/api.js';
@@ -36,6 +37,7 @@ export function ReservationForm({ initial = {}, onClose, onSaved }) {
     phone: initial.phone || '',
     memberId: initial.member_id || null,
     guestCount: initial.guest_count || 4,
+    extraMics: initial.extra_mics || 0,
     packageId: initial.package_id || '',
     note: initial.note || '',
     source: initial.source || 'PHONE',
@@ -65,11 +67,11 @@ export function ReservationForm({ initial = {}, onClose, onSaved }) {
   const save = async () => {
     setBusy(true);
     try {
-      if (editing) await api.put(`/reservations/${initial.id}`, { roomId: Number(f.roomId), startAt: startIso, durationMinutes: Number(f.durationMinutes), guestCount: Number(f.guestCount), customerName: f.customerName, phone: f.phone, note: f.note, packageId: f.packageId ? Number(f.packageId) : null, version: initial.version });
+      if (editing) await api.put(`/reservations/${initial.id}`, { roomId: Number(f.roomId), startAt: startIso, durationMinutes: Number(f.durationMinutes), guestCount: Number(f.guestCount), extraMics: Number(f.extraMics) || 0, customerName: f.customerName, phone: f.phone, note: f.note, packageId: f.packageId ? Number(f.packageId) : null, version: initial.version });
       else
         await api.post(
           '/reservations',
-          { roomId: Number(f.roomId), startAt: startIso, durationMinutes: Number(f.durationMinutes), customerName: f.customerName, phone: f.phone, memberId: f.memberId, guestCount: Number(f.guestCount), packageId: f.packageId ? Number(f.packageId) : null, note: f.note, source: f.source, status: f.status, deposit: Number(f.depositAmount) > 0 ? { amount: Number(f.depositAmount), method: f.depositMethod } : null },
+          { roomId: Number(f.roomId), startAt: startIso, durationMinutes: Number(f.durationMinutes), customerName: f.customerName, phone: f.phone, memberId: f.memberId, guestCount: Number(f.guestCount), extraMics: Number(f.extraMics) || 0, packageId: f.packageId ? Number(f.packageId) : null, note: f.note, source: f.source, status: f.status, deposit: Number(f.depositAmount) > 0 ? { amount: Number(f.depositAmount), method: f.depositMethod } : null },
           { idempotencyKey: uid() },
         );
       toast.success('บันทึกการจองเรียบร้อย');
@@ -90,6 +92,7 @@ export function ReservationForm({ initial = {}, onClose, onSaved }) {
           <Select value={f.durationMinutes} onChange={(e) => set('durationMinutes', Number(e.target.value))} options={[30, 60, 90, 120, 150, 180, 240, 300, 360].map((m) => ({ value: m, label: formatMinutesShort(m) }))} />
         </Field>
         <Field label="จำนวนลูกค้า"><Input type="number" value={f.guestCount} onChange={(e) => set('guestCount', e.target.value)} /></Field>
+        <Field label="ไมค์เพิ่ม (ตัว)"><Input type="number" min={0} value={f.extraMics} onChange={(e) => set('extraMics', e.target.value)} /></Field>
         <Field label="แพ็กเกจ"><Select value={f.packageId} onChange={(e) => set('packageId', e.target.value)} options={(packages || []).filter((p) => p.is_active).map((p) => ({ value: p.id, label: `${p.name} ฿${money(p.price, 0)}` }))} placeholder="-" /></Field>
         <Field label="ห้อง" style={{ gridColumn: '1/-1' }}>
           <div className="grid grid-auto" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 6 }}>
@@ -159,6 +162,7 @@ export function ReservationDrawer({ id, onClose, onChanged }) {
   const { confirm, prompt, approve } = useDialog();
   const { can, settings } = useAuth();
   const { preview } = usePrint();
+  const printTickets = usePrintRoomTickets();
   const { data: rv, reload } = useLive(() => api.get(`/reservations/${id}`), ['reservations', 'deposits'], [id]);
   const [tab, setTab] = useState('info');
   const [modal, setModal] = useState(null);
@@ -205,7 +209,7 @@ export function ReservationDrawer({ id, onClose, onChanged }) {
             {rv.member_code && <div className="small"><Badge color="#eab308">{rv.member_code}</Badge> {rv.member_points} {t('คะแนน')} {rv.line_connected && <Badge color="#06c755">LINE</Badge>}</div>}
             <div className="mt"><b>{rv.room_name}</b> · {rv.type_name}</div>
             <div>{fmtDate(rv.start_at)} {fmtTime(rv.start_at)} – {fmtTime(rv.end_at)} ({formatMinutesShort(rv.duration_minutes)})</div>
-            <div>{t('จำนวนลูกค้า')} {rv.guest_count} · {rv.package_name || t('รายชั่วโมง')}</div>
+            <div>{t('จำนวนลูกค้า')} {rv.guest_count}{rv.room_capacity && rv.guest_count > rv.room_capacity ? ` (${t('เกิน')} ${rv.guest_count - rv.room_capacity})` : ''}{rv.extra_mics ? ` · ${t('ไมค์เพิ่ม')} ${rv.extra_mics}` : ''} · {rv.package_name || t('รายชั่วโมง')}</div>
             <div className="small muted">{t('ช่องทาง')} {rv.source} · {t('รับจองโดย')} {rv.created_by_name || 'ONLINE'} · {fmtDateTime(rv.created_at)}</div>
             {rv.note && <div className="small">📝 {rv.note}</div>}
           </div>
@@ -222,7 +226,7 @@ export function ReservationDrawer({ id, onClose, onChanged }) {
           <div className="grid grid-3" style={{ gap: 8 }}>
             {['PENDING', 'HOLD'].includes(rv.status) && <Button icon={CheckCircle2} variant="success" onClick={() => act(() => api.post(`/reservations/${rv.id}/status`, { status: 'CONFIRMED' }))}>{t('ยืนยันรายการ')}</Button>}
             {['PENDING', 'CONFIRMED', 'DEPOSIT_PAID', 'WAITING'].includes(rv.status) && <Button icon={UserCheck} variant="success" onClick={() => act(() => api.post(`/reservations/${rv.id}/check-in`), 'ลูกค้ามาถึงแล้ว')}>{t('ลูกค้ามาถึงแล้ว')}</Button>}
-            {can('room.operate') && rv.status !== 'HOLD' && <Button icon={DoorOpen} variant="primary" onClick={() => act(() => api.post(`/reservations/${rv.id}/open`, { clientOpId: uid() }), 'เปิดห้องจากการจองแล้ว')}>{t('เปิดห้องจากการจอง')}</Button>}
+            {can('room.operate') && rv.status !== 'HOLD' && <Button icon={DoorOpen} variant="primary" onClick={() => act(async () => { const ss = await api.post(`/reservations/${rv.id}/open`, { clientOpId: uid() }); printTickets(ss.id, { auto: true }); }, 'เปิดห้องจากการจองแล้ว')}>{t('เปิดห้องจากการจอง')}</Button>}
             <Button icon={Wallet} onClick={() => setModal('deposit')}>{t('รับมัดจำ')}</Button>
             <Button icon={Pencil} onClick={() => setModal('edit')}>{t('เปลี่ยนห้อง/เวลา')}</Button>
             {['PENDING', 'CONFIRMED', 'DEPOSIT_PAID', 'WAITING'].includes(rv.status) && <Button icon={UserX} onClick={async () => (await confirm({ message: 'Mark No-show?', danger: true })) && act(() => api.post(`/reservations/${rv.id}/status`, { status: 'NO_SHOW' }))}>{t('ไม่มาตามนัด')}</Button>}

@@ -187,6 +187,7 @@ export const ORDER_ITEM_TYPES = {
   EXTENSION: 'เวลาเพิ่มเติม',
   OVERTIME: 'เวลาเกิน',
   EXTRA_GUEST: 'ค่าลูกค้าเกินจำนวน',
+  EXTRA_MIC: 'ไมค์เพิ่ม',
   PRODUCT: 'สินค้า',
   SERVICE: 'ค่าบริการ',
   REWARD: 'ของรางวัล',

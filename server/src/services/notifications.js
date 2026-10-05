@@ -3,6 +3,8 @@ import { emitStaff } from '../lib/realtime.js';
 import { getSettings } from './settings.js';
 import { lineMessaging } from '../providers/line.js';
 import { fmtDate, fmtTime } from '@beatbox/shared/format.js';
+import { sendSms, smsConfig } from '../providers/sms.js';
+import { fillTemplate } from './integrations.js';
 
 /** POS Notification Center entry (synced to every device). */
 export async function notify({ type, level = 'info', title, message, data = {}, roomId = null, reservationId = null, memberId = null, dedupeKey = null }, client = pool) {
@@ -54,6 +56,10 @@ export async function dispatchPendingMessages() {
   const rows = (
     await pool.query(`SELECT * FROM notifications WHERE channel = 'LINE' AND status = 'PENDING' AND attempts < 5 ORDER BY id LIMIT 20`)
   ).rows;
+  if (rows.length && !(await lineMessaging.enabled())) {
+    await pool.query(`UPDATE notifications SET status = 'SKIPPED', error = 'ยังไม่ได้ตั้งค่า LINE Messaging API' WHERE id = ANY($1)`, [rows.map((n) => n.id)]);
+    return;
+  }
   for (const n of rows) {
     try {
       await lineMessaging.push(n.data.lineUserId, n.message);
@@ -84,4 +90,29 @@ export function bookingMessage(kind, b, extra = {}) {
     default:
       return base;
   }
+}
+
+/** SMS booking confirmation / reminder (Admin → การเชื่อมต่อ → SMS). Recorded in notifications (channel SMS). */
+export async function sendBookingSms(kind, b) {
+  const c = await smsConfig();
+  const on = kind === 'BOOKING_CONFIRMED' ? c.sendBookingConfirm : c.sendReminder;
+  if (!c.enabled || !on || !b?.phone || b.phone === '-') return null;
+  const s = await getSettings();
+  const text = fillTemplate(kind === 'BOOKING_CONFIRMED' ? c.bookingConfirmTemplate : c.reminderTemplate, {
+    store: s.store.name, booking: b.booking_no, room: b.room_name || '', date: fmtDate(b.start_at), time: `${fmtTime(b.start_at)}–${fmtTime(b.end_at)}`, guests: b.guest_count,
+  });
+  const row = (
+    await pool.query(
+      `INSERT INTO notifications(channel, type, title, message, data, reservation_id, status, dedupe_key) VALUES ('SMS',$1,$2,$3,$4,$5,'PENDING',$6) ON CONFLICT (dedupe_key) DO NOTHING RETURNING id`,
+      [kind, kind === 'BOOKING_CONFIRMED' ? 'SMS ยืนยันการจอง' : 'SMS แจ้งเตือนการจอง', text, { phone: b.phone }, b.id, `sms:${kind}:${b.id}`],
+    )
+  ).rows[0];
+  if (!row) return null;
+  try {
+    const r = await sendSms(b.phone, text);
+    await pool.query(`UPDATE notifications SET status = $2, sent_at = CASE WHEN $2 = 'SENT' THEN now() END, attempts = 1, error = $3 WHERE id = $1`, [row.id, r.delivered ? 'SENT' : 'SKIPPED', r.delivered ? null : r.reason]);
+  } catch (e) {
+    await pool.query(`UPDATE notifications SET status = 'FAILED', attempts = 1, error = $2 WHERE id = $1`, [row.id, String(e.message).slice(0, 500)]);
+  }
+  return row.id;
 }
