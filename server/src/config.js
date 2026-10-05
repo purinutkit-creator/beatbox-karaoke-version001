@@ -11,12 +11,15 @@ function secret(name, fallbackLabel) {
   return crypto.createHash('sha256').update(`beatbox-dev-${fallbackLabel}`).digest('hex');
 }
 
+// RENDER_EXTERNAL_URL is set automatically on Render
+const publicUrl = (env.PUBLIC_URL || env.RENDER_EXTERNAL_URL || `http://localhost:${env.PORT || 4000}`).replace(/\/$/, '');
+
 export const config = {
   appEnv,
   isProd: appEnv === 'production',
   port: Number(env.PORT || 4000),
   databaseUrl: env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/beatbox',
-  publicUrl: env.PUBLIC_URL || `http://localhost:${env.PORT || 4000}`,
+  publicUrl,
   corsOrigins: (env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
   jwtSecret: secret('JWT_SECRET', 'jwt'),
   pinPepper: secret('PIN_PEPPER', 'pin'),
@@ -31,7 +34,7 @@ export const config = {
   // LINE
   lineLoginChannelId: env.LINE_LOGIN_CHANNEL_ID || '',
   lineLoginChannelSecret: env.LINE_LOGIN_CHANNEL_SECRET || '',
-  lineLoginCallbackUrl: env.LINE_LOGIN_CALLBACK_URL || '',
+  lineLoginCallbackUrl: env.LINE_LOGIN_CALLBACK_URL || `${publicUrl}/api/public/auth/line/callback`,
   lineMessagingToken: env.LINE_MESSAGING_ACCESS_TOKEN || '',
   // SMS (OTP) — when not configured OTP is returned in dev/demo responses only
   smsProvider: env.SMS_PROVIDER || '',

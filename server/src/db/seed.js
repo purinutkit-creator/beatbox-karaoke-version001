@@ -31,7 +31,8 @@ export async function seedIfEmpty({ demo = process.env.SEED_DEMO !== 'false' } =
     }
     const adminPin = process.env.ADMIN_PIN || '1234';
     const emps = [['ผู้ดูแลระบบ', adminPin, 'ADMIN', 'เจ้าของร้าน', 100]];
-    if (demo) emps.push(['สมชาย ผู้จัดการ', '2222', 'MANAGER', 'ผู้จัดการร้าน', 50], ['มานี แคชเชียร์', '3333', 'CASHIER', 'แคชเชียร์', 10], ['ปิติ พนักงาน', '4444', 'STAFF', 'พนักงานบริการ', 0]);
+    // demo staff have well-known PINs; SEED_DEMO_STAFF=false keeps demo data but only the admin account
+    if (demo && process.env.SEED_DEMO_STAFF !== 'false') emps.push(['สมชาย ผู้จัดการ', '2222', 'MANAGER', 'ผู้จัดการร้าน', 50], ['มานี แคชเชียร์', '3333', 'CASHIER', 'แคชเชียร์', 10], ['ปิติ พนักงาน', '4444', 'STAFF', 'พนักงานบริการ', 0]);
     for (const [name, pin, role, position, limit] of emps) {
       await c.query(`INSERT INTO employees(name, pin_hash, pin_lookup, role_id, position, discount_limit_percent) VALUES ($1,$2,$3,$4,$5,$6)`, [name, await hashPin(pin), pinLookup(pin), roleIds[role], position, limit]);
     }

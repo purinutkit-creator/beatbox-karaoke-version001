@@ -1,21 +1,20 @@
 // Slip verification providers. Business logic only sees the normalized result:
 // { ok, transactionRef, amount, paidAt, receiverAccount, raw, reason, manualReview }
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import { config } from '../config.js';
 
-export function fileHash(path) {
-  return crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex');
+export function fileHash(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
 const demoProvider = {
   name: 'demo',
   isReal: false,
-  async verify({ filePath, expectedAmount }) {
+  async verify({ buffer, expectedAmount }) {
     // Demo Mode: simulates provider latency and returns a deterministic reference derived from the file,
     // so re-uploading the same slip is detected as a duplicate.
     await new Promise((r) => setTimeout(r, 2500));
-    const ref = 'DEMO-' + fileHash(filePath).slice(0, 20).toUpperCase();
+    const ref = 'DEMO-' + fileHash(buffer).slice(0, 20).toUpperCase();
     return { ok: true, transactionRef: ref, amount: Number(expectedAmount), paidAt: new Date().toISOString(), receiverAccount: null, raw: { demo: true } };
   },
 };
@@ -32,9 +31,9 @@ const manualProvider = {
 const slipOkProvider = {
   name: 'slipok',
   isReal: true,
-  async verify({ filePath, expectedAmount }) {
+  async verify({ buffer, expectedAmount }) {
     const form = new FormData();
-    form.append('files', new Blob([fs.readFileSync(filePath)]), 'slip.jpg');
+    form.append('files', new Blob([buffer]), 'slip.jpg');
     form.append('log', 'true');
     form.append('amount', String(expectedAmount));
     const url = config.slipApiUrl || `https://api.slipok.com/api/line/apikey/${config.slipBranchId}`;
@@ -56,9 +55,9 @@ const slipOkProvider = {
 const easySlipProvider = {
   name: 'easyslip',
   isReal: true,
-  async verify({ filePath }) {
+  async verify({ buffer }) {
     const form = new FormData();
-    form.append('file', new Blob([fs.readFileSync(filePath)]), 'slip.jpg');
+    form.append('file', new Blob([buffer]), 'slip.jpg');
     const r = await fetch(config.slipApiUrl || 'https://developer.easyslip.com/api/v1/verify', { method: 'POST', headers: { Authorization: `Bearer ${config.slipApiKey}` }, body: form });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.status !== 200) return { ok: false, reason: j.message === 'duplicate_slip' ? 'พบรายการนี้ถูกใช้แล้ว' : 'ไม่สามารถตรวจสอบรายการได้', raw: j, manualReview: r.status >= 500 };

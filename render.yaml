@@ -1,0 +1,56 @@
+# Render Blueprint — one-click deploy of the app (POS + Customer Display + booking website) and its PostgreSQL database.
+# Dashboard → New → Blueprint → pick this repository/branch. See README "Deploy on Render".
+services:
+  - type: web
+    name: beatbox-pos
+    runtime: docker
+    region: singapore # closest Render region to Thailand
+    plan: free # free instances sleep after 15 min idle; use "starter" or above for a real store (always on)
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: beatbox-db
+          property: connectionString
+      - key: APP_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PIN_PEPPER
+        generateValue: true
+      # First admin 4-digit login code — Render asks for it when the Blueprint is created
+      - key: ADMIN_PIN
+        sync: false
+      # Demo rooms/products/promotions on first start; demo staff (well-known PINs) are not created
+      - key: SEED_DEMO
+        value: "true"
+      - key: SEED_DEMO_STAFF
+        value: "false"
+      # DEMO = simulated 5-second slip check. Switch to PRODUCTION + SLIP_PROVIDER/SLIP_API_KEY for real payments
+      - key: PAYMENT_MODE
+        value: DEMO
+      - key: SLIP_PROVIDER
+        value: manual
+      - key: SLIP_API_KEY
+        sync: false
+      # Shows sign-up OTP codes on screen until an SMS provider is configured — set to "false" when going live
+      - key: OTP_DEBUG
+        value: "true"
+      - key: SMS_PROVIDER
+        sync: false
+      - key: SMS_API_KEY
+        sync: false
+      - key: LINE_LOGIN_CHANNEL_ID
+        sync: false
+      - key: LINE_LOGIN_CHANNEL_SECRET
+        sync: false
+      - key: LINE_MESSAGING_ACCESS_TOKEN
+        sync: false
+
+databases:
+  - name: beatbox-db
+    region: singapore
+    plan: free # free databases expire after 30 days; use "basic-256mb" or above to keep data
+    databaseName: beatbox
+    user: beatbox
+    postgresMajorVersion: "16"

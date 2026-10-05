@@ -1,6 +1,4 @@
 import { Router } from 'express';
-import path from 'node:path';
-import fs from 'node:fs';
 import multer from 'multer';
 import { pool, tx, many, one } from '../db/index.js';
 import { requireAuth, can, hasPerm, signToken, readApproval } from '../lib/auth.js';
@@ -11,6 +9,7 @@ import { z, parse } from '../lib/validate.js';
 import { notFound, badRequest, conflict, forbidden } from '../lib/errors.js';
 import { emitSync } from '../lib/realtime.js';
 import { getSettings } from '../services/settings.js';
+import { saveFile } from '../services/files.js';
 import { createOrder, addProductItem, computeOrder, payOrder, discountNeedsApproval } from '../services/orders.js';
 import { nextRefundNo } from '../services/numbers.js';
 import { moveStock } from '../services/stock.js';
@@ -231,14 +230,7 @@ r.post('/orders/:id/send-kitchen', can('pos.access'), async (req, res) => {
 
 // ── Slip verification (POS) ──
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _f, cb) => {
-      const dir = path.join(config.uploadDir, 'slips');
-      fs.mkdirSync(dir, { recursive: true });
-      cb(null, dir);
-    },
-    filename: (_req, f, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(f.originalname || '.jpg').toLowerCase()}`),
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024 },
   fileFilter: (_req, f, cb) => cb(null, /image\/(jpe?g|png|webp)/.test(f.mimetype)),
 });
@@ -257,11 +249,12 @@ r.post('/payments/verify-slip', can('slip.verify'), upload.single('slip'), async
     result = { ok: true, mode: 'DEMO', ref: `DEMO-${Date.now()}` };
   } else if (req.file) {
     const provider = getSlipProvider();
-    const v = await provider.verify({ filePath: req.file.path, expectedAmount: b.amount });
-    const hash = fileHash(req.file.path);
+    const v = await provider.verify({ buffer: req.file.buffer, expectedAmount: b.amount });
+    const hash = fileHash(req.file.buffer);
     if (v.ok && Math.abs(Number(v.amount) - b.amount) > 0.01) result = { ok: false, reason: 'ยอดเงินไม่ตรง' };
     else if (v.ok) {
-      await pool.query(`INSERT INTO payment_verifications(provider, transaction_ref, amount, slip_path, slip_hash, result, verified_at, raw_provider_ref, reviewed_by) VALUES ($1,$2,$3,$4,$5,'PASSED',now(),$6,$7)`, [provider.name, v.transactionRef, v.amount, req.file.path, hash, v.raw || {}, req.employee.id]);
+      const slip = await saveFile(null, { kind: 'SLIP', name: req.file.originalname, mime: req.file.mimetype, buffer: req.file.buffer });
+      await pool.query(`INSERT INTO payment_verifications(provider, transaction_ref, amount, slip_path, slip_hash, result, verified_at, raw_provider_ref, reviewed_by) VALUES ($1,$2,$3,$4,$5,'PASSED',now(),$6,$7)`, [provider.name, v.transactionRef, v.amount, slip.ref, hash, v.raw || {}, req.employee.id]);
       result = { ok: true, mode: 'PROVIDER', ref: v.transactionRef };
     } else result = { ok: false, reason: v.reason || 'ไม่สามารถตรวจสอบรายการได้', manualReview: v.manualReview };
   } else if (b.manualConfirm) {

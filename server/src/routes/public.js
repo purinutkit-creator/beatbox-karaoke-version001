@@ -1,7 +1,5 @@
 // Customer Online Booking website API (same backend & database as the POS).
 import { Router } from 'express';
-import path from 'node:path';
-import fs from 'node:fs';
 import crypto from 'node:crypto';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
@@ -14,6 +12,7 @@ import { notFound, badRequest, conflict, unauthorized, forbidden } from '../lib/
 import { emitSync } from '../lib/realtime.js';
 import { config } from '../config.js';
 import { getSettings, publicSettings } from '../services/settings.js';
+import { saveFile } from '../services/files.js';
 import { expireStaleHolds, lockRoom, assertRoomFree, searchRooms, suggestAlternatives, withinOpeningHours } from '../services/availability.js';
 import { estimateReservation, confirmOnlineDeposit, assertBookable } from '../services/booking.js';
 import { nextBookingNo, nextMemberCode, randomToken } from '../services/numbers.js';
@@ -334,14 +333,7 @@ r.post('/holds/:token/details', optionalMember, async (req, res) => {
 
 // slips are transaction documents (not store content) — stored privately on the server
 const slipUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _f, cb) => {
-      const dir = path.join(config.uploadDir, 'slips');
-      fs.mkdirSync(dir, { recursive: true });
-      cb(null, dir);
-    },
-    filename: (_req, f, cb) => cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${path.extname(f.originalname || '.jpg').toLowerCase()}`),
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024 },
   fileFilter: (_req, f, cb) => (/image\/(jpe?g|png)/.test(f.mimetype) ? cb(null, true) : cb(Object.assign(new Error('รองรับเฉพาะไฟล์ JPG, JPEG, PNG'), { status: 400 }))),
 });
@@ -349,7 +341,7 @@ const slipUpload = multer({
 r.post('/holds/:token/slip', (req, res, next) => slipUpload.single('slip')(req, res, (err) => (err ? res.status(400).json({ error: err.message }) : next())), async (req, res) => {
   if (!req.file) throw badRequest('กรุณาอัปโหลดสลิป (JPG/PNG)');
   const settings = await getSettings();
-  const hash = fileHash(req.file.path);
+  const hash = fileHash(req.file.buffer);
   // phase 1: validate + create verification record
   const pre = await tx(async (c) => {
     await expireStaleHolds(c);
@@ -360,8 +352,9 @@ r.post('/holds/:token/slip', (req, res, next) => slipUpload.single('slip')(req, 
     if (!ptx) throw conflict('ไม่พบรายการชำระเงิน หรือกำลังตรวจสอบอยู่');
     if (ptx.expires_at && new Date(ptx.expires_at) < new Date()) throw conflict('การชำระเงินหมดอายุ', 'HOLD_EXPIRED');
     const dup = (await c.query(`SELECT 1 FROM payment_verifications WHERE slip_hash = $1 AND result = 'PASSED'`, [hash])).rows[0];
+    const slip = await saveFile(c, { kind: 'SLIP', name: req.file.originalname, mime: req.file.mimetype, buffer: req.file.buffer });
     const pv = (
-      await c.query(`INSERT INTO payment_verifications(payment_transaction_id, reservation_id, provider, amount, slip_path, slip_hash, result) VALUES ($1,$2,$3,$4,$5,$6,'PENDING') RETURNING *`, [ptx.id, rv.id, getSlipProvider().name, ptx.amount, req.file.path, hash])
+      await c.query(`INSERT INTO payment_verifications(payment_transaction_id, reservation_id, provider, amount, slip_path, slip_hash, result) VALUES ($1,$2,$3,$4,$5,$6,'PENDING') RETURNING *`, [ptx.id, rv.id, getSlipProvider().name, ptx.amount, slip.ref, hash])
     ).rows[0];
     if (dup) {
       await c.query(`UPDATE payment_verifications SET result = 'FAILED', failure_reason = $2, verified_at = now() WHERE id = $1`, [pv.id, 'พบรายการนี้ถูกใช้แล้ว']);
@@ -375,7 +368,7 @@ r.post('/holds/:token/slip', (req, res, next) => slipUpload.single('slip')(req, 
   // phase 2: provider call (outside the DB transaction)
   let v;
   try {
-    v = await getSlipProvider().verify({ filePath: req.file.path, expectedAmount: Number(ptx.amount), receiver: settings.payment });
+    v = await getSlipProvider().verify({ buffer: req.file.buffer, expectedAmount: Number(ptx.amount), receiver: settings.payment });
   } catch (e) {
     v = { ok: false, manualReview: true, reason: 'ไม่สามารถเชื่อมต่อระบบตรวจสอบสลิปได้', raw: { error: e.message } };
   }
@@ -397,7 +390,7 @@ r.post('/holds/:token/slip', (req, res, next) => slipUpload.single('slip')(req, 
           await notify({ type: 'SLIP_LATE', level: 'warning', title: 'ชำระเงินหลังหมดเวลาล็อกห้อง', message: `${cur.booking_no} ชำระ ${ptx.amount} บาท หลังห้องถูกปล่อย กรุณาติดต่อลูกค้า`, reservationId: cur.id }, c);
           return { status: 'PAID_AFTER_EXPIRY' };
         }
-        await confirmOnlineDeposit(c, { reservation: cur, paymentTx: ptx, amount: Number(ptx.amount), reference: v.transactionRef, slipPath: req.file.path });
+        await confirmOnlineDeposit(c, { reservation: cur, paymentTx: ptx, amount: Number(ptx.amount), reference: v.transactionRef, slipPath: pv.slip_path });
         await notify({ type: 'ONLINE_BOOKING', level: 'success', title: 'Online Booking ใหม่', message: `${cur.booking_no} ${cur.customer_name} ${fmtDate(cur.start_at)} ${fmtTime(cur.start_at)}`, reservationId: cur.id, roomId: cur.room_id }, c);
         await logActivity(c, actor('ONLINE'), 'ONLINE_DEPOSIT_PAID', 'reservation', cur.id, { amount: ptx.amount, ref: v.transactionRef });
         return { status: 'PAID' };

@@ -8,6 +8,7 @@ import { z, parse } from '../lib/validate.js';
 import { notFound, badRequest, conflict } from '../lib/errors.js';
 import { emitSync } from '../lib/realtime.js';
 import { getSettings } from '../services/settings.js';
+import { sendStored } from '../services/files.js';
 import { expireStaleHolds, lockRoom, assertRoomFree, searchRooms, suggestAlternatives, findConflicts } from '../services/availability.js';
 import { estimateReservation, confirmOnlineDeposit } from '../services/booking.js';
 import { nextBookingNo, nextDepositNo, nextDepositRefundNo, randomToken } from '../services/numbers.js';
@@ -475,8 +476,7 @@ r.get('/payment-verifications', async (req, res) => {
 /** Staff-only view of an uploaded slip (slips are never public). */
 r.get('/payment-verifications/:id/slip', can('slip.verify'), async (req, res) => {
   const pv = await one('SELECT slip_path FROM payment_verifications WHERE id = $1', [req.params.id]);
-  if (!pv?.slip_path) throw notFound();
-  res.sendFile(pv.slip_path);
+  if (!pv?.slip_path || !(await sendStored(res, pv.slip_path))) throw notFound();
 });
 
 r.post('/payment-verifications/:id/review', can('slip.verify'), async (req, res) => {

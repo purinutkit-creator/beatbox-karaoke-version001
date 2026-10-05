@@ -22,6 +22,26 @@ npm start                       # runs migrations + seed, then http://localhost:
 Development (hot reload): `npm run dev` (API on :4000, Vite on :5173 with proxy).
 Docker: `docker compose up --build`.
 
+## Deploy on Render
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/purinutkit-creator/beatbox-karaoke-version001)
+
+`render.yaml` is a Render Blueprint: one Docker web service (`beatbox-pos`) and one PostgreSQL 16 database (`beatbox-db`) in Singapore.
+
+1. Click the button above, or in the Render dashboard choose **New → Blueprint** and pick this repository and branch.
+2. When asked, enter **ADMIN_PIN** (the first admin's 4-digit login code). Leave the other prompted values (slip, SMS, LINE keys) empty until you have them.
+3. Click **Apply**. The first deploy builds the image, runs the migrations and seeds the demo rooms and products. Then open
+   `https://<service>.onrender.com/admin` (POS), `/book` (booking website) and `/display` (Customer Display).
+
+Notes:
+* The app is stateless. Uploaded slips and imported fonts are stored in PostgreSQL, so no Render disk is needed.
+* The Blueprint uses the **free** plans so the first deploy costs nothing. Free web services sleep after 15 minutes without traffic
+  (the first visit takes about a minute to wake, and room-time alerts don't run while asleep), and free databases expire after 30 days.
+  For a real store, change the web service to **Starter** or higher and the database to **Basic** or higher (Render dashboard or `plan:` in `render.yaml`).
+* Before going live, set `PAYMENT_MODE=PRODUCTION` with `SLIP_PROVIDER`/`SLIP_API_KEY` (or `manual`), configure SMS and set `OTP_DEBUG=false`,
+  and add the LINE keys. With a custom domain, also set `PUBLIC_URL`. The LINE callback URL is `PUBLIC_URL/api/public/auth/line/callback`.
+* Demo staff accounts (2222/3333/4444) are not created on Render (`SEED_DEMO_STAFF=false`). Add staff in Admin → พนักงาน.
+
 Default seeded staff codes: **1234** Admin · 2222 Manager · 3333 Cashier · 4444 Staff (`ADMIN_PIN` sets the admin code; `SEED_DEMO=false` seeds only the admin).
 
 Tests: `npm test` runs the calculation-engine unit tests plus end-to-end API tests on a throw-away database (`TEST_DATABASE_URL`).
@@ -67,8 +87,8 @@ web/      React (Vite): admin/POS, Customer Display, booking website, receipts, 
   **any Google Font** can be typed by name.
 * **Sukhumvit Set** is an Apple system font and isn't on Google Fonts. It works on Apple devices out of the box; other devices need the
   admin to **import the font file**. Admins can upload `.woff2/.woff/.ttf/.otf` files or register a font/CSS URL.
-* Images (logo, rooms, products, promotions, QR, background) are always **image URLs**. Payment slips are the only uploads:
-  they are transaction documents, stored privately and visible only to staff with `slip.verify`.
+* Images (logo, rooms, products, promotions, QR, background) are always **image URLs**. Payment slips are the only uploads besides font files:
+  they are transaction documents, stored privately in the database and visible only to staff with `slip.verify`.
 
 ### Printing (80 mm thermal)
 * **Browser/USB via OS driver** (`window.print`, `@page 80mm`), **WebUSB**, **Web Serial**, **Web Bluetooth**, and **Network (IP:9100)**,
