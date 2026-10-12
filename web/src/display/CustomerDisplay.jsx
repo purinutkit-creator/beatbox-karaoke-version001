@@ -6,6 +6,8 @@ import { useCameraScanner } from '../lib/scanner.js';
 import { useT } from '../lib/i18n.jsx';
 import { api, LS } from '../lib/api.js';
 import { useApp } from '../lib/store.jsx';
+import { applyAppearance, applyTheme } from '../lib/fonts.js';
+import { getLang } from '../lib/i18n.jsx';
 import { QRCode, PinPad, money } from '../components/ui.jsx';
 import { formatMinutesShort } from '@beatbox/shared/roomPricing.js';
 import { PAYMENT_METHODS } from '@beatbox/shared/constants.js';
@@ -33,7 +35,10 @@ function Promo({ images, autoplay }) {
 
 export default function CustomerDisplay() {
   const { t, tp, lang, setLang } = useT();
-  const { publicSettings } = useApp();
+  const { publicSettings: appSettings } = useApp();
+  // the paired display belongs to the POS's store: use that store's name, logo, fonts and theme
+  const [storeSettings, setStoreSettings] = useState(null);
+  const publicSettings = storeSettings || appSettings;
   const params = new URLSearchParams(window.location.search);
   const [code, setCode] = useState(params.get('code') || LS.get('bb_cd_code') || '');
   const [input, setInput] = useState('');
@@ -54,6 +59,16 @@ export default function CustomerDisplay() {
         if (!alive) return;
         setImages(d.images);
         if (d.state) setState(d.state);
+        if (d.settings) {
+          setStoreSettings(d.settings);
+          try {
+            if (d.settings.store?.slug) sessionStorage.setItem('bb_store_q', d.settings.store.slug);
+          } catch {
+            /* ignore */
+          }
+          applyAppearance(d.settings.appearance, getLang());
+          applyTheme(d.settings.general);
+        }
       })
       .catch((e) => {
         setError(e.message);

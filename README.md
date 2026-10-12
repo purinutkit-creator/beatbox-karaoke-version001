@@ -5,9 +5,11 @@ A full-stack karaoke management system: back-office + touch POS, a **Customer Di
 
 | URL | Purpose |
 | --- | --- |
-| `/login`, `/admin/*` | Back office + POS (staff 4-digit PIN login) |
+| `/login`, `/admin/*` | Back office + POS (staff 4-digit PIN, or store owner e-mail + password) |
+| `/register` | New store sign-up (e-mail + password, no OTP) |
+| `/platform` | Super Owner console (all stores, plans, trials, renewals, enter a store) |
 | `/display` | Customer Display (pair with the 4–6 digit code shown on the POS) |
-| `/book/*` | Customer online booking website (members: phone OTP / LINE) |
+| `/book/*` | Customer online booking website; `/book/signup?store=<slug>` member sign-up (phone + password, no OTP) |
 
 ## Quick start
 
@@ -123,15 +125,14 @@ Both can be chosen on the booking website, in the staff booking form and when op
 From Check-in, staff can hand over to the Customer Display: the customer scans their booking QR with the display's camera or types their phone
 number on a keypad, and the result appears on both screens.
 
-### Printing (80 mm thermal)
-* **Browser/USB via OS driver** (`window.print`, `@page 80mm`), **WebUSB**, **Web Serial**, **Web Bluetooth**, and **Network (IP:9100)**,
-  where the server sends ESC/POS raw data.
-* Receipts are rendered from HTML (with the chosen Thai font) to a 1-bit raster image and sent as ESC/POS `GS v 0`, with auto-cut and
-  cash-drawer kick. Every print shows a preview first. Reprints are marked **สำเนา / COPY** and need the `receipt.reprint` permission.
-* Templates: full and short receipts, kitchen/bar tickets, deposit receipt, deposit refund, void slip, shift report, report slip, test page.
+### Printing (real text, real paper width — never a bitmap)
+See **Printing setup** below. Documents are built from the store's layout (Admin → ออกแบบเอกสาร/ใบเสร็จ) and printed as real text with
+the store's receipt font through the operating-system printer driver, or as ESC/POS text with the printer's own fonts. Nothing is ever
+converted to an image, canvas, screenshot or raster.
 
 ### Integrations (ready to plug in)
-* LINE Login (OAuth 2.1/OIDC) with **phone-OTP verification before linking** to an existing member. A LINE user ID is never the member ID.
+* LINE Login (OAuth 2.1/OIDC). The first LINE login is linked by **logging in with the member's phone + password** (or signing up) — never
+  merged by name. A LINE user ID is never the member ID.
   Without credentials in development, a LINE simulator page is used.
 * LINE Messaging API notifications (booking confirmed, deposit, reminder, room change, cancel, refund …) respect consent and
   record status PENDING/SENT/FAILED/SKIPPED.
@@ -141,3 +142,132 @@ number on a keypad, and the result appears on both screens.
 ### Offline
 The POS shows **OFFLINE**, queues allowed operations (adding items to rooms) in local storage with idempotency keys, and syncs them when
 back online. Risky operations (payments, online booking locks, slip checks, availability) are never faked offline.
+
+---
+
+## Multi-store, plans and Super Owner (update 2026-10)
+
+Everything that existed keeps working; the original store and all of its data became **store #1** (`slug = beatbox`).
+
+### Database update steps
+Nothing to run by hand: on start the server applies the new migrations in order, inside transactions, and never deletes data.
+
+| Migration | What it does |
+| --- | --- |
+| `004_multistore.sql` | `store_id` on every business table (existing rows → store #1), per-store unique numbers, **PostgreSQL row-level security** (FORCE) so every query only sees the current store |
+| `005_platform.sql` | Super Owner accounts, 4 plans (features + limits), store subscriptions + history, renewal requests. Existing stores get the top plan, active, no expiry |
+| `006_payments_members_printing.sql` | Prepay room status (`PENDING_PAYMENT`), prepaid room charge on the bill, member password fields, printer paper/print-area settings, print-job queue fields, and **database triggers that refuse any reference to another store's row** |
+
+Back up first (Render: Database → Backups, or `pg_dump`). The server connects with a non-superuser role so RLS always applies
+(locally it switches to the restricted role `beatbox_app` automatically).
+
+### Store isolation
+* Every request runs inside one store: staff/member tokens carry their store; public pages use `?store=<slug>` (or the `X-Store` header).
+* PostgreSQL row-level security (FORCE) + a per-row trigger on every foreign key → changing an id in a URL or body cannot read or attach
+  another store's data (tested). API responses never include password/PIN hashes.
+
+### Super Owner
+* Created on start from `SUPER_OWNER_USERNAME` / `SUPER_OWNER_PASSWORD` (server environment only, bcrypt-hashed, never sent to the browser
+  or returned by the API). The login name is free text (no e-mail format, no OTP). Change the password in `/platform` → บัญชีของฉัน
+  (other sessions are signed out). Changing the environment variable later does **not** overwrite an existing account.
+* `/platform`: all stores (search, status, plan, expiry, time left, counts), add / edit stores, trial (days **or** end date-time),
+  add trial days, renew (billing periods or end date), change plan, set expiry, suspend (reason required) / activate, full history with
+  actor and time, renewal requests, sign-up settings and contact details, **plan editor**.
+* **เข้าจัดการร้าน** opens the store as a hidden admin linked to the Super Owner account; an orange banner shows the store, every action is
+  logged under the Super Owner's own name, and **กลับสู่หน้าจัดการส่วนกลาง** returns to the console.
+
+### Plans (packages) — how to configure
+`/platform` → แพ็กเกจและสิทธิ์ → pick one of the 4 plans and edit: name, description, price, billing cycle (day / month / year × N),
+trial days, open for sign-up, **feature switches** (POS, rooms, booking, members, promotions, stock, reports, customer display,
+receipt settings, printing, staff & roles, multi-branch) and optional limits (branches, rooms, staff, POS devices; empty = unlimited).
+Saving applies immediately to every store on that plan (open screens refresh). Effective right = **plan feature AND the staff member's
+permission**, enforced by the API (403 `FEATURE_NOT_IN_PLAN` / `PLAN_LIMIT`), not only by hiding menus.
+
+### Trial, expiry, renewal
+* The server clock decides. When a plan expires or a store is suspended, every business API returns **402** and every open screen
+  switches to the expired page (ดูแพ็กเกจ / ต่ออายุ / ติดต่อผู้ดูแล). Data is kept; renewing restores everything immediately.
+* Payments already sent before expiry still complete exactly once (idempotent replays, verified slips issued before expiry, terminal
+  payments started before expiry, in-room QR payments).
+* Top-right widget: store, plan, trial/paid, expiry date-time and remaining **years / months / days / hours / minutes** counted on the
+  real calendar in the store time zone (whole years, then whole months with their real length — 31 Jan + 1 month = 28/29 Feb — then
+  days/hours/minutes). Orange ≤ 7 days, red ≤ 1 day, clickable for details and a renewal request.
+
+### Store owners
+`/register`: store name, owner first/last name, e-mail, phone, password + confirm, plan → creates the owner account and the store's own
+data space and logs in (trial of the chosen plan). Owners log in at `/login` → เจ้าของร้าน (อีเมล); 5 wrong passwords → 15 minutes lock.
+
+## Rooms: pay before entering (default) or pay when closing
+Admin → ตั้งค่าร้าน → ห้อง เวลา & แจ้งเตือน → รูปแบบการชำระค่าห้อง.
+* **จ่ายก่อนเข้าห้อง (default):** open room → status **รอชำระค่าห้อง** (room held, clock not running) → collect the full room charge
+  (cash with change, QR/transfer with slip check, card/other with reference) → the clock starts at the confirmed time and both tickets
+  print. The prepaid amount is recorded on the same bill and deducted at checkout, never charged twice. "ยกเลิก" releases the room.
+* **เข้าห้องก่อน:** the room starts at once and everything goes on the room bill.
+* **ปิดห้อง** always asks the server what is still owed. If anything is due a breakdown appears (room, extensions, items with qty and
+  price, discounts/VAT/service, total, paid, remaining) with **ไปชำระเงิน / กลับไปหน้าห้อง**; the bill and the room stay open.
+  If nothing is due the room closes and the **full receipt prints automatically** (prepaid + paid at close per method, cash and change,
+  "ชำระครบแล้ว · ยอดค้างชำระ 0.00 บาท", member info or the sign-up QR). Double clicks / retries never create a second payment,
+  receipt or print job; a printer error never touches the payment and offers **พิมพ์ใหม่**.
+
+## Printing setup
+1. Admin → เครื่องพิมพ์ → add the printer:
+   * **ไดรเวอร์ระบบ (recommended):** install the printer's Windows/macOS driver, choose the connection "ไดรเวอร์ระบบ", paper 80 / 58 mm
+     or custom, printable width (blank = 72 / 48 mm), margins and a font scale (raise to 1.1–1.3 if text looks small).
+     In the driver: roll paper 80 (or 58) mm with continuous length, **cut every page**, no "fit to page" scaling.
+     For printing without a dialog start Chrome/Edge with `--kiosk-printing` and make the receipt printer the default printer.
+   * **ESC/POS ข้อความ:** USB / Serial / Bluetooth / Network (IP:9100) — prints with the printer's built-in fonts only; you must tick
+     "ยอมรับการใช้ฟอนต์ของเครื่องพิมพ์" and set the Thai code page from the printer manual. The store font cannot be used on this route
+     and the system does not pretend otherwise (no conversion to an image either). Logos are skipped; QR codes use the printer's own
+     QR command (`GS ( k`).
+2. Press **ทดสอบพิมพ์** — the test page shows Thai/English text, the left/right edges and the print area.
+3. **เอกสาร → เครื่องพิมพ์:** every document type → printer, copies, cut, auto print. By default **one printer prints everything**.
+   All documents go through one queue (in order, never interleaved). **คิวและสถานะงานพิมพ์** shows status and errors, **พิมพ์ใหม่** for
+   failed jobs and **พิมพ์สำเนา** for reprints (marked "สำเนา"); reprints never create a bill, payment or room opening.
+4. **ออกแบบเอกสาร/ใบเสร็จ:** per document (customer / staff room ticket, time-adjustment slip, receipt, food & drink list, kitchen ticket,
+   member sign-up slip, deposit, void, shift report …) set each element's font, size (pt), bold, alignment, spacing, show/hide and order,
+   with a live preview on the real paper width.
+
+How it prints: each document becomes one page exactly as wide as the paper and exactly as long as its content (CSS `@page` per document),
+in the store's font (Kanit is bundled with the app, so it never depends on a font CDN). If a chosen font cannot be loaded the job stops
+with a message — the font is never swapped silently. Verified: the generated print/PDF contains selectable text with the font embedded
+and **no images** (receipt 80 × 213 mm, room tickets 80 × 121 mm + 80 × 80 mm in the test run).
+
+**Printers that print the store's font (OS driver):** Epson TM-T82III / TM-T82X / TM-T88VI / TM-T88VII / TM-m30II / TM-m30III,
+Star TSP143IIIU / TSP143IV / mC-Print3 / TSP654II, Bixolon SRP-330II / SRP-350III / SRP-E300, Xprinter XP-Q80 / XP-N160II / XP-58IIH
+(POS-80/58 driver). Android POS terminals (Sunmi, iMin) only when Chrome and an Android print service for the printer are installed —
+test first. Any ESC/POS printer can be used in ESC/POS text mode, but with its own fonts (Thai requires a Thai code page in the printer).
+
+## Room tickets and receipts
+* Header = **room name, type and number** (not the queue number); both tickets show date, start, end, duration, reference no and the staff
+  who opened the room. Across midnight both dates are printed (เริ่ม 12/10/2026 เวลา 23:00 · สิ้นสุด 13/10/2026 เวลา 01:00).
+* Times come from the real session; extending moves the end time and a **time-adjustment slip** can be printed from the history.
+* Receipts of bills **without a member** end with a sign-up QR (`/book/signup?store=<slug>`, no personal data in the link) and the note
+  "สำหรับการสมัครสมาชิกครั้งแรก รหัสผ่านเริ่มต้นคือเลข 4 ตัวท้ายของเบอร์โทรศัพท์ …". Bills with a member show the member instead.
+
+## Members: phone + password (no OTP)
+* Sign-up: phone, first name, last name + extra fields defined by the store (Admin → ตั้งค่าร้าน → สมัครสมาชิก). The same phone in the
+  same store goes to login instead.
+* First password = **last 4 digits of the phone** (kept as text, so 0099 stays 0099). After sign-up: "สมัครสมาชิกสำเร็จ รหัสผ่านเริ่มต้นของคุณ
+  คือเลข 4 ตัวท้ายของเบอร์โทรศัพท์ กรุณาเปลี่ยนรหัสผ่านเมื่อเข้าสู่ระบบครั้งแรก". The first login must set a new password before any member
+  data; members can change it later. 5 wrong passwords → 15 minutes lock. Passwords are bcrypt hashes; the default is never stored.
+* Staff (Admin → สมาชิก → member) see the login phone, whether the password is still the default or was changed, last change / reset
+  (who and when) — never the password — and can **รีเซ็ตรหัสผ่าน** (permission `member.edit`): back to the default, forced change at next login,
+  logged in the activity log.
+
+## Booking calendar
+* **สลับแนวตาราง:** time horizontal / rooms vertical, or time vertical / rooms horizontal (display only; each device remembers its choice;
+  the store default is in Admin → ตั้งค่าร้าน → ตารางการจอง). Sticky headers both ways, room name + number + type, click a free slot to book,
+  click a booking to open it, drag to move it (the server re-checks overlaps), works on desktop, tablet and phone.
+* **Current-time line** (vertical when time runs horizontally, horizontal when vertical) with the label "เวลาปัจจุบัน HH:mm" and a soft glow;
+  colour, on/off and speed in the same settings page. It follows the server clock in the store time zone (default Asia/Bangkok), is shown
+  only on today's business day (a night past midnight still counts) and **ไปยังเวลาปัจจุบัน** scrolls to it.
+
+## Test results (this update)
+* `npm test`: calculation engine (shared) + API end-to-end suites — store registration without OTP, duplicate e-mail, store isolation
+  (ids/URLs/headers, plus the cross-store reference guard), Super Owner + plan features/limits, expiry → 402 with in-flight payment and
+  renewal, suspend/activate, enter-store audit, owner lockout, prepay (amount check, double click, idempotent replay, shift totals),
+  close-room outstanding check, postpay, cancel before paying, ticket data, print job idempotency/reprint, printer route checks, member
+  sign-up/login/forced change/lockout/staff reset, receipt sign-up QR only without a member.
+* Browser (Chromium): store sign-up → widget → expired screen → renewal → Super Owner enter/return; prepay → tickets → extension →
+  outstanding modal → payment → automatic receipt; print output rendered to PDF and inspected (page sizes, embedded Kanit, text, 0 images);
+  calendar both orientations + now line + sticky headers + mobile; member sign-up via QR link, default-password login, forced change,
+  staff reset.

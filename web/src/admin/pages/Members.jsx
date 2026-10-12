@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Users, Plus, Pencil, Crown, Coins, Gift, Search, KeyRound, RotateCcw } from 'lucide-react';
+import { Users, Plus, Pencil, Crown, Coins, Gift, Search, KeyRound, RotateCcw, Printer } from 'lucide-react';
 import { PageHead, Button, Input, Modal, Field, Select, Switch, Textarea, Badge, Tabs, Loading, Empty, Drawer, Img, ImageUrlInput, money, useToast, useDialog, QRCode } from '../../components/ui.jsx';
 import { StatusBadge } from '../../components/ReservationParts.jsx';
 import { useT } from '../../lib/i18n.jsx';
 import { api, uid } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
+import { usePrint } from '../../components/PrintPreview.jsx';
 import { useLive } from '../../lib/socket.js';
 import { fmtDate, fmtDateTime } from '@beatbox/shared/format.js';
 
@@ -175,7 +176,9 @@ function MemberDrawer({ id, tiers, onClose, onEdit }) {
 
 export default function Members() {
   const { t } = useT();
-  const { can } = useAuth();
+  const { can, settings } = useAuth();
+  const { preview } = usePrint();
+  const printSignup = () => preview({ docType: 'MEMBER_SIGNUP', data: { store: settings.store, path: `/book/signup?store=${encodeURIComponent(settings.store.slug || '')}`, note: settings.memberSignup?.passwordNote || '' } }, { title: 'ใบสมัครสมาชิก (QR)', clientJobId: `signup-slip-${Date.now()}` });
   const [q, setQ] = useState('');
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(null);
@@ -189,6 +192,7 @@ export default function Members() {
           <Input placeholder={t('เบอร์โทร / ชื่อ / รหัสสมาชิก')} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && setQuery(q)} />
           <Button icon={Search} onClick={() => setQuery(q)} />
         </div>
+        <Button icon={Printer} onClick={printSignup}>{t('พิมพ์ใบสมัครสมาชิก (QR)')}</Button>
         {can('member.edit') && <Button variant="primary" icon={Plus} onClick={() => setEdit({})}>{t('เพิ่มสมาชิก')}</Button>}
       </PageHead>
       {loading ? <Loading /> : !data?.length ? <Empty /> : (

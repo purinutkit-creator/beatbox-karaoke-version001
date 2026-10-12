@@ -23,6 +23,12 @@ services:
       # First admin 4-digit login code — Render asks for it when the Blueprint is created
       - key: ADMIN_PIN
         sync: false
+      # Super Owner (central console /platform). Created once on start, password stored as a bcrypt hash only.
+      # Never put the values in this file — Render asks for them; change the password later in the console.
+      - key: SUPER_OWNER_USERNAME
+        sync: false
+      - key: SUPER_OWNER_PASSWORD
+        sync: false
       # Demo rooms/products/promotions on first start; demo staff (well-known PINs) are not created
       - key: SEED_DEMO
         value: "true"
