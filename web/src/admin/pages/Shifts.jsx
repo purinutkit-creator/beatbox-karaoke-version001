@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Clock, LockOpen, Lock, Printer, Eye } from 'lucide-react';
 import { PageHead, Button, Field, Input, Textarea, Badge, Loading, Empty, Modal, NumPad, money, useToast, useDialog } from '../../components/ui.jsx';
-import { ShiftReport } from '../../components/Receipt.jsx';
 import { usePrint } from '../../components/PrintPreview.jsx';
 import { useT } from '../../lib/i18n.jsx';
 import { api } from '../../lib/api.js';
@@ -69,7 +68,7 @@ export default function Shifts() {
         r = await api.post(`/shifts/${shift.id}/close`, { countedCash: Number(counted) || 0, note, force: true });
       }
       toast.success('ปิดรอบการขายเรียบร้อย');
-      preview(<ShiftReport store={settings.store} shift={{ ...r.shift, employee_name: shift.employee_name, closed_by_name: employee.name }} summary={r.summary} />, { jobType: 'SHIFT_REPORT', reference: r.shift.shift_no, title: 'พิมพ์รายงานปิดรอบ' });
+      preview({ docType: 'SHIFT_REPORT', data: { store: settings.store, timezone: settings.store.timezone, shift: { ...r.shift, employee_name: shift.employee_name, closed_by_name: employee.name }, summary: r.summary } }, { reference: r.shift.shift_no, title: 'พิมพ์รายงานปิดรอบ' });
       setCounted('');
       await loadShift();
       reload();
@@ -136,7 +135,7 @@ export default function Shifts() {
                   <td className="right num" style={{ color: Number(s.difference) < 0 ? 'var(--danger)' : 'var(--ok)' }}>{s.difference != null ? money(s.difference) : '-'}</td>
                   <td className="nowrap">
                     <Button size="sm" variant="ghost" icon={Eye} onClick={async () => setView(await api.get(`/shifts/${s.id}/summary`))} />
-                    <Button size="sm" variant="ghost" icon={Printer} onClick={async () => { const r = await api.get(`/shifts/${s.id}/summary`); preview(<ShiftReport store={settings.store} shift={r.shift} summary={r.summary} />, { jobType: 'SHIFT_REPORT', reference: s.shift_no }); }} />
+                    <Button size="sm" variant="ghost" icon={Printer} onClick={async () => { const r = await api.get(`/shifts/${s.id}/summary`); preview({ docType: 'SHIFT_REPORT', data: { store: settings.store, timezone: settings.store.timezone, shift: r.shift, summary: r.summary } }, { reference: s.shift_no }); }} />
                   </td>
                 </tr>
               ))}

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Receipt, Printer, Undo2, Ban, Send, History, Search } from 'lucide-react';
 import { PageHead, Button, Input, Select, Badge, Loading, Empty, Modal, Field, Seg, Tabs, money, useToast, useDialog } from '../../components/ui.jsx';
-import { SaleReceipt, VoidSlip } from '../../components/Receipt.jsx';
+import { SaleReceipt } from '../../components/Receipt.jsx';
 import { usePrint } from '../../components/PrintPreview.jsx';
 import { useT } from '../../lib/i18n.jsx';
 import { api, uid } from '../../lib/api.js';
@@ -24,9 +24,9 @@ function ReceiptView({ id, onClose, onChanged }) {
   const print = async (kind) => {
     const isCopy = rc.print_count > 0;
     if (isCopy && !(await confirm({ title: 'พิมพ์ซ้ำ', message: 'ใบเสร็จนี้พิมพ์ไปแล้ว ต้องการพิมพ์สำเนา (COPY) หรือไม่?' }))) return;
-    preview(<SaleReceipt snap={rc.snapshot} isCopy={isCopy} short={kind === 'SHORT'} />, {
+    preview({ docType: 'RECEIPT', data: rc.snapshot, isCopy }, {
       reference: rc.receipt_no,
-      isCopy,
+      clientJobId: `receipt:${rc.receipt_no}:${isCopy ? `copy-${Date.now()}` : 'print'}`,
       onPrinted: async () => {
         try {
           await api.post(`/receipts/${rc.id}/print`, { kind, confirmReprint: true });
@@ -54,7 +54,7 @@ function ReceiptView({ id, onClose, onChanged }) {
       const r = await withApproval((tok) => api.post(`/orders/${rc.order_id}/void`, { reason, approvalToken: tok }));
       if (!r) return;
       toast.success('ยกเลิกรายการเรียบร้อย');
-      preview(<VoidSlip store={settings.store} receipt={rc} reason={reason} employee={employee.name} />, { jobType: 'VOID', reference: rc.receipt_no, title: 'พิมพ์ใบยกเลิก' });
+      preview({ docType: 'VOID', data: { store: settings.store, timezone: settings.store.timezone, receipt: rc, reason, employee: employee.name } }, { reference: rc.receipt_no, title: 'พิมพ์ใบยกเลิก' });
       reload();
       onChanged();
     } catch (e) {
@@ -91,7 +91,7 @@ function ReceiptView({ id, onClose, onChanged }) {
         {can('order.void') && rc.order_status === 'PAID' && <Button icon={Ban} variant="danger" onClick={voidOrder}>{t('ยกเลิกรายการ')}</Button>}
       </div>
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'receipt', label: 'ใบเสร็จ' }, { value: 'log', label: 'Activity Log' }]} />
-      {tab === 'receipt' ? <div className="receipt-preview"><SaleReceipt snap={s} /></div> : (
+      {tab === 'receipt' ? <div className="doc-preview"><div className="doc-sheet"><SaleReceipt snap={s} /></div></div> : (
         <div className="col">{rc.logs.map((l) => <div key={l.id} className="card flat small" style={{ padding: 10 }}><div className="row between"><b>{l.action}</b><span className="muted">{fmtDateTime(l.created_at)}</span></div><div className="muted">{l.employee_name} · {JSON.stringify(l.details).slice(0, 240)}</div></div>)}</div>
       )}
       {refund && (

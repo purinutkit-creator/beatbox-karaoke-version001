@@ -3,7 +3,7 @@ import { Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'reac
 import {
   LayoutDashboard, ShoppingCart, DoorOpen, CalendarDays, ClipboardList, Users, Package, Tags, Boxes, LayoutGrid, Timer, BadgePercent, Wallet,
   Receipt, Clock, BarChart3, UserCog, MonitorSmartphone, Printer, Settings, History, Bell, Sun, Moon, LogOut, Menu, Wifi, WifiOff, Globe, ScanLine,
-  Gift, AlertTriangle, VolumeX, Plus, CreditCard, X, Mic2, Lock, KeyRound, Mail, Store, Shield,
+  Gift, AlertTriangle, VolumeX, Plus, CreditCard, X, Mic2, Lock, KeyRound, Mail, Store, Shield, FileText,
 } from 'lucide-react';
 import { useAuth, useApp } from '../lib/store.jsx';
 import { useT } from '../lib/i18n.jsx';
@@ -12,7 +12,6 @@ import { useServerNow, useSocketEvent, useSync, getSocket } from '../lib/socket.
 import { Button, Modal, Loading, PinPad, useToast, Badge, Field, Input, Seg } from '../components/ui.jsx';
 import { LicenseWidget, ExpiredScreen, SuperOwnerBanner } from '../components/License.jsx';
 import { PrintProvider, usePrint } from '../components/PrintPreview.jsx';
-import { KitchenTicket } from '../components/Receipt.jsx';
 import { PrepayReview } from '../components/RoomService.jsx';
 import { fmtTime, fmtDateTime } from '@beatbox/shared/format.js';
 
@@ -43,6 +42,7 @@ const pages = {
   employees: lazy(() => import('./pages/Employees.jsx')),
   display: lazy(() => import('./pages/DisplaySettings.jsx')),
   printers: lazy(() => import('./pages/Printers.jsx')),
+  documents: lazy(() => import('./pages/Documents.jsx')),
   settings: lazy(() => import('./pages/Settings.jsx')),
   activity: lazy(() => import('./pages/ActivityLog.jsx')),
   notifications: lazy(() => import('./pages/Notifications.jsx')),
@@ -78,6 +78,7 @@ export const MENU = [
   { to: 'employees', label: 'พนักงาน', icon: UserCog, perm: 'employee.manage', feature: 'staff' },
   { to: 'display', label: 'Customer Display', icon: MonitorSmartphone, feature: 'display' },
   { to: 'printers', label: 'เครื่องพิมพ์', icon: Printer, feature: 'printing' },
+  { to: 'documents', label: 'ออกแบบเอกสาร/ใบเสร็จ', icon: FileText, perm: 'settings.manage', feature: 'receipt_settings' },
   { to: 'settings', label: 'ตั้งค่าร้าน', icon: Settings, perm: 'settings.manage' },
   { to: 'activity', label: 'Activity Log', icon: History, perm: 'activity.view' },
   { to: 'notifications', label: 'การแจ้งเตือน', icon: Bell, badge: 'notifications' },
@@ -388,7 +389,7 @@ function RoomServiceAlerts() {
 
 /** Prints kitchen tickets of in-room QR orders. Every POS can print; a server-side claim makes sure each job prints once. */
 function QueuedPrintWorker() {
-  const { printNow } = usePrint();
+  const { print } = usePrint();
   const busy = useRef(false);
   const enabled = () => localStorage.getItem('bb_print_qr_orders') !== 'false';
   const run = useCallback(async () => {
@@ -399,15 +400,15 @@ function QueuedPrintWorker() {
       for (const j of jobs.reverse()) {
         const c = await api.post(`/print-jobs/${j.id}/claim`, { device: localStorage.getItem('bb_device_key') || '' });
         if (!c.claimed) continue;
-        const r = await printNow(<KitchenTicket ticket={j.payload} />, { jobType: 'KITCHEN', station: j.payload.station, reference: j.reference });
-        await api.patch(`/print-jobs/${j.id}`, { status: r.ok ? 'PRINTED' : 'FAILED', error: r.ok ? null : r.error }).catch(() => {});
+        // printed through the single queue; the job record (status / errors / reprint) is the server's claimed job
+        await print({ docType: 'KITCHEN', data: j.payload }, { reference: j.reference, jobId: j.id, force: true });
       }
     } catch {
       /* retry on next tick */
     } finally {
       busy.current = false;
     }
-  }, [printNow]);
+  }, [print]);
   useSocketEvent('print:queued', run);
   useEffect(() => {
     run();
@@ -582,6 +583,7 @@ function Layout() {
               <Route path="employees" element={gate('employees', can('employee.manage') ? <pages.employees /> : <Forbidden />)} />
               <Route path="display" element={gate('display', <pages.display />)} />
               <Route path="printers" element={gate('printers', <pages.printers />)} />
+              <Route path="documents" element={gate('documents', can('settings.manage') ? <pages.documents /> : <Forbidden />)} />
               <Route path="settings" element={gate('settings', can('settings.manage') ? <pages.settings /> : <Forbidden />)} />
               <Route path="activity" element={gate('activity', can('activity.view') ? <pages.activity /> : <Forbidden />)} />
               <Route path="notifications" element={gate('notifications', <pages.notifications />)} />

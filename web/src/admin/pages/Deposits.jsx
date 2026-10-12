@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Wallet, Undo2, Printer } from 'lucide-react';
 import { PageHead, Button, Input, Select, Badge, Loading, Empty, Modal, Field, money, useToast, useDialog } from '../../components/ui.jsx';
-import { DepositSlip } from '../../components/Receipt.jsx';
 import { usePrint } from '../../components/PrintPreview.jsx';
 import { ReservationDrawer } from '../../components/ReservationParts.jsx';
 import { useT } from '../../lib/i18n.jsx';
@@ -36,7 +35,7 @@ export default function Deposits() {
         r = await send(tok);
       }
       toast.success('คืนเงินมัดจำเรียบร้อย');
-      preview(<DepositSlip store={settings.store} deposit={refund.deposit} refund={{ ...r, employee_name: '' }} />, { jobType: 'DEPOSIT_REFUND', reference: r.refund_no, title: 'พิมพ์ใบคืนมัดจำ' });
+      preview({ docType: 'DEPOSIT', data: { store: settings.store, timezone: settings.store.timezone, deposit: refund.deposit, refund: { ...r, employee_name: '' } } }, { reference: r.refund_no, title: 'พิมพ์ใบคืนมัดจำ' });
       setRefund(null);
       reload();
     } catch (e) {
@@ -66,7 +65,7 @@ export default function Deposits() {
                   <td>{d.received_by_name || 'ONLINE'}</td>
                   <td className="small nowrap">{fmtDateTime(d.received_at)}</td>
                   <td className="nowrap">
-                    <Button size="sm" variant="ghost" icon={Printer} onClick={() => preview(<DepositSlip store={settings.store} deposit={d} />, { jobType: 'DEPOSIT', reference: d.deposit_no })} />
+                    <Button size="sm" variant="ghost" icon={Printer} onClick={() => preview({ docType: 'DEPOSIT', data: { store: settings.store, timezone: settings.store.timezone, deposit: d } }, { reference: d.deposit_no })} />
                     {can('refund.create') && ['RECEIVED', 'PARTIALLY_REFUNDED', 'FORFEITED'].includes(d.status) && <Button size="sm" icon={Undo2} onClick={() => setRefund({ deposit: d, amount: Number(d.amount) - Number(d.refunded_amount), reason: '', refundType: 'CASH', key: uid() })}>{t('คืนเงิน')}</Button>}
                   </td>
                 </tr>

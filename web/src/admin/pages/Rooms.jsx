@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   DoorOpen, Users, Clock, Plus, Pause, Play, ArrowRightLeft, ShoppingCart, CreditCard, XCircle, Sparkles, Wrench, Ban, CheckCircle2, Timer,
@@ -8,16 +8,17 @@ import { Button, Drawer, Modal, Field, Input, Select, Seg, Badge, Loading, Empty
 import { MemberPicker } from '../../components/MemberPicker.jsx';
 import { ProductCatalog } from '../../components/ProductCatalog.jsx';
 import Checkout, { QrPayPanel } from '../../components/Checkout.jsx';
-import { KitchenTicket } from '../../components/Receipt.jsx';
 import { PrepayReview, IssueItem } from '../../components/RoomService.jsx';
-import { usePrintRoomTickets } from '../../lib/roomTickets.jsx';
+import { usePrintRoomTickets, usePrintTimeAdjust } from '../../lib/roomTickets.jsx';
 import { usePrint } from '../../components/PrintPreview.jsx';
 import { useT } from '../../lib/i18n.jsx';
 import { api, uid } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive, useServerNow, serverNow } from '../../lib/socket.js';
 import { pushDisplay, orderToDisplay } from '../../lib/display.js';
-import { ROOM_STATUS_LABEL, ROOM_STATUS_COLOR, RESERVATION_STATUS_LABEL } from '@beatbox/shared/constants.js';
+import { ROOM_STATUS_LABEL, ROOM_STATUS_COLOR, RESERVATION_STATUS_LABEL, PAYMENT_METHODS } from '@beatbox/shared/constants.js';
+import { cashQuickAmounts } from '@beatbox/shared/calc.js';
+import { round2 } from '@beatbox/shared/money.js';
 import { sessionTiming, computeSessionCharges, formatMinutesShort, priceForMinutes } from '@beatbox/shared/roomPricing.js';
 import { fmtTime, fmtCountdown, fmtDateTime, bkkDateStr } from '@beatbox/shared/format.js';
 
@@ -32,7 +33,9 @@ function RoomCard({ room, now, settings, onClick, onFlag }) {
   const color = ROOM_STATUS_COLOR[status];
   const total = timing ? timing.endMs - timing.startMs - Number(s.total_paused_seconds || 0) * 1000 : 1;
   const pct = timing ? Math.min(100, Math.max(0, (timing.usedMs / Math.max(1, total)) * 100)) : 0;
-  const label = s?.status === 'CLOSED' ? 'รอชำระเงิน' : s?.status === 'PAUSED' ? 'หยุดเวลา' : ROOM_STATUS_LABEL[status];
+  const pending = s?.status === 'PENDING_PAYMENT';
+  if (pending) status = 'PENDING_PAYMENT';
+  const label = pending ? 'รอชำระค่าห้อง' : s?.status === 'CLOSED' ? 'รอชำระเงิน' : s?.status === 'PAUSED' ? 'หยุดเวลา' : ROOM_STATUS_LABEL[status];
   const openIssues = (room.issues || []).filter((i) => i.status === 'OPEN');
   const issues = room.issues || [];
   return (
@@ -61,10 +64,16 @@ function RoomCard({ room, now, settings, onClick, onFlag }) {
               <span className="ellipsis bold">{s.customer_name || t('ลูกค้า Walk-in')}</span>
               <span className="small muted nowrap"><Users size={12} /> {s.guest_count}</span>
             </div>
-            <div className="timer">{s.status === 'CLOSED' ? '--:--' : fmtCountdown(timing.remainingMs)}</div>
-            <div className="progress"><div style={{ width: `${pct}%` }} /></div>
-            <div className="line"><span>{t('เริ่ม')}</span><span>{fmtTime(s.started_at)}</span></div>
-            <div className="line"><span>{t('สิ้นสุด')}</span><span>{fmtTime(timing.endMs)}</span></div>
+            <div className="timer">{s.status === 'CLOSED' || pending ? '--:--' : fmtCountdown(timing.remainingMs)}</div>
+            {pending ? (
+              <div className="line" style={{ color: ROOM_STATUS_COLOR.PENDING_PAYMENT }}><b>{t('รอชำระค่าห้องก่อนเริ่มเวลา')}</b><b>{formatMinutesShort(Number(s.package_minutes) + Number(s.booked_minutes))}</b></div>
+            ) : (
+              <>
+                <div className="progress"><div style={{ width: `${pct}%` }} /></div>
+                <div className="line"><span>{t('เริ่ม')}</span><span>{fmtTime(s.started_at)}</span></div>
+                <div className="line"><span>{t('สิ้นสุด')}</span><span>{fmtTime(timing.endMs)}</span></div>
+              </>
+            )}
             <div className="line"><span>{t('ยอดปัจจุบัน')}</span><b>฿{money((ch?.roomTotal || 0) + (room.live?.productTotal || 0))}</b></div>
             <div className="line"><span>{t('พนักงาน')}</span><span className="ellipsis">{s.opened_by_name}</span></div>
           </>
@@ -141,8 +150,12 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
   const toast = useToast();
   const { confirm, prompt } = useDialog();
   const { can, settings } = useAuth();
-  const { printNow } = usePrint();
+  const { print, preview } = usePrint();
+  const printAdjust = usePrintTimeAdjust();
   const s = room.session;
+  const [outstanding, setOutstanding] = useState(null);
+  const [closing, setClosing] = useState(false);
+  const closeKey = useRef(uid());
   const now = useServerNow(1000);
   const [modal, setModal] = useState(openCheckout && s?.order_id ? 'checkout' : null);
   const [checkoutOrderId, setCheckoutOrderId] = useState(openCheckout ? s?.order_id : null);
@@ -184,15 +197,61 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
   const productTotal = detail?.order?.calc?.lines?.filter((l) => l.type === 'PRODUCT').reduce((a, l) => a + l.net, 0) || 0;
   const deposit = detail?.order?.deposits?.reduce((a, d) => a + Number(d.amount) - Number(d.refunded_amount), 0) || 0;
   const total = (charges?.roomTotal || 0) + productTotal;
-  const extend = (m) => act(() => api.post(`/sessions/${s.id}/extend`, { minutes: m }), `${t('เพิ่มเวลา')} ${formatMinutesShort(m)}`);
+  const extend = (m) =>
+    act(async () => {
+      await api.post(`/sessions/${s.id}/extend`, { minutes: m });
+      printAdjust(s.id, { auto: true }); // time-adjustment slip (prints when "auto" is on for that document)
+    }, `${t('เพิ่มเวลา')} ${formatMinutesShort(m)}`);
   const customExtend = async () => {
     const v = await prompt({ title: 'กำหนดเวลาเพิ่มเติมเอง', message: 'จำนวนนาที', type: 'number' });
     if (v) extend(Number(v));
   };
+  /** "ปิดห้อง": the server checks what is still owed. Due → breakdown modal; nothing due → close + automatic full receipt. */
   const closeRoom = async () => {
-    if (!(await confirm({ title: 'ปิดห้อง', message: `${t('ยืนยันปิดห้อง')} ${room.name}? ${t('ระบบจะหยุดเวลาและคำนวณค่าห้อง')}` }))) return;
-    await act(() => api.post(`/sessions/${s.id}/close`));
-    openCheckoutFor();
+    if (closing) return;
+    setClosing(true);
+    try {
+      const o = await api.get(`/sessions/${s.id}/outstanding`);
+      if (o.pendingPrepayments?.length) {
+        toast.warning('มีการชำระเงินจากในห้องที่ยังไม่ได้ตรวจสลิป กรุณาตรวจสอบก่อนปิดห้อง');
+        setTab('prepay');
+        return;
+      }
+      if (o.outstanding > 0) return setOutstanding(o);
+      if (!(await confirm({ title: 'ปิดห้อง', message: `${t('ยืนยันปิดห้อง')} ${room.name}?\n${t('ชำระครบแล้ว ไม่มียอดค้างชำระ ระบบจะออกใบเสร็จและพิมพ์อัตโนมัติ')}` }))) return;
+      const r = await api.post(`/sessions/${s.id}/checkout`, {}, { idempotencyKey: closeKey.current });
+      const rc = r.receipt;
+      toast.success(`${t('ปิดห้องเรียบร้อย')} ${rc?.receipt_no || ''}`);
+      if (rc) autoPrintReceipt(rc);
+      reload();
+      onClose();
+    } catch (e) {
+      if (e.code === 'OUTSTANDING_BALANCE') setOutstanding(e.data);
+      else toast.error(e);
+    } finally {
+      setClosing(false);
+    }
+  };
+  const autoPrintReceipt = (rc) => {
+    if (settings?.documents?.autoPrintReceipt === false) return;
+    print({ docType: 'RECEIPT', data: rc.snapshot }, { reference: rc.receipt_no, clientJobId: `receipt:${rc.receipt_no}` }).then((res) => {
+      if (res.ok && !res.skipped && !res.duplicate) api.post(`/receipts/${rc.id}/print`, {}).catch(() => {});
+    });
+  };
+  /** From the outstanding modal: stop the clock (the bill can't change while paying) and collect only what is left. */
+  const goPay = async () => {
+    setOutstanding(null);
+    try {
+      if (['ACTIVE', 'PAUSED'].includes(s.status)) await api.post(`/sessions/${s.id}/close`);
+      reload();
+      openCheckoutFor();
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+  const printOrderList = () => {
+    const lines = (detail?.order?.items || []).filter((l) => l.type === 'PRODUCT' && !l.voided).map((l) => ({ name: l.name, qty: l.qty, unitPrice: l.unitPrice, gross: round2(l.qty * l.unitPrice), note: l.note }));
+    preview({ docType: 'ORDER_LIST', data: { store: settings.store, timezone: settings.store.timezone, room: room.name, type: room.type_name, roomNumber: room.number, orderNo: detail?.order?.order?.order_no, time: new Date(), lines } }, { reference: detail?.order?.order?.order_no });
   };
   const cancelRoom = async () => {
     const reason = await prompt({ title: 'ยกเลิกห้อง', message: 'กรุณาระบุเหตุผลการยกเลิก', danger: true, options: ['เปิดห้องผิด', 'ลูกค้ายกเลิก', 'อื่นๆ'] });
@@ -203,7 +262,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
     try {
       const r = await api.post(`/orders/${s.order_id}/send-kitchen`);
       if (!r.tickets.length) return toast.info('ไม่มีรายการใหม่ที่ต้องส่ง');
-      for (const tk of r.tickets) await printNow(<KitchenTicket ticket={tk} />, { jobType: 'KITCHEN', station: tk.station, reference: tk.orderNo });
+      for (const tk of r.tickets) await print({ docType: 'KITCHEN', data: { ...tk, timezone: settings?.store?.timezone } }, { reference: tk.orderNo, jobId: tk.jobId, force: true });
       toast.success('ส่งรายการไปครัว/บาร์แล้ว');
       loadDetail();
     } catch (e) {
@@ -230,7 +289,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
               <div className="bold"><CalendarClock size={16} /> {t('การจองที่กำลังจะมาถึง')}</div>
               <div>{room.nextReservation.booking_no} · {room.nextReservation.customer_name} ({room.nextReservation.phone})</div>
               <div className="small">{fmtDateTime(room.nextReservation.start_at)} – {fmtTime(room.nextReservation.end_at)} · {room.nextReservation.guest_count} {t('คน')} · {t('มัดจำ')} {money(room.nextReservation.deposit_paid)}</div>
-              {can('room.operate') && room.status !== 'CLEANING' && <Button className="mt" variant="primary" icon={DoorOpen} onClick={() => act(async () => { const ss = await api.post(`/reservations/${room.nextReservation.id}/open`, { clientOpId: uid() }); printTickets(ss.id, { auto: true }); }, 'เปิดห้องจากการจองแล้ว')}>{t('เปิดห้องจากการจอง')}</Button>}
+              {can('room.operate') && room.status !== 'CLEANING' && <Button className="mt" variant="primary" icon={DoorOpen} onClick={() => act(async () => { const ss = await api.post(`/reservations/${room.nextReservation.id}/open`, { clientOpId: uid() }); if (ss.status !== 'PENDING_PAYMENT') printTickets(ss.id, { auto: true }); }, 'เปิดห้องจากการจองแล้ว')}>{t('เปิดห้องจากการจอง')}</Button>}
             </div>
           )}
           {can('room.operate') && (
@@ -248,6 +307,8 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
             </>
           )}
         </div>
+      ) : s.status === 'PENDING_PAYMENT' ? (
+        <PrepayPanel session={s} room={room} onPaid={() => { reload(); printTickets(s.id, { auto: true }); }} onCancelled={() => { reload(); onClose(); }} />
       ) : (
         <div className="col">
           <div className="card flat center" style={{ borderColor: ROOM_STATUS_COLOR[room.status] }}>
@@ -288,8 +349,8 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
             </div>
           )}
           <div className="grid grid-2">
-            {s.status !== 'CLOSED' && <Button size="xl" icon={DoorOpen} onClick={closeRoom}>{t('ปิดห้อง')}</Button>}
-            <Button size="xl" variant="primary" icon={CreditCard} onClick={openCheckoutFor} style={s.status === 'CLOSED' ? { gridColumn: '1/-1' } : undefined}>{t('ชำระเงิน')}</Button>
+            <Button size="xl" icon={DoorOpen} loading={closing} onClick={closeRoom}>{t('ปิดห้อง')}</Button>
+            <Button size="xl" variant="primary" icon={CreditCard} onClick={openCheckoutFor}>{t('ชำระเงิน')}</Button>
           </div>
           {((room.issues || []).length > 0 || prepays.length > 0) && tab !== 'issues' && tab !== 'prepay' && (
             <div className="card flat" style={{ borderColor: 'var(--danger)', cursor: 'pointer' }} onClick={() => setTab((room.issues || []).length ? 'issues' : 'prepay')}>
@@ -328,7 +389,10 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
           )}
           {tab === 'items' && (
             <div className="col">
-              <div className="row end"><Button size="sm" icon={Send} onClick={sendKitchen}>{t('ส่งครัว/บาร์')}</Button></div>
+              <div className="row end">
+                <Button size="sm" icon={Printer} onClick={printOrderList} disabled={!items.length}>{t('พิมพ์รายการอาหาร')}</Button>
+                <Button size="sm" icon={Send} onClick={sendKitchen}>{t('ส่งครัว/บาร์')}</Button>
+              </div>
               {!items.length && <Empty text="ยังไม่มีสินค้า" />}
               {items.map((it) => (
                 <div key={it.id} className="row between card flat" style={{ padding: 10 }}>
@@ -357,16 +421,20 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
             <div className="col">
               {(detail?.adjustments || []).map((a) => (
                 <div key={a.id} className="card flat small" style={{ padding: 10 }}>
-                  <div className="row between"><b>{a.type}{a.minutes ? ` ${a.minutes} ${t('นาที')}` : ''}</b><span className="muted">{fmtDateTime(a.created_at)}</span></div>
-                  <div className="muted">{a.employee_name} {a.reason && `· ${a.reason}`}</div>
+                  <div className="row between"><b>{t(ADJ_LABEL[a.type] || a.type)}{a.minutes ? ` ${a.minutes} ${t('นาที')}` : ''}</b><span className="muted">{fmtDateTime(a.created_at)}</span></div>
+                  <div className="row between">
+                    <span className="muted">{a.employee_name} {a.reason && `· ${a.reason}`}</span>
+                    {['EXTEND', 'ADJUST'].includes(a.type) && <Button size="sm" variant="ghost" icon={Printer} onClick={() => printAdjust(s.id, { adjustmentId: a.id })}>{t('ใบปรับเวลา')}</Button>}
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </div>
       )}
-      {modal === 'open' && <OpenRoomModal room={room} onClose={() => setModal(null)} onOpened={(session) => { setModal(null); reload(); if (session?.id) printTickets(session.id, { auto: true }); }} />}
+      {modal === 'open' && <OpenRoomModal room={room} onClose={() => setModal(null)} onOpened={(session) => { setModal(null); reload(); if (session?.id && session.status !== 'PENDING_PAYMENT') printTickets(session.id, { auto: true }); }} />}
       {modal === 'checkout' && checkoutOrderId && <Checkout orderId={checkoutOrderId} onClose={() => { setModal(null); setCheckoutOrderId(null); reload(); }} onPaid={() => reload()} />}
+      {outstanding && <OutstandingModal data={outstanding} onPay={goPay} onBack={() => setOutstanding(null)} />}
       {modal === 'products' && (
         <Modal title={`${t('เพิ่มสินค้า')} · ${room.name}`} size="xwide" onClose={() => setModal(null)}>
           <ProductCatalog compact onAdd={(p, qty, options, note) => act(() => api.post(`/orders/${s.order_id}/items`, { productId: p.id, qty, options, note, clientOpId: uid() }, { queueable: true, queueLabel: p.name }), `${t('เพิ่ม')} ${p.name}`)} />
@@ -386,6 +454,128 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
       {modal === 'deposit' && <DepositModal session={s} onClose={() => setModal(null)} onDone={() => { setModal(null); reload(); loadDetail(); }} />}
       {modal === 'adjust' && <AdjustTime session={s} onClose={() => setModal(null)} onDone={() => { setModal(null); reload(); loadDetail(); }} />}
     </Drawer>
+  );
+}
+
+const ADJ_LABEL = { OPEN: 'เปิดห้อง', EXTEND: 'เพิ่มเวลา', ADJUST: 'แก้ไขเวลา', PREPAID_START: 'ชำระค่าห้องแล้ว เริ่มเวลา', CLOSE: 'ปิดห้อง', CANCEL: 'ยกเลิก', MOVE: 'ย้ายห้อง', PAUSE: 'หยุดเวลา', RESUME: 'เริ่มเวลาต่อ' };
+
+/** "ห้องนี้มียอดค้างชำระ" — full breakdown; the room is not closed and not freed until it is paid. */
+export function OutstandingModal({ data, onPay, onBack }) {
+  const { t, tp } = useT();
+  const o = data || {};
+  const roomLines = (o.lines || []).filter((l) => l.type !== 'PRODUCT');
+  const productLines = (o.lines || []).filter((l) => l.type === 'PRODUCT');
+  const tot = o.totals || {};
+  const paid = o.paid || {};
+  return (
+    <Modal title={t('ห้องนี้มียอดค้างชำระ')} onClose={onBack} closeOnBack={false}
+      footer={<><Button size="lg" onClick={onBack}>{t('กลับไปหน้าห้อง')}</Button><Button size="lg" variant="primary" icon={CreditCard} onClick={onPay}>{t('ไปชำระเงิน')}</Button></>}>
+      <div className="col">
+        <div className="card flat" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }}>
+          <AlertTriangle size={18} /> <b>{t('ห้องนี้มียอดค้างชำระ กรุณาเก็บเงินลูกค้าเพิ่มเติมก่อนปิดห้อง')}</b>
+        </div>
+        <div className="row between"><b style={{ fontSize: '1.2rem' }}>{o.room?.name}</b><span className="muted">{o.room?.type} · {t('ห้องหมายเลข')} {o.room?.number}</span></div>
+        <div className="card flat">
+          <div className="small muted">{t('ค่าห้องและเวลาเพิ่ม')}</div>
+          {roomLines.map((l, i) => <div key={i} className="sum-line"><span>{tp(l.name)}{l.qty !== 1 ? ` × ${l.qty}` : ''}</span><b className="num">{money(l.gross)}</b></div>)}
+          {productLines.length > 0 && <div className="small muted mt">{t('รายการอาหารและเครื่องดื่ม')}</div>}
+          {productLines.map((l, i) => <div key={i} className="sum-line"><span>{l.name} × {l.qty} <span className="xs muted">@{money(l.unitPrice)}</span></span><b className="num">{money(l.gross)}</b></div>)}
+          <div className="sum-line" style={{ borderTop: '1px dashed var(--border)', marginTop: 6, paddingTop: 6 }}><span>{t('รวม')}</span><b className="num">{money(tot.grossTotal)}</b></div>
+          {(o.discounts || []).map((d, i) => <div key={i} className="sum-line"><span>{tp(d.name)}</span><span className="num">-{money(d.amount)}</span></div>)}
+          {tot.lineDiscountTotal > 0 && <div className="sum-line"><span>{t('ส่วนลดรายการ')}</span><span className="num">-{money(tot.lineDiscountTotal)}</span></div>}
+          {o.tax?.scEnabled && <div className="sum-line"><span>{t('ค่าบริการ')} {o.tax.scRate}%</span><span className="num">{money(tot.serviceCharge)}</span></div>}
+          {o.tax?.vatEnabled && <div className="sum-line"><span>VAT {o.tax.vatRate}%</span><span className="num">{money(tot.vat)}</span></div>}
+          <div className="sum-line total"><span>{t('ยอดรวมทั้งสิ้น')}</span><b className="num">฿{money(tot.grandTotal)}</b></div>
+          <div className="sum-line"><span>{t('ชำระแล้ว')}{paid.prepaid > 0 ? ` (${t('ค่าห้องล่วงหน้า')} ${money(paid.prepaid)}${paid.deposits > 0 ? ` + ${t('มัดจำ')} ${money(paid.deposits)}` : ''})` : paid.deposits > 0 ? ` (${t('มัดจำ')})` : ''}</span><span className="num" style={{ color: 'var(--ok)' }}>-{money(paid.applied)}</span></div>
+          <div className="sum-line total" style={{ color: 'var(--danger)' }}><span>{t('ยอดคงเหลือที่ต้องชำระ')}</span><b className="num big-money">฿{money(o.outstanding)}</b></div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** Prepay mode: collect the whole room charge; the clock starts only after the payment is confirmed. */
+function PrepayPanel({ session, room, onPaid, onCancelled }) {
+  const { t, tp } = useT();
+  const toast = useToast();
+  const { confirm } = useDialog();
+  const { settings, shift } = useAuth();
+  const [due, setDue] = useState(null);
+  const [method, setMethod] = useState('CASH');
+  const [cash, setCash] = useState('');
+  const [ref, setRef] = useState('');
+  const [token, setToken] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const key = useRef(uid());
+  const load = () => api.get(`/sessions/${session.id}/outstanding`).then(setDue).catch((e) => toast.error(e));
+  useEffect(() => {
+    load();
+  }, [session.id, session.version]);
+  useEffect(() => {
+    if (!due) return;
+    // customer display: what is being paid before entering the room
+    const base = { roomName: room.name, roomType: room.type_name, items: due.lines.map((l) => ({ name: l.name, qty: l.qty, unitPrice: l.unitPrice, total: l.gross, type: l.type })), subtotal: due.totals.grandTotal, total: due.totals.grandTotal, deposit: due.paid.applied, net: due.outstanding, due: due.outstanding };
+    pushDisplay(method === 'CASH' ? { ...base, mode: 'PAY_CASH', method, received: Number(cash || 0), change: Math.max(0, Number(cash || 0) - due.outstanding) } : { ...base, mode: 'PAY_OTHER', method });
+  }, [due, cash, method]);
+  if (!due) return <Loading />;
+  const amount = due.outstanding;
+  const methods = Object.entries(PAYMENT_METHODS).filter(([k]) => k !== 'CREDIT' && settings?.payment?.methods?.[k] !== false);
+  const received = Number(cash || 0);
+  const ready = method === 'CASH' ? received + 0.001 >= amount : ['QR', 'TRANSFER'].includes(method) ? !!token : true;
+  const pay = async () => {
+    if (!shift) return toast.error('กรุณาเปิดรอบการขายก่อนรับเงิน');
+    if (!ready || busy) return;
+    setBusy(true);
+    try {
+      const tender = { method, amount, ...(method === 'CASH' ? { received } : {}), ...(ref ? { reference: ref } : {}), ...(token ? { verificationToken: token } : {}) };
+      const r = await api.post(`/sessions/${session.id}/prepay`, { payments: [tender] }, { idempotencyKey: key.current });
+      toast.success(`${t('ชำระค่าห้องแล้ว เริ่มเวลา')} ${room.name}${r.change > 0 ? ` · ${t('เงินทอน')} ฿${money(r.change)}` : ''}`);
+      onPaid(r);
+    } catch (e) {
+      if (e.code === 'PREPAY_AMOUNT_MISMATCH') load();
+      toast.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const cancel = async () => {
+    if (!(await confirm({ title: 'ยกเลิกการเปิดห้อง', message: 'ลูกค้ายังไม่ได้ชำระค่าห้อง ต้องการยกเลิกและปล่อยห้องว่างหรือไม่?', danger: true }))) return;
+    try {
+      await api.post(`/sessions/${session.id}/cancel-pending`, { reason: 'ยกเลิกก่อนชำระค่าห้อง' });
+      onCancelled();
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+  return (
+    <div className="col">
+      <div className="card flat center" style={{ borderColor: ROOM_STATUS_COLOR.PENDING_PAYMENT }}>
+        <Badge color={ROOM_STATUS_COLOR.PENDING_PAYMENT}>{t('รอชำระค่าห้อง')}</Badge>
+        <div className="small muted mt">{t('เวลายังไม่เริ่มนับ จะเริ่มเมื่อชำระค่าห้องครบ')}</div>
+        <div className="big-money">฿{money(amount)}</div>
+        <div className="small">{room.name} · {formatMinutesShort(Number(session.package_minutes) + Number(session.booked_minutes))}{session.package_name ? ` · ${session.package_name}` : ''}</div>
+      </div>
+      <div className="card flat">
+        {due.lines.map((l, i) => <div key={i} className="sum-line"><span>{tp(l.name)}{l.qty !== 1 ? ` × ${l.qty}` : ''}</span><b className="num">{money(l.gross)}</b></div>)}
+        {due.paid.applied > 0 && <div className="sum-line"><span>{t('หักเงินมัดจำ')}</span><span className="num">-{money(due.paid.applied)}</span></div>}
+        <div className="sum-line total"><span>{t('ยอดที่ต้องชำระก่อนเข้าห้อง')}</span><b className="num">฿{money(amount)}</b></div>
+      </div>
+      <Seg value={method} onChange={(v) => { setMethod(v); setToken(null); }} options={methods.map(([k, l]) => ({ value: k, label: l }))} />
+      {method === 'CASH' && (
+        <>
+          <Field label="รับเงินสด"><Input className="lg" type="number" value={cash} onChange={(e) => setCash(e.target.value)} autoFocus /></Field>
+          <div className="row" style={{ gap: 6 }}>
+            {cashQuickAmounts(amount).map((v) => <Button key={v} size="sm" onClick={() => setCash(String(v))}>{money(v, 0)}</Button>)}
+          </div>
+          {received > 0 && <div className="sum-line total"><span>{t('เงินทอน')}</span><b className="num" style={{ color: received >= amount ? 'var(--ok)' : 'var(--danger)' }}>{received >= amount ? `฿${money(received - amount)}` : `${t('ขาดอีก')} ${money(amount - received)}`}</b></div>}
+        </>
+      )}
+      {['QR', 'TRANSFER'].includes(method) && !token && <QrPayPanel method={method} amount={amount} orderId={session.order_id} onVerified={(r) => setToken(r.verificationToken)} />}
+      {token && <Badge color="#16a34a">{t('ตรวจสอบเรียบร้อย')}</Badge>}
+      {['CARD', 'OTHER'].includes(method) && <Field label="เลขอ้างอิง / Approval code"><Input value={ref} onChange={(e) => setRef(e.target.value)} /></Field>}
+      <Button size="xl" variant="primary" icon={CheckCircle2} loading={busy} disabled={!ready} onClick={pay}>{t('ยืนยันชำระค่าห้องและเริ่มเวลา')}</Button>
+      <Button variant="ghost" icon={XCircle} onClick={cancel}>{t('ยกเลิก (ปล่อยห้องว่าง)')}</Button>
+    </div>
   );
 }
 

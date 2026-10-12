@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { CalendarPlus, CheckCircle2, DoorOpen, Wallet, XCircle, UserX, UserCheck, Printer, Search, Pencil, Eye, QrCode, Link2 } from 'lucide-react';
 import { Modal, Drawer, Button, Field, Input, Select, Textarea, Badge, Tabs, Loading, money, useToast, useDialog, QRCode, Barcode, Empty } from './ui.jsx';
 import { MemberPicker } from './MemberPicker.jsx';
-import { DepositSlip } from './Receipt.jsx';
 import { usePrint } from './PrintPreview.jsx';
 import { usePrintRoomTickets } from '../lib/roomTickets.jsx';
 import { DepositModal } from '../admin/pages/Rooms.jsx';
@@ -226,7 +225,7 @@ export function ReservationDrawer({ id, onClose, onChanged }) {
           <div className="grid grid-3" style={{ gap: 8 }}>
             {['PENDING', 'HOLD'].includes(rv.status) && <Button icon={CheckCircle2} variant="success" onClick={() => act(() => api.post(`/reservations/${rv.id}/status`, { status: 'CONFIRMED' }))}>{t('ยืนยันรายการ')}</Button>}
             {['PENDING', 'CONFIRMED', 'DEPOSIT_PAID', 'WAITING'].includes(rv.status) && <Button icon={UserCheck} variant="success" onClick={() => act(() => api.post(`/reservations/${rv.id}/check-in`), 'ลูกค้ามาถึงแล้ว')}>{t('ลูกค้ามาถึงแล้ว')}</Button>}
-            {can('room.operate') && rv.status !== 'HOLD' && <Button icon={DoorOpen} variant="primary" onClick={() => act(async () => { const ss = await api.post(`/reservations/${rv.id}/open`, { clientOpId: uid() }); printTickets(ss.id, { auto: true }); }, 'เปิดห้องจากการจองแล้ว')}>{t('เปิดห้องจากการจอง')}</Button>}
+            {can('room.operate') && rv.status !== 'HOLD' && <Button icon={DoorOpen} variant="primary" onClick={() => act(async () => { const ss = await api.post(`/reservations/${rv.id}/open`, { clientOpId: uid() }); if (ss.status === 'PENDING_PAYMENT') { toast.info('รอชำระค่าห้องก่อนเริ่มเวลา'); onClose?.(); window.history.pushState({}, '', `/admin/rooms?room=${ss.room_id}`); window.dispatchEvent(new PopStateEvent('popstate')); } else printTickets(ss.id, { auto: true }); }, 'เปิดห้องจากการจองแล้ว')}>{t('เปิดห้องจากการจอง')}</Button>}
             <Button icon={Wallet} onClick={() => setModal('deposit')}>{t('รับมัดจำ')}</Button>
             <Button icon={Pencil} onClick={() => setModal('edit')}>{t('เปลี่ยนห้อง/เวลา')}</Button>
             {['PENDING', 'CONFIRMED', 'DEPOSIT_PAID', 'WAITING'].includes(rv.status) && <Button icon={UserX} onClick={async () => (await confirm({ message: 'Mark No-show?', danger: true })) && act(() => api.post(`/reservations/${rv.id}/status`, { status: 'NO_SHOW' }))}>{t('ไม่มาตามนัด')}</Button>}
@@ -244,14 +243,14 @@ export function ReservationDrawer({ id, onClose, onChanged }) {
                 </div>
                 <div className="row nowrap">
                   {d.verification_status === 'PENDING' && can('slip.verify') && <Button size="sm" variant="success" onClick={() => act(() => api.post(`/deposits/${d.id}/verify`, { approve: true }))}>{t('ยืนยัน')}</Button>}
-                  <Button size="sm" icon={Printer} onClick={() => preview(<DepositSlip store={store} deposit={{ ...d, booking_no: rv.booking_no, room_name: rv.room_name, start_at: rv.start_at }} />, { jobType: 'DEPOSIT', reference: d.deposit_no })} />
+                  <Button size="sm" icon={Printer} onClick={() => preview({ docType: 'DEPOSIT', data: { store, deposit: { ...d, booking_no: rv.booking_no, room_name: rv.room_name, start_at: rv.start_at } } }, { reference: d.deposit_no })} />
                 </div>
               </div>
             ))}
             {rv.refunds.map((r) => (
               <div key={r.id} className="card flat row between" style={{ borderColor: 'var(--warn)' }}>
                 <div><b>{r.refund_no}</b> · {t('คืนมัดจำ')} {money(r.amount)} · {r.refund_type}<div className="xs muted">{r.reason} · {r.employee_name} · {fmtDateTime(r.created_at)}</div></div>
-                <Button size="sm" icon={Printer} onClick={() => preview(<DepositSlip store={store} deposit={{ ...(rv.deposits.find((d) => d.id === r.deposit_id) || {}), booking_no: rv.booking_no }} refund={r} />, { jobType: 'DEPOSIT_REFUND', reference: r.refund_no })} />
+                <Button size="sm" icon={Printer} onClick={() => preview({ docType: 'DEPOSIT', data: { store, deposit: { ...(rv.deposits.find((d) => d.id === r.deposit_id) || {}), booking_no: rv.booking_no }, refund: r } }, { reference: r.refund_no })} />
               </div>
             ))}
             {rv.verifications.map((v) => (

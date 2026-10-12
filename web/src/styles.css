@@ -311,15 +311,37 @@ table.table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 .receipt .qr { display: block; margin: 6px auto; width: 30mm; height: 30mm; }
 .receipt .barcode { display: block; margin: 4px auto; max-width: 100%; }
 .receipt-preview { background: #ddd; padding: 14px; border-radius: 12px; max-height: 70vh; overflow: auto; }
-#print-root { display: none; }
+/* Printed documents (real text, real paper width) */
+.doc { box-sizing: border-box; background: #fff; color: #000; font-family: var(--font-receipt); line-height: 1.32; overflow-wrap: anywhere; }
+.doc .doc-sec { break-inside: avoid; }
+.doc .doc-kv { display: flex; justify-content: space-between; align-items: baseline; gap: 2mm; text-align: left; }
+.doc .doc-kv > span:last-child { text-align: right; white-space: nowrap; }
+.doc .doc-item { display: grid; grid-template-columns: 1fr auto; column-gap: 2mm; text-align: left; }
+.doc .doc-item > span:nth-child(2) { white-space: nowrap; text-align: right; }
+.doc .doc-item .sub { grid-column: 1 / -1; padding-left: 3mm; font-size: 0.85em; }
+.doc .doc-hr { border-top: 0.3mm dashed #000; margin: 1.2mm 0; }
+.doc .doc-hr2 { border-top: 0.5mm solid #000; margin: 1.2mm 0; }
+.doc .doc-box { border: 0.4mm dashed #000; padding: 0.6mm 1mm; margin: 0.8mm 0; text-align: center; font-weight: 700; }
+.doc .doc-qr-wrap { margin: 1mm 0; }
+.doc .doc-qr { display: inline-block; }
+.doc .doc-logo { max-width: 60%; max-height: 22mm; filter: grayscale(1); }
+.doc-preview { background: #d4d4d8; padding: 14px; border-radius: 12px; max-height: 68vh; overflow: auto; }
+.doc-preview .doc-sheet { margin: 0 auto; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25); width: max-content; background: #fff; position: relative; }
+.doc-preview .doc-sheet .print-area { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #60a5fa; border-right: 1px dashed #60a5fa; pointer-events: none; }
+.doc-escpos { margin: 0 auto; background: #fff; color: #000; font: 12px/1.35 'Courier New', monospace; padding: 8px; white-space: pre; width: max-content; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25); }
+.doc-escpos .b { font-weight: 700; }
+.doc-escpos .big { font-size: 22px; line-height: 1.2; }
+.doc-escpos .tall { font-size: 12px; transform: scaleY(1.8); transform-origin: left top; display: inline-block; margin-bottom: 9px; }
+/* print root: measurable off-screen while preparing, the only thing on paper while printing */
+#print-root { position: fixed; left: -10000px; top: 0; visibility: hidden; pointer-events: none; }
 @media print {
-  @page { size: 80mm auto; margin: 0; }
-  html, body { background: #fff !important; }
+  @page { margin: 0; }
+  html, body, #root { background: #fff !important; margin: 0 !important; padding: 0 !important; height: auto !important; min-height: 0 !important; overflow: visible !important; display: block !important; }
   body > #root { display: none !important; }
-  #print-root { display: block !important; }
-  #print-root .receipt { width: 72mm; page-break-after: always; }
+  #print-root { position: static; left: 0; visibility: visible; }
+  #print-root .print-page { break-after: page; page-break-after: always; overflow: hidden; }
+  #print-root .print-page:last-child { break-after: auto; page-break-after: auto; }
   #print-root.report { width: auto; }
-  #print-root.report .receipt { width: auto; }
 }
 body.print-a4 #print-root .report-a4 { color: #000; background: #fff; font-family: var(--font-ui); padding: 10mm; }
 .report-a4 table { width: 100%; border-collapse: collapse; font-size: 11px; }
@@ -459,3 +481,5 @@ html, body { overflow-x: hidden; }
   .license-pill .lic-plan { display: none; }
   .super-banner { flex-wrap: wrap; padding: 6px 10px; }
 }
+.print-failures { position: fixed; right: 14px; bottom: 14px; z-index: 90; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 28px)); }
+.print-failure { border: 1px solid var(--danger); box-shadow: var(--shadow); padding: 10px 12px; }

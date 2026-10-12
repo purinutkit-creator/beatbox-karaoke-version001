@@ -63,7 +63,7 @@ export async function queueKitchenTickets(c, orderId, { source = 'ROOM_QR', note
   for (const [station, list] of Object.entries(byStation)) {
     const printer = (await c.query(`SELECT id FROM printers WHERE station = $1 AND is_active ORDER BY is_default DESC, id LIMIT 1`, [station])).rows[0];
     const payload = { station, orderNo: o.order_no, room: o.room_name, time: new Date(), employee: 'ลูกค้าสั่งผ่าน QR', note, items: list.map((i) => ({ name: i.name, qty: Number(i.qty), note: i.note })) };
-    jobs.push((await c.query(`INSERT INTO print_jobs(printer_id, job_type, reference, payload, status, source) VALUES ($1,'KITCHEN',$2,$3,'QUEUED',$4) RETURNING id`, [printer?.id || null, o.order_no, payload, source])).rows[0].id);
+    jobs.push((await c.query(`INSERT INTO print_jobs(printer_id, job_type, doc_type, reference, payload, status, source) VALUES ($1,'KITCHEN','KITCHEN',$2,$3,'QUEUED',$4) RETURNING id`, [printer?.id || null, o.order_no, payload, source])).rows[0].id);
   }
   await c.query(`UPDATE order_items SET kitchen_status = 'SENT', sent_at = now() WHERE id = ANY($1)`, [items.map((i) => i.id)]);
   return jobs;

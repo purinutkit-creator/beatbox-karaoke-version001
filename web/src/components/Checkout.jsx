@@ -177,7 +177,7 @@ export default function Checkout({ orderId, onClose, onPaid }) {
   const { prompt } = useDialog();
   const runApproval = useApprovalAction();
   const { can, settings } = useAuth();
-  const { preview, printNow, defaultPrinter } = usePrint();
+  const { preview, print, printerFor } = usePrint();
   const [data, setData] = useState(null);
   const [tenders, setTenders] = useState([]);
   const [method, setMethod] = useState('CASH');
@@ -256,13 +256,15 @@ export default function Checkout({ orderId, onClose, onPaid }) {
       pushDisplay({ mode: 'SUCCESS', total: receipt.snapshot.totals.netTotal, paid: receipt.snapshot.totals.paid, change: r.change, queueNo: receipt.queue_no, points: r.pointsEarned });
       setTimeout(() => idleDisplay(), 12000);
       toast.success(`${t('ชำระเงินเรียบร้อย')} ${receipt.receipt_no}`);
-      const printer = defaultPrinter('MAIN');
+      // full receipt prints automatically right after a complete payment (no extra click). The bill is already paid:
+      // a printer problem only shows "พิมพ์ใหม่" — it never charges again. Same receipt no → one print job only.
+      const printer = printerFor('RECEIPT');
       const hasCash = finalTenders.some((x) => x.method === 'CASH');
-      const el = <SaleReceipt snap={receipt.snapshot} />;
       const markPrinted = () => api.post(`/receipts/${receipt.id}/print`, { printerId: printer?.id || null }).catch(() => {});
-      if (printer?.auto_print) {
-        const res = await printNow(el, { jobType: 'RECEIPT', reference: receipt.receipt_no, drawer: hasCash && printer.open_drawer });
-        if (res.ok) markPrinted();
+      if (settings?.documents?.autoPrintReceipt !== false && printer?.auto_print !== false) {
+        print({ docType: 'RECEIPT', data: receipt.snapshot }, { reference: receipt.receipt_no, clientJobId: `receipt:${receipt.receipt_no}`, drawer: hasCash && printer?.open_drawer }).then((res) => {
+          if (res.ok && !res.skipped && !res.duplicate) markPrinted();
+        });
       } else if (hasCash && printer?.open_drawer) openDrawer(printer);
       onPaid?.(receipt);
     } catch (e) {
@@ -342,8 +344,9 @@ export default function Checkout({ orderId, onClose, onPaid }) {
                   icon={Printer}
                   size="lg"
                   onClick={() =>
-                    preview(<SaleReceipt snap={rc.snapshot} isCopy={rc.print_count > 0} />, {
+                    preview({ docType: 'RECEIPT', data: rc.snapshot, isCopy: rc.print_count > 0 }, {
                       reference: rc.receipt_no,
+                      clientJobId: `receipt:${rc.receipt_no}:manual-${Date.now()}`,
                       onPrinted: () => api.post(`/receipts/${rc.id}/print`, { confirmReprint: true }).catch((e) => toast.error(e)),
                     })
                   }
@@ -354,7 +357,7 @@ export default function Checkout({ orderId, onClose, onPaid }) {
               <Button size="lg" variant="primary" onClick={onClose}>{t('เสร็จสิ้น')}</Button>
             </div>
           </div>
-          <div className="receipt-preview">{rc && <SaleReceipt snap={rc.snapshot} />}</div>
+          <div className="doc-preview"><div className="doc-sheet">{rc && <SaleReceipt snap={rc.snapshot} />}</div></div>
         </div>
       </Modal>
     );

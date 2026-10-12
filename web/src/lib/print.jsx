@@ -1,82 +1,167 @@
-// Printing engine for 80mm thermal printers.
-// - BROWSER: OS print dialog / driver (USB printers installed in the OS), CSS @page 80mm
-// - USB (WebUSB), SERIAL (Web Serial: USB-serial cable), BLUETOOTH (Web Bluetooth BLE), NETWORK (server → IP:9100)
-//   send ESC/POS raster images rendered from the same receipt HTML (keeps the chosen Thai font perfectly).
+// Printing engine.
+//
+// Two routes, both keep text as text:
+//  1. DRIVER (default) — the operating-system printer driver. The document is real HTML text in the store's receipt font,
+//     laid out on a page exactly as wide as the paper and exactly as long as the content (CSS @page per document),
+//     so nothing is scaled down and nothing is cut off. Chrome hands vector text + the embedded font to the driver.
+//     For printing without a dialog run Chrome/Edge with --kiosk-printing (prints to the default printer).
+//  2. ESCPOS_TEXT — raw ESC/POS text over USB / Serial / Bluetooth / Network. The printer prints with its OWN fonts
+//     (the store's font cannot be used this way); the admin must accept that explicitly for the printer.
+// There is no bitmap / canvas / screenshot route. When the chosen font or route can't be honoured, printing stops with
+// a clear message and a supported alternative — the font is never switched and nothing is rasterized silently.
+//
+// All documents go through one queue, so they print one after another in order and never interleave.
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import html2canvas from 'html2canvas';
 import { api, LS } from './api.js';
 import { translate } from './i18n.jsx';
+import { buildDoc } from './docs.js';
+import { textLines, encodeLines, DRAWER_KICK } from './escpos.js';
+import { DocView } from '../components/DocView.jsx';
 
-const ESC = 0x1b;
-const GS = 0x1d;
+const t = (s, v) => translate(s, v);
 
-async function renderOffscreen(element, widthPx = 576) {
-  const host = document.createElement('div');
-  host.style.cssText = `position:fixed;left:-10000px;top:0;width:${widthPx}px;background:#fff;`;
-  document.body.appendChild(host);
+export class PrintError extends Error {
+  constructor(message, code, suggestion) {
+    super(message);
+    this.code = code;
+    this.suggestion = suggestion;
+  }
+}
+
+// ── paper geometry ──
+/** Usable width of a printer: paper width − non-printable sides − the store's margins (mm). */
+export function paperGeometry(printer = {}) {
+  const paper = Number(printer.paper_width || 80);
+  const printable = Math.min(paper, Number(printer.printable_width_mm) || (paper <= 60 ? 48 : paper === 80 ? 72 : Math.max(20, paper - 8)));
+  const side = (paper - printable) / 2;
+  const ml = side + Number(printer.margin_left_mm || 0);
+  const mr = side + Number(printer.margin_right_mm || 0);
+  return {
+    paperMm: paper,
+    printableMm: printable,
+    contentMm: Math.max(20, paper - ml - mr),
+    ml,
+    mr,
+    mt: Number(printer.margin_top_mm || 0),
+    mb: printer.margin_bottom_mm == null ? 3 : Number(printer.margin_bottom_mm),
+    scale: Number(printer.font_scale || 1),
+  };
+}
+
+/** Virtual printer used when no printer is set up: the OS default printer through its driver, 80 mm roll. */
+export const DRIVER_FALLBACK = { id: null, name: 'เครื่องพิมพ์หลักของระบบ (ไดรเวอร์)', connection: 'BROWSER', render_mode: 'DRIVER', paper_width: 80, copies: 1, auto_cut: true };
+
+/** Can this printer print documents at all, and how? → null when fine, else a PrintError (never a silent fallback). */
+export function routeProblem(printer) {
+  const p = printer || DRIVER_FALLBACK;
+  const raw = p.connection && p.connection !== 'BROWSER';
+  if (p.render_mode === 'ESCPOS_TEXT') {
+    if (!raw) return new PrintError(t('โหมดฟอนต์ของเครื่องพิมพ์ (ESC/POS) ต้องเชื่อมต่อแบบ USB / Serial / Bluetooth / Network'), 'PRINT_ROUTE_UNSUPPORTED', t('เปลี่ยนการเชื่อมต่อ หรือใช้โหมดไดรเวอร์ระบบ'));
+    if (!p.allow_printer_font) return new PrintError(t('เครื่องพิมพ์นี้ยังไม่ได้ยืนยันการใช้ฟอนต์ของเครื่องพิมพ์'), 'PRINTER_FONT_NOT_ACCEPTED', t('เปิด "ยอมรับการใช้ฟอนต์ของเครื่องพิมพ์" ในหน้าเครื่องพิมพ์ หรือใช้โหมดไดรเวอร์ระบบ'));
+    return null;
+  }
+  if (raw) {
+    return new PrintError(
+      t('การเชื่อมต่อ {c} ส่งได้เฉพาะคำสั่ง ESC/POS ซึ่งใช้ฟอนต์ในเครื่องพิมพ์ จึงพิมพ์ฟอนต์ที่ตั้งไว้ไม่ได้หากไม่แปลงเป็นภาพ (ระบบไม่แปลงเป็นภาพ)', { c: p.connection }),
+      'PRINT_ROUTE_UNSUPPORTED',
+      t('ติดตั้งไดรเวอร์เครื่องพิมพ์ในระบบปฏิบัติการแล้วเลือกการเชื่อมต่อ "ไดรเวอร์ระบบ" หรือเลือกโหมด "ฟอนต์ของเครื่องพิมพ์ (ESC/POS ข้อความ)"'),
+    );
+  }
+  return null;
+}
+
+// ── fonts ──
+const fontOk = new Map();
+/** Make sure every font of the document is really loaded — otherwise stop (the browser would silently substitute it). */
+export async function ensureFonts(families) {
+  const missing = [];
+  for (const f of [...new Set(families.filter(Boolean))]) {
+    if (fontOk.get(f)) continue;
+    try {
+      const faces = await Promise.race([document.fonts.load(`16px "${f}"`, 'กขคABC123'), new Promise((r) => setTimeout(() => r(null), 8000))]);
+      const ok = Array.isArray(faces) && faces.some((x) => x.status === 'loaded');
+      fontOk.set(f, ok);
+      if (!ok) missing.push(f);
+    } catch {
+      missing.push(f);
+    }
+  }
+  return missing;
+}
+
+/** The receipt font currently applied (Admin → appearance; default Kanit). */
+export function receiptFontFamily() {
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--font-receipt') || "'Kanit'";
+  return v.split(',')[0].trim().replace(/^['"]|['"]$/g, '') || 'Kanit';
+}
+
+// ── driver route ──
+function printRoot() {
+  let el = document.getElementById('print-root');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'print-root';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+const PX_TO_MM = 25.4 / 96;
+
+/**
+ * Print documents through the OS driver: every copy is its own page, as wide as the paper and as long as its content.
+ * pages: [{ sections, isCopy }]
+ */
+async function driverPrint(pages, printer) {
+  const g = paperGeometry(printer);
+  const host = printRoot();
+  host.className = 'doc-print';
   const root = createRoot(host);
-  flushSync(() => root.render(element));
-  await document.fonts?.ready;
-  await Promise.all([...host.querySelectorAll('img')].map((img) => (img.complete ? null : new Promise((r) => ((img.onload = r), (img.onerror = r))))));
-  await new Promise((r) => setTimeout(r, 120));
-  return { host, root };
+  flushSync(() =>
+    root.render(
+      <>
+        {pages.map((p, i) => (
+          <div key={i} className="print-page" data-page={i}>
+            <DocView sections={p.sections} geometry={g} />
+          </div>
+        ))}
+      </>,
+    ),
+  );
+  try {
+    const families = [receiptFontFamily(), ...pages.flatMap((p) => p.sections.map((s) => s.style.font))];
+    const missing = await ensureFonts(families);
+    if (missing.length) {
+      throw new PrintError(t('โหลดฟอนต์ {f} ไม่สำเร็จ — ระบบจะไม่เปลี่ยนไปใช้ฟอนต์อื่นเอง', { f: missing.join(', ') }), 'FONT_UNAVAILABLE', t('ตรวจสอบอินเทอร์เน็ต / ไฟล์ฟอนต์ที่นำเข้า แล้วลองใหม่ หรือเลือกฟอนต์อื่นในหน้าออกแบบเอกสาร'));
+    }
+    await Promise.all([...host.querySelectorAll('img')].map((img) => (img.complete ? null : new Promise((r) => ((img.onload = r), (img.onerror = r))))));
+    // exact page length for every document: no A4, no cut-off, no long blank tail
+    const rules = [...host.querySelectorAll('.print-page')].map((el, i) => {
+      const h = Math.ceil(el.getBoundingClientRect().height * PX_TO_MM * 10) / 10 + 1;
+      return `@page bbp${i} { size: ${g.paperMm}mm ${h}mm; margin: 0; }\n#print-root .print-page[data-page="${i}"] { page: bbp${i}; }`;
+    });
+    let style = document.getElementById('bb-page-rules');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'bb-page-rules';
+      document.head.appendChild(style);
+    }
+    style.textContent = rules.join('\n');
+    document.body.classList.add('printing-docs');
+    await new Promise((r) => setTimeout(r, 60));
+    window.print(); // blocks until the dialog closes (or returns at once with --kiosk-printing)
+  } finally {
+    document.body.classList.remove('printing-docs');
+    setTimeout(() => root.unmount(), 300);
+  }
 }
 
-/** HTML receipt → 1-bit raster → ESC/POS bytes. */
-export async function receiptToEscPos(element, { widthDots = 576, density = 8, cut = true, drawer = false, copies = 1 } = {}) {
-  const { host, root } = await renderOffscreen(element, widthDots);
-  const node = host.querySelector('.receipt') || host;
-  node.style.width = `${widthDots}px`;
-  node.style.padding = '8px';
-  node.style.fontSize = '22px';
-  const canvas = await html2canvas(node, { backgroundColor: '#ffffff', scale: 1, useCORS: true, width: widthDots });
-  root.unmount();
-  host.remove();
-  const ctx = canvas.getContext('2d');
-  const w = Math.min(widthDots, canvas.width);
-  const h = canvas.height;
-  const data = ctx.getImageData(0, 0, w, h).data;
-  const bytesPerRow = Math.ceil(w / 8);
-  const raster = new Uint8Array(bytesPerRow * h);
-  const threshold = 200 - (density - 8) * 6;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      if (lum < threshold) raster[y * bytesPerRow + (x >> 3)] |= 0x80 >> (x & 7);
-    }
-  }
-  const parts = [];
-  for (let c = 0; c < copies; c++) {
-    parts.push([ESC, 0x40]); // init
-    // print raster in bands of 255 rows (printer buffer friendly)
-    for (let y = 0; y < h; y += 255) {
-      const rows = Math.min(255, h - y);
-      parts.push([GS, 0x76, 0x30, 0x00, bytesPerRow & 0xff, (bytesPerRow >> 8) & 0xff, rows & 0xff, (rows >> 8) & 0xff]);
-      parts.push(raster.slice(y * bytesPerRow, (y + rows) * bytesPerRow));
-    }
-    parts.push([ESC, 0x64, 4]); // feed 4 lines
-    if (cut) parts.push([GS, 0x56, 0x42, 0x00]); // partial cut
-  }
-  if (drawer) parts.push([ESC, 0x70, 0x00, 0x19, 0xfa]); // kick drawer pin 2
-  const len = parts.reduce((s, p) => s + p.length, 0);
-  const out = new Uint8Array(len);
-  let o = 0;
-  for (const p of parts) {
-    out.set(p, o);
-    o += p.length;
-  }
-  return out;
-}
-
-export const DRAWER_KICK = new Uint8Array([ESC, 0x40, ESC, 0x70, 0x00, 0x19, 0xfa]);
-
-// ── transports ──
+// ── raw (ESC/POS text) transports ──
 const handles = {};
 
 async function sendUsb(bytes) {
-  if (!navigator.usb) throw new Error(translate('เบราว์เซอร์นี้ไม่รองรับ WebUSB (ใช้ Chrome/Edge)'));
+  if (!navigator.usb) throw new PrintError(t('เบราว์เซอร์นี้ไม่รองรับ WebUSB (ใช้ Chrome/Edge)'), 'TRANSPORT');
   let dev = handles.usb || (await navigator.usb.getDevices())[0];
   if (!dev) dev = await navigator.usb.requestDevice({ filters: [{ classCode: 7 }] }).catch(() => navigator.usb.requestDevice({ filters: [] }));
   if (!dev.opened) await dev.open();
@@ -89,7 +174,7 @@ async function sendUsb(bytes) {
 }
 
 async function sendSerial(bytes) {
-  if (!navigator.serial) throw new Error(translate('เบราว์เซอร์นี้ไม่รองรับ Web Serial (ใช้ Chrome/Edge)'));
+  if (!navigator.serial) throw new PrintError(t('เบราว์เซอร์นี้ไม่รองรับ Web Serial (ใช้ Chrome/Edge)'), 'TRANSPORT');
   let port = handles.serial || (await navigator.serial.getPorts())[0];
   if (!port) port = await navigator.serial.requestPort();
   if (!port.writable) await port.open({ baudRate: 9600 });
@@ -102,7 +187,7 @@ async function sendSerial(bytes) {
 const BLE_SERVICES = ['000018f0-0000-1000-8000-00805f9b34fb', '0000ff00-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '49535343-fe7d-4ae5-8fa9-9fafd205e455'];
 
 export async function connectBluetooth() {
-  if (!navigator.bluetooth) throw new Error(translate('เบราว์เซอร์นี้ไม่รองรับ Web Bluetooth (ใช้ Chrome บน Android/Windows/Mac)'));
+  if (!navigator.bluetooth) throw new PrintError(t('เบราว์เซอร์นี้ไม่รองรับ Web Bluetooth (ใช้ Chrome บน Android/Windows/Mac)'), 'TRANSPORT');
   const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES });
   const server = await device.gatt.connect();
   let ch = null;
@@ -115,7 +200,7 @@ export async function connectBluetooth() {
     }
     if (ch) break;
   }
-  if (!ch) throw new Error(translate('ไม่พบช่องทางส่งข้อมูลของเครื่องพิมพ์ Bluetooth'));
+  if (!ch) throw new PrintError(t('ไม่พบช่องทางส่งข้อมูลของเครื่องพิมพ์ Bluetooth'), 'TRANSPORT');
   handles.ble = { device, ch };
   return device.name;
 }
@@ -136,20 +221,109 @@ function toBase64(bytes) {
   return btoa(s);
 }
 
-/** Print via the OS dialog (BROWSER mode). */
-export async function browserPrint(elements, { a4 = false } = {}) {
-  let rootEl = document.getElementById('print-root');
-  if (!rootEl) {
-    rootEl = document.createElement('div');
-    rootEl.id = 'print-root';
-    document.body.appendChild(rootEl);
+async function sendRaw(printer, bytes, jobId) {
+  if (printer.connection === 'NETWORK') return api.post(`/printers/${printer.id}/raw`, { data: toBase64(bytes), jobId });
+  if (printer.connection === 'USB') return sendUsb(bytes);
+  if (printer.connection === 'SERIAL') return sendSerial(bytes);
+  if (printer.connection === 'BLUETOOTH') return sendBluetooth(bytes);
+  throw new PrintError(t('ไม่รู้จักการเชื่อมต่อเครื่องพิมพ์'), 'TRANSPORT');
+}
+
+// ── one queue for every document ──
+const queue = [];
+let running = false;
+const listeners = new Set();
+export const printQueue = {
+  size: () => queue.length + (running ? 1 : 0),
+  subscribe(fn) {
+    listeners.add(fn);
+    return () => listeners.delete(fn);
+  },
+};
+const notify = () => listeners.forEach((f) => f(printQueue.size()));
+
+function enqueue(task) {
+  return new Promise((resolve) => {
+    queue.push({ task, resolve });
+    notify();
+    pump();
+  });
+}
+async function pump() {
+  if (running) return;
+  running = true;
+  while (queue.length) {
+    const { task, resolve } = queue.shift();
+    notify();
+    try {
+      resolve(await task());
+    } catch (e) {
+      resolve({ ok: false, error: e.message, code: e.code, suggestion: e.suggestion });
+    }
   }
-  rootEl.className = a4 ? 'report' : '';
-  document.body.classList.toggle('print-a4', a4);
-  const root = createRoot(rootEl);
+  running = false;
+  notify();
+}
+
+/**
+ * Print one job: documents of the same job print together, in order, on one printer.
+ * job: { printer, docs: [{ docType, data, isCopy, copies, cut }], layouts, drawer, record: { clientJobId, reference, jobId } }
+ * Returns { ok, error, code, suggestion, jobId }.
+ */
+export function printJob(job) {
+  return enqueue(async () => {
+    const printer = job.printer || DRIVER_FALLBACK;
+    const docType = job.docs[0]?.docType;
+    const payload = job.docs.length === 1 ? { docType, data: job.docs[0].data } : { docs: job.docs.map((d) => ({ docType: d.docType, data: d.data })) };
+    // server record first (status + reprint); the same clientJobId never creates a second record
+    let jobId = job.record?.jobId || null;
+    if (!jobId) {
+      try {
+        const rec = await api.post('/print-jobs', { clientJobId: job.record?.clientJobId || null, printerId: printer.id, docType, jobType: docType, reference: job.record?.reference || null, isCopy: job.docs.some((d) => d.isCopy), copies: job.docs[0]?.copies || 1, payload, status: 'PRINTING', reprintOf: job.record?.reprintOf || null });
+        jobId = rec.id;
+        if (rec.duplicate && rec.status === 'PRINTED' && !job.record?.force) return { ok: true, jobId, duplicate: true };
+      } catch {
+        /* offline: still print */
+      }
+    } else api.patch(`/print-jobs/${jobId}`, { status: 'PRINTING', printerId: printer.id }).catch(() => {});
+    try {
+      const problem = routeProblem(printer);
+      if (problem) throw problem;
+      const pages = [];
+      for (const d of job.docs) {
+        const sections = buildDoc(d.docType, d.data, { isCopy: d.isCopy, layouts: job.layouts, geometry: paperGeometry(printer), fontLabel: receiptFontFamily() });
+        for (let c = 0; c < (d.copies || 1); c++) pages.push({ sections, cut: d.cut !== false });
+      }
+      if (printer.render_mode === 'ESCPOS_TEXT') {
+        const chunks = pages.map((p, i) => encodeLines(textLines(p.sections, printer).lines, printer, { copies: 1, cut: p.cut, drawer: job.drawer && i === pages.length - 1 }));
+        const all = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
+        let o = 0;
+        for (const c of chunks) {
+          all.set(c, o);
+          o += c.length;
+        }
+        await sendRaw(printer, all, jobId);
+      } else {
+        await driverPrint(pages, printer);
+      }
+      if (jobId) api.patch(`/print-jobs/${jobId}`, { status: 'PRINTED' }).catch(() => {});
+      return { ok: true, jobId };
+    } catch (e) {
+      const msg = e.message || t('เครื่องพิมพ์ไม่ได้เชื่อมต่อ');
+      if (jobId) api.patch(`/print-jobs/${jobId}`, { status: 'FAILED', error: e.suggestion ? `${msg} — ${e.suggestion}` : msg }).catch(() => {});
+      return { ok: false, error: msg, code: e.code, suggestion: e.suggestion, jobId };
+    }
+  });
+}
+
+/** A4 report through the OS dialog (not a receipt). */
+export async function browserPrint(elements) {
+  const host = printRoot();
+  host.className = 'report';
+  document.body.classList.add('print-a4');
+  const root = createRoot(host);
   flushSync(() => root.render(<>{elements}</>));
   await document.fonts?.ready;
-  await Promise.all([...rootEl.querySelectorAll('img')].map((img) => (img.complete ? null : new Promise((r) => ((img.onload = r), (img.onerror = r))))));
   await new Promise((r) => setTimeout(r, 150));
   window.print();
   setTimeout(() => {
@@ -165,38 +339,10 @@ export function setLocalPrinterId(id) {
   LS.set('bb_printer_id', id);
 }
 
-/**
- * Print a receipt element on the chosen printer.
- * printer: row from /api/printers. Returns { ok, error }.
- */
-export async function printElement(element, printer, { jobType = 'RECEIPT', reference = null, isCopy = false, drawer = null, copies = null } = {}) {
-  const p = printer || { connection: 'BROWSER', copies: 1, auto_cut: true };
-  const n = copies ?? p.copies ?? 1;
-  try {
-    if (p.connection === 'BROWSER' || !p.connection) {
-      await browserPrint(Array.from({ length: n }, (_, i) => <div key={i}>{element}</div>));
-    } else {
-      const bytes = await receiptToEscPos(element, { density: p.density, cut: p.auto_cut, drawer: drawer ?? false, copies: n });
-      if (p.connection === 'NETWORK') await api.post(`/printers/${p.id}/raw`, { data: toBase64(bytes), jobType, reference, isCopy });
-      else if (p.connection === 'USB') await sendUsb(bytes);
-      else if (p.connection === 'SERIAL') await sendSerial(bytes);
-      else if (p.connection === 'BLUETOOTH') await sendBluetooth(bytes);
-    }
-    if (p.id && p.connection !== 'NETWORK') api.post('/print-jobs', { printerId: p.id, jobType, reference, isCopy, status: 'PRINTED' }).catch(() => {});
-    return { ok: true };
-  } catch (e) {
-    if (p.id) api.post('/print-jobs', { printerId: p.id, jobType, reference, isCopy, status: 'FAILED', error: e.message }).catch(() => {});
-    return { ok: false, error: e.message || translate('เครื่องพิมพ์ไม่ได้เชื่อมต่อ') };
-  }
-}
-
 export async function openDrawer(printer) {
-  if (!printer || printer.connection === 'BROWSER') return { ok: false, error: translate('การเปิดลิ้นชักผ่านเบราว์เซอร์ทำงานผ่านไดรเวอร์เครื่องพิมพ์') };
+  if (!printer || printer.connection === 'BROWSER') return { ok: false, error: t('ลิ้นชักเปิดผ่านไดรเวอร์เครื่องพิมพ์ (ตั้งค่า "เปิดลิ้นชักเมื่อพิมพ์" ในไดรเวอร์)') };
   try {
-    if (printer.connection === 'NETWORK') await api.post(`/printers/${printer.id}/raw`, { data: toBase64(DRAWER_KICK), jobType: 'DRAWER' });
-    else if (printer.connection === 'USB') await sendUsb(DRAWER_KICK);
-    else if (printer.connection === 'SERIAL') await sendSerial(DRAWER_KICK);
-    else if (printer.connection === 'BLUETOOTH') await sendBluetooth(DRAWER_KICK);
+    await sendRaw(printer, DRAWER_KICK);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -205,17 +351,17 @@ export async function openDrawer(printer) {
 
 export async function pairDevice(connection) {
   if (connection === 'USB') {
-    if (!navigator.usb) throw new Error(translate('เบราว์เซอร์นี้ไม่รองรับ WebUSB (ใช้ Chrome/Edge)'));
+    if (!navigator.usb) throw new PrintError(t('เบราว์เซอร์นี้ไม่รองรับ WebUSB (ใช้ Chrome/Edge)'), 'TRANSPORT');
     handles.usb = await navigator.usb.requestDevice({ filters: [] });
     return handles.usb.productName || 'USB Printer';
   }
   if (connection === 'SERIAL') {
-    if (!navigator.serial) throw new Error(translate('เบราว์เซอร์นี้ไม่รองรับ Web Serial (ใช้ Chrome/Edge)'));
+    if (!navigator.serial) throw new PrintError(t('เบราว์เซอร์นี้ไม่รองรับ Web Serial (ใช้ Chrome/Edge)'), 'TRANSPORT');
     handles.serial = await navigator.serial.requestPort();
     return 'Serial Printer';
   }
   if (connection === 'BLUETOOTH') return connectBluetooth();
-  return 'Browser';
+  return 'Driver';
 }
 
 export function transportStatus(connection) {

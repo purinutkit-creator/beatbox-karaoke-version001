@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { BarChart3, FileSpreadsheet, FileText, Printer, Download } from 'lucide-react';
 import { PageHead, Button, Input, Select, Loading, Empty, money, useToast } from '../../components/ui.jsx';
-import { ReportSlip } from '../../components/Receipt.jsx';
 import { usePrint } from '../../components/PrintPreview.jsx';
 import { useT } from '../../lib/i18n.jsx';
 import { api, download } from '../../lib/api.js';
@@ -58,7 +57,7 @@ export default function Reports() {
         <Button icon={FileText} onClick={() => rep && browserPrint(<A4Report rep={rep} store={settings.store} />, { a4: true })}>PDF</Button>
         <Button icon={FileSpreadsheet} onClick={() => exp('xlsx')}>Excel</Button>
         <Button icon={Download} onClick={() => exp('csv')}>CSV</Button>
-        <Button icon={Printer} onClick={() => rep && preview(<ReportSlip store={settings.store} report={rep} />, { jobType: 'REPORT', reference: rep.title })}>{t('พิมพ์ใบเสร็จ')}</Button>
+        <Button icon={Printer} onClick={() => rep && preview({ docType: 'REPORT', data: { store: settings.store, report: rep } }, { reference: rep.title })}>{t('พิมพ์ใบเสร็จ')}</Button>
       </PageHead>
       <div className="row mb">
         <Select value={f.type} onChange={(e) => set('type', e.target.value)} options={(list || []).map((r) => ({ value: r.key, label: r.title }))} style={{ width: 260 }} />

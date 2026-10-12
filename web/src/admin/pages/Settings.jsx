@@ -217,7 +217,7 @@ function AppearanceTab() {
         </div>
         <div className="card">
           <h3>{t('ตัวอย่างใบเสร็จ')}</h3>
-          <div className="receipt-preview" style={{ '--font-receipt': `'${lang === 'en' ? app.v.receiptEnFont : app.v.receiptThFont}', sans-serif` }}><SaleReceipt snap={sampleSnap} /></div>
+          <div className="doc-preview" style={{ '--font-receipt': `'${lang === 'en' ? app.v.receiptEnFont : app.v.receiptThFont}', sans-serif` }}><div className="doc-sheet"><SaleReceipt snap={sampleSnap} /></div></div>
         </div>
       </div>
       {imp && (
@@ -363,6 +363,14 @@ function RoomTab() {
   const s = useSection('room');
   return (
     <div className="card">
+      <Field label="รูปแบบการชำระค่าห้อง">
+        <Seg value={s.v.paymentMode || 'PREPAY'} onChange={(x) => s.set('paymentMode', x)} options={[{ value: 'PREPAY', label: 'จ่ายก่อนเข้าห้อง (ค่าเริ่มต้น)' }, { value: 'POSTPAY', label: 'เข้าห้องก่อน แล้วชำระตอนปิดห้อง' }]} />
+      </Field>
+      <div className="xs muted mb">
+        {(s.v.paymentMode || 'PREPAY') === 'PREPAY'
+          ? t('เลือกห้องและจำนวนชั่วโมง → ระบบคำนวณค่าห้อง → ต้องชำระครบก่อน ห้องจึงเริ่มนับเวลา (ระหว่างรอแสดงสถานะ "รอชำระค่าห้อง") · ยอดที่จ่ายล่วงหน้าถูกหักในบิลเดียวกันตอนปิดห้อง ไม่เก็บซ้ำ')
+          : t('เปิดห้องและเริ่มเวลาทันที ค่าห้อง เวลาเพิ่ม และอาหารรวมอยู่ในบิลห้อง ต้องชำระครบก่อนปิดห้อง')}
+      </div>
       <Grid v={s.v} set={s.set} fields={[
         { key: 'extraGuestFee', label: 'ค่าบริการลูกค้าที่เกินจำนวนห้อง (บาท/คน)', type: 'money' },
         { key: 'maxExtraGuests', label: 'จองเกินจำนวนห้องได้สูงสุด (คน, 0 = ไม่ให้เกิน)', type: 'number' },
@@ -380,6 +388,62 @@ function RoomTab() {
         { key: 'nearSpeechTemplate', label: 'ข้อความเสียงเมื่อใกล้หมดเวลา ({room} {minutes})', full: true },
       ]} />
       <Button className="mt" onClick={() => { const u = new SpeechSynthesisUtterance((s.v.speechTemplate || '').replace('{room}', 'BEATBOX 01')); u.lang = 'th-TH'; speechSynthesis.speak(u); if (s.v.alertSoundUrl) new Audio(s.v.alertSoundUrl).play().catch(() => {}); }}>{t('ทดสอบเสียง')}</Button>
+      <SaveBar onSave={s.save} busy={s.busy} />
+    </div>
+  );
+}
+
+/** Member self sign-up (QR at the end of receipts without a member), extra sign-up fields. */
+function MemberSignupTab() {
+  const { t } = useT();
+  const s = useSection('memberSignup');
+  const fields = s.v.extraFields || [];
+  const setField = (i, patch) => s.set('extraFields', fields.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+  return (
+    <div className="card">
+      <Switch checked={s.v.enabled !== false} onChange={(x) => s.set('enabled', x)} label="เปิดให้ลูกค้าสมัครสมาชิกเองผ่าน QR" />
+      <Switch checked={s.v.printOnReceipt !== false} onChange={(x) => s.set('printOnReceipt', x)} label="พิมพ์ QR สมัครสมาชิกท้ายใบเสร็จ (เฉพาะบิลที่ไม่มีสมาชิก)" />
+      <Field label="ข้อความเรื่องรหัสผ่านเริ่มต้น (พิมพ์ท้ายใบเสร็จ / แสดงหลังสมัคร)" style={{ marginTop: 10 }}>
+        <Textarea rows={2} value={s.v.passwordNote || ''} onChange={(e) => s.set('passwordNote', e.target.value)} />
+      </Field>
+      <h4>{t('ช่องข้อมูลเพิ่มเติมในหน้าสมัคร')}</h4>
+      <div className="xs muted mb">{t('ช่องพื้นฐาน: เบอร์โทรศัพท์ ชื่อ นามสกุล (บังคับเสมอ)')}</div>
+      {fields.map((f, i) => (
+        <div key={i} className="row nowrap card flat" style={{ padding: 8, marginBottom: 6 }}>
+          <Input placeholder={t('ชื่อช่อง เช่น วันเกิด')} value={f.label || ''} onChange={(e) => setField(i, { label: e.target.value, key: f.key || `f${Date.now().toString(36)}` })} />
+          <Select value={f.type || 'text'} onChange={(e) => setField(i, { type: e.target.value })} options={[{ value: 'text', label: 'ข้อความ' }, { value: 'date', label: 'วันที่' }, { value: 'email', label: 'อีเมล' }, { value: 'select', label: 'ตัวเลือก' }]} style={{ width: 130 }} />
+          {f.type === 'select' && <Input placeholder={t('ตัวเลือก คั่นด้วย ,')} value={(f.options || []).join(', ')} onChange={(e) => setField(i, { options: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} />}
+          <Switch checked={!!f.required} onChange={(x) => setField(i, { required: x })} label="บังคับ" />
+          <Button variant="ghost" onClick={() => s.set('extraFields', fields.filter((_, j) => j !== i))}>{t('ลบ')}</Button>
+        </div>
+      ))}
+      <Button onClick={() => s.set('extraFields', [...fields, { key: `f${Date.now().toString(36)}`, label: '', type: 'text', required: false }])}>{t('เพิ่มช่อง')}</Button>
+      <div className="small mt">{t('ลิงก์สมัครสมาชิกของร้าน')}: <code>{window.location.origin}/book/signup?store={useAuth().settings?.store?.slug}</code></div>
+      <SaveBar onSave={s.save} busy={s.busy} />
+    </div>
+  );
+}
+
+/** Booking calendar: default orientation + current-time line. */
+function CalendarTab() {
+  const { t } = useT();
+  const s = useSection('calendar');
+  const nl = s.v.nowLine || {};
+  const setNl = (k, x) => s.set('nowLine', { ...nl, [k]: x });
+  return (
+    <div className="card">
+      <Field label="รูปแบบตารางเริ่มต้น">
+        <Seg value={s.v.orientation || 'TIME_X'} onChange={(x) => s.set('orientation', x)} options={[{ value: 'TIME_X', label: 'เวลาแนวนอน / ห้องแนวตั้ง' }, { value: 'TIME_Y', label: 'เวลาแนวตั้ง / ห้องแนวนอน' }]} />
+      </Field>
+      <div className="xs muted mb">{t('พนักงานแต่ละคนสลับแนวตารางได้เอง และระบบจำค่าที่เลือกไว้ในเครื่อง')}</div>
+      <h4>{t('เส้นเวลาปัจจุบัน')}</h4>
+      <Switch checked={nl.enabled !== false} onChange={(x) => setNl('enabled', x)} label="แสดงเส้นเวลาปัจจุบัน" />
+      <Switch checked={nl.glow !== false} onChange={(x) => setNl('glow', x)} label="เอฟเฟกต์เรืองแสง / กะพริบนุ่มนวล" />
+      <div className="grid grid-2 mt">
+        <Field label="สีเส้น"><div className="row nowrap"><input type="color" value={nl.color || '#ef4444'} onChange={(e) => setNl('color', e.target.value)} style={{ width: 48, height: 42, border: 0, background: 'none' }} /><Input value={nl.color || '#ef4444'} onChange={(e) => setNl('color', e.target.value)} /></div></Field>
+        <Field label="ความเร็วการกะพริบ (วินาทีต่อรอบ)"><Input type="number" step="0.5" min={0.5} max={10} value={nl.speed ?? 2} onChange={(e) => setNl('speed', Number(e.target.value))} /></Field>
+      </div>
+      <div className="xs muted">{t('เวลาอ้างอิงตามเขตเวลาของร้าน')} ({useAuth().settings?.store?.timezone || 'Asia/Bangkok'})</div>
       <SaveBar onSave={s.save} busy={s.busy} />
     </div>
   );
@@ -537,6 +601,8 @@ export default function Settings() {
         { value: 'integrations', label: 'การเชื่อมต่อ (LINE · SMS · สลิป · EDC)' },
         { value: 'points', label: 'มัดจำ คะแนน & ความปลอดภัย' },
         { value: 'booking', label: 'การจองออนไลน์' },
+        { value: 'calendar', label: 'ตารางการจอง' },
+        { value: 'memberSignup', label: 'สมัครสมาชิก' },
         { value: 'line', label: 'LINE' },
         { value: 'backup', label: 'สำรองข้อมูล' },
       ]} />
@@ -550,6 +616,8 @@ export default function Settings() {
       {tab === 'integrations' && <IntegrationsTab />}
       {tab === 'points' && <PointsDepositTab />}
       {tab === 'booking' && <BookingTab />}
+      {tab === 'calendar' && <CalendarTab />}
+      {tab === 'memberSignup' && <MemberSignupTab />}
       {tab === 'line' && <LineTab />}
       {tab === 'backup' && <BackupTab />}
     </div>
