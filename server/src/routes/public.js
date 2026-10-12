@@ -153,7 +153,7 @@ r.get('/rooms/:id/slots', async (req, res) => {
   const busy = (
     await pool.query(
       `SELECT start_at AS s, end_at AS e FROM reservations WHERE room_id = $1 AND status IN ('HOLD','PENDING','CONFIRMED','DEPOSIT_PAID','WAITING','ARRIVED','IN_USE') AND NOT (status = 'HOLD' AND hold_expires_at < now()) AND tstzrange(start_at,end_at) && tstzrange($2,$3)
-       UNION ALL SELECT started_at, GREATEST(scheduled_end_at, now()) FROM room_sessions WHERE room_id = $1 AND status IN ('SCHEDULED','ACTIVE','PAUSED','CLOSED')`,
+       UNION ALL SELECT started_at, GREATEST(scheduled_end_at, now()) FROM room_sessions WHERE room_id = $1 AND status IN ('PENDING_PAYMENT','SCHEDULED','ACTIVE','PAUSED','CLOSED')`,
       [room.id, open, close],
     )
   ).rows;

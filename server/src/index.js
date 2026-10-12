@@ -28,6 +28,7 @@ import orderRoutes from './routes/orders.js';
 import reservationRoutes from './routes/reservations.js';
 import memberRoutes from './routes/members.js';
 import printerRoutes from './routes/printers.js';
+import documentRoutes from './routes/documents.js';
 import notificationRoutes from './routes/notifications.js';
 import reportRoutes from './routes/reports.js';
 import publicRoutes from './routes/public.js';
@@ -76,6 +77,7 @@ export function createApp() {
   app.use('/api', reservationRoutes);
   app.use('/api', memberRoutes);
   app.use('/api', printerRoutes);
+  app.use('/api', documentRoutes);
   app.use('/api', notificationRoutes);
   app.use('/api', reportRoutes);
   app.use('/api', fontRoutes);

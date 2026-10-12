@@ -56,6 +56,10 @@ test('login with 4-digit PIN, wrong PIN rejected', async () => {
   assert.equal(r.body.employee.role, 'ADMIN');
   const d = await api('POST', '/devices/register', { name: 'POS-1', deviceKey: 'test-device-key-1' });
   deviceId = d.body.id;
+  // these flows test "enter first, pay when closing"; prepay (the store default) has its own tests
+  const room = (await api('GET', '/settings')).body.room;
+  assert.equal(room.paymentMode, 'PREPAY');
+  assert.equal((await api('PUT', '/settings/room', { ...room, paymentMode: 'POSTPAY' })).status, 200);
 });
 
 test('staff without permission cannot open settings', async () => {

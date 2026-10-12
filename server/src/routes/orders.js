@@ -324,7 +324,7 @@ r.post('/orders/:id/void', can('order.void'), attachShift, async (req, res) => {
     }
     await c.query(`UPDATE orders SET status = 'VOID', voided_at = now(), voided_by = $2, void_reason = $3, version = version + 1 WHERE id = $1`, [o.id, req.employee.id, reason]);
     if (o.session_id && o.status === 'OPEN') {
-      await c.query(`UPDATE room_sessions SET status = 'CANCELLED', ended_at = COALESCE(ended_at, now()), cancel_reason = $2 WHERE id = $1 AND status IN ('ACTIVE','PAUSED','CLOSED','SCHEDULED')`, [o.session_id, reason]);
+      await c.query(`UPDATE room_sessions SET status = 'CANCELLED', ended_at = COALESCE(ended_at, now()), cancel_reason = $2 WHERE id = $1 AND status IN ('PENDING_PAYMENT','ACTIVE','PAUSED','CLOSED','SCHEDULED')`, [o.session_id, reason]);
       await c.query(`UPDATE rooms SET status = 'CLEANING' WHERE id = (SELECT room_id FROM room_sessions WHERE id = $1)`, [o.session_id]);
     }
     await logActivity(c, req, 'ORDER_VOID', 'order', o.id, { reason, wasPaid: o.status === 'PAID', amount: o.grand_total });

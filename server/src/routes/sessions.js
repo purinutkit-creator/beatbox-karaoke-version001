@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { pool, tx, many, one } from '../db/index.js';
 import { requireAuth, can, verifyToken } from '../lib/auth.js';
-import { attachShift } from '../lib/shift.js';
+import { attachShift, requireShift } from '../lib/shift.js';
+import { idempotent } from '../lib/idempotency.js';
+import { paymentMode } from '../providers/slip.js';
 import { logActivity } from '../lib/activity.js';
 import { z, parse } from '../lib/validate.js';
 import { notFound, badRequest, conflict } from '../lib/errors.js';
@@ -9,7 +11,8 @@ import { emitSync } from '../lib/realtime.js';
 import { getSettings } from '../services/settings.js';
 import { lockRoom, assertRoomFree } from '../services/availability.js';
 import { getRoomBoard, refreshRoomStatuses, SESSION_SELECT, sessionCharges } from '../services/rooms.js';
-import { createOrder, addProductItem, computeOrder } from '../services/orders.js';
+import { createOrder, addProductItem, computeOrder, payOrder } from '../services/orders.js';
+import { round2 } from '@beatbox/shared/money.js';
 import { nextSessionNo, nextDepositNo, randomToken } from '../services/numbers.js';
 import { sessionTiming } from '@beatbox/shared/roomPricing.js';
 import { notify, queueLineMessage, bookingMessage } from '../services/notifications.js';
@@ -17,7 +20,7 @@ import { notify, queueLineMessage, bookingMessage } from '../services/notificati
 const r = Router();
 r.use(requireAuth);
 
-const ACTIVE = ['SCHEDULED', 'ACTIVE', 'PAUSED', 'CLOSED'];
+const ACTIVE = ['PENDING_PAYMENT', 'SCHEDULED', 'ACTIVE', 'PAUSED', 'CLOSED'];
 
 r.get('/rooms/board', async (_req, res) => {
   const settings = await getSettings();
@@ -122,14 +125,17 @@ export async function openSession(c, req, b, settings) {
   // walk-in must not collide with upcoming reservations (own reservation excluded)
   await assertRoomFree(c, room.id, start, end, { excludeReservationId: reservation?.id || null });
 
-  const status = start.getTime() > now.getTime() + 60000 ? 'SCHEDULED' : 'ACTIVE';
+  const startStatus = start.getTime() > now.getTime() + 60000 ? 'SCHEDULED' : 'ACTIVE';
+  // pay before entering (store default): the room is held but the clock does not run until the room charge is paid
+  const paymentModeSetting = settings.room.paymentMode === 'POSTPAY' ? 'POSTPAY' : 'PREPAY';
+  const status = paymentModeSetting === 'PREPAY' ? 'PENDING_PAYMENT' : startStatus;
   const session = (
     await c.query(
       `INSERT INTO room_sessions(session_no, room_id, room_type_id, reservation_id, member_id, customer_name, phone, guest_count, room_capacity,
          package_id, package_name, package_minutes, package_price, booked_minutes, price_hour, price_half, extra_guest_fee, started_at, scheduled_end_at,
-         status, opened_by, client_op_id, extra_mics, mic_fee, order_token)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING *`,
-      [await nextSessionNo(c), room.id, room.room_type_id, reservation?.id || null, b.memberId || reservation?.member_id || null, b.customerName || reservation?.customer_name || null, b.phone || reservation?.phone || null, b.guestCount, room.capacity, pkg?.id || null, pkg?.name || null, pkgMinutes, pkg ? Number(pkg.price) : 0, b.minutes, room.price_hour, room.price_half, settings.room.extraGuestFee, start, end, status, req.employee.id, b.clientOpId || null, b.extraMics || 0, Number(settings.room.extraMicFee || 0), randomToken(24)],
+         status, opened_by, client_op_id, extra_mics, mic_fee, order_token, payment_mode)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26) RETURNING *`,
+      [await nextSessionNo(c), room.id, room.room_type_id, reservation?.id || null, b.memberId || reservation?.member_id || null, b.customerName || reservation?.customer_name || null, b.phone || reservation?.phone || null, b.guestCount, room.capacity, pkg?.id || null, pkg?.name || null, pkgMinutes, pkg ? Number(pkg.price) : 0, b.minutes, room.price_hour, room.price_half, settings.room.extraGuestFee, start, end, status, req.employee.id, b.clientOpId || null, b.extraMics || 0, Number(settings.room.extraMicFee || 0), randomToken(24), paymentModeSetting],
     )
   ).rows[0];
   const order = await createOrder(c, { sessionId: session.id, reservationId: reservation?.id || null, memberId: session.member_id, customerName: session.customer_name, phone: session.phone, employeeId: req.employee.id, deviceId: req.deviceId, shiftId: req.shiftId || null, branchId: room.branch_id });
@@ -153,8 +159,48 @@ export async function openSession(c, req, b, settings) {
   }
   for (const it of b.items || []) await addProductItem(c, order, { ...it, employeeId: req.employee.id });
   await c.query(`INSERT INTO room_time_adjustments(session_id, type, minutes, after, employee_id, reason) VALUES ($1,'OPEN',$2,$3,$4,$5)`, [session.id, total, { started_at: start, scheduled_end_at: end, package: pkg?.name }, req.employee.id, b.note]);
-  await logActivity(c, req, 'ROOM_OPEN', 'room_session', session.id, { room: room.name, guests: b.guestCount, mics: b.extraMics || 0, minutes: total, package: pkg?.name, reservationId: reservation?.id, deposit: b.deposit?.amount || 0 });
+  await logActivity(c, req, 'ROOM_OPEN', 'room_session', session.id, { room: room.name, guests: b.guestCount, mics: b.extraMics || 0, minutes: total, package: pkg?.name, reservationId: reservation?.id, deposit: b.deposit?.amount || 0, paymentMode: paymentModeSetting });
+  if (session.status === 'PENDING_PAYMENT') {
+    const due = await prepayDue(c, session, settings);
+    // nothing left to pay (e.g. the booking deposit already covers the room) → the room starts right away
+    if (due.amount <= 0) return startPrepaidSession(c, req, session, settings, { amount: 0, key: null });
+    return { ...session, prepay: due };
+  }
   return session;
+}
+
+/** Amount to collect before the room starts (prepay mode): the bill so far (booked room time, extra guests / mics, items) less money already held. */
+export async function prepayDue(c, session, settings) {
+  const bundle = await computeOrder(c, session.order_id, settings);
+  return {
+    amount: round2(Math.max(0, bundle.calc.netTotal)),
+    grandTotal: bundle.calc.grandTotal,
+    held: bundle.calc.depositApplied,
+    lines: bundle.calc.lines.map((l) => ({ type: l.type, name: l.name, qty: l.qty, unitPrice: l.unitPrice, gross: l.gross })),
+    calc: bundle.calc,
+  };
+}
+
+/** Prepaid → the clock starts now (or at the scheduled start), the end time is recomputed from the real start. */
+async function startPrepaidSession(c, req, s, settings, { amount, key }) {
+  const now = new Date();
+  const booked = new Date(s.started_at);
+  const total = Number(s.package_minutes) + Number(s.booked_minutes) + Number(s.extension_minutes);
+  const start = booked.getTime() > now.getTime() + 60000 ? booked : now;
+  const end = new Date(start.getTime() + total * 60000);
+  const status = start === booked ? 'SCHEDULED' : 'ACTIVE';
+  const u = (
+    await c.query(
+      `UPDATE room_sessions SET status = $2, started_at = $3, scheduled_end_at = $4, prepaid_amount = prepaid_amount + $5, prepaid_at = now(), prepay_key = COALESCE($6, prepay_key),
+         version = version + 1, updated_at = now() WHERE id = $1 RETURNING *`,
+      [s.id, status, start, end, amount, key],
+    )
+  ).rows[0];
+  if (s.reservation_id) await c.query('UPDATE reservations SET end_at = GREATEST(end_at, $2), updated_at = now() WHERE id = $1', [s.reservation_id, end]);
+  await c.query(`INSERT INTO room_time_adjustments(session_id, type, minutes, before, after, employee_id, reason) VALUES ($1,'PREPAID_START',$2,$3,$4,$5,$6)`, [
+    s.id, total, { started_at: s.started_at, scheduled_end_at: s.scheduled_end_at }, { started_at: start, scheduled_end_at: end, prepaid: amount }, req.employee.id, 'ชำระค่าห้องครบแล้ว เริ่มเวลา',
+  ]);
+  return u;
 }
 
 r.post('/sessions/open', can('room.operate'), attachShift, async (req, res) => {
@@ -164,6 +210,135 @@ r.post('/sessions/open', can('room.operate'), attachShift, async (req, res) => {
   await refreshRoomStatuses(settings);
   emitSync(['rooms', 'orders', 'reservations']);
   res.json(session);
+});
+
+const tenderSchema = z.object({
+  method: z.enum(['CASH', 'QR', 'TRANSFER', 'CARD', 'OTHER']),
+  amount: z.coerce.number().positive(),
+  received: z.coerce.number().min(0).optional().nullable(),
+  reference: z.string().max(200).optional().nullable(),
+  verificationToken: z.string().optional().nullable(),
+  slipUrl: z.string().max(500).optional().nullable(),
+});
+
+/** Prepay mode: collect the room charge, then start the clock. Idempotent — a double click / retry never charges twice. */
+r.post('/sessions/:id/prepay', can('room.operate'), requireShift, idempotent('prepay'), async (req, res) => {
+  const b = parse(z.object({ payments: z.array(tenderSchema).min(1) }), req.body);
+  const settings = await getSettings();
+  const out = await tx(async (c) => {
+    const s = await loadSession(c, req.params.id, true);
+    if (s.prepay_key && s.prepay_key === req.idempotencyKey) return { session: s, replay: true };
+    if (s.status !== 'PENDING_PAYMENT') throw conflict('ห้องนี้ชำระค่าห้องแล้ว หรือไม่ได้อยู่ในสถานะรอชำระค่าห้อง', 'NOT_PENDING_PAYMENT');
+    const due = await prepayDue(c, s, settings);
+    const tenders = b.payments.map((t) => ({ ...t, amount: round2(t.amount), received: t.received != null ? round2(t.received) : null }));
+    for (const t of tenders) {
+      if (settings.payment.methods?.[t.method] === false) throw badRequest(`ช่องทาง ${t.method} ถูกปิดใช้งาน`);
+      if (['QR', 'TRANSFER'].includes(t.method)) {
+        const v = t.verificationToken ? verifyToken(t.verificationToken) : null;
+        if (!v || v.typ !== 'slip' || Number(v.orderId) !== Number(s.order_id) || round2(v.amount) < t.amount) throw badRequest('กรุณาตรวจสอบสลิปก่อนยืนยันการชำระเงิน', 'SLIP_NOT_VERIFIED');
+        if (v.mode === 'DEMO' && (await paymentMode()) === 'PRODUCTION') throw badRequest('Production Mode ต้องตรวจสลิปจากผู้ให้บริการจริงหรือพนักงานยืนยัน');
+        t.reference = t.reference || v.ref;
+      }
+      if (t.method === 'CASH' && t.received != null && t.received + 0.001 < t.amount) throw badRequest('เงินสดที่รับน้อยกว่ายอดชำระ');
+    }
+    const sum = round2(tenders.reduce((a, t) => a + t.amount, 0));
+    // the whole room charge must be paid before the room starts (no partial prepay, no overpay except cash change)
+    if (Math.abs(sum - due.amount) > 0.009) throw badRequest(`ยอดชำระค่าห้องต้องเท่ากับ ${due.amount} บาท (ส่งมา ${sum} บาท)`, 'PREPAY_AMOUNT_MISMATCH', { due: due.amount });
+    let i = 0;
+    const deposits = [];
+    for (const t of tenders) {
+      const change = t.method === 'CASH' && t.received != null ? round2(t.received - t.amount) : 0;
+      deposits.push(
+        (
+          await c.query(
+            `INSERT INTO deposits(deposit_no, session_id, reservation_id, member_id, customer_name, phone, amount, method, slip_url, verification_status, status, received_by, shift_id, source, note, reference, cash_received, change_amount, idempotency_key)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'VERIFIED','RECEIVED',$10,$11,'PREPAY','ชำระค่าห้องล่วงหน้า',$12,$13,$14,$15) RETURNING *`,
+            [await nextDepositNo(c), s.id, s.reservation_id, s.member_id, s.customer_name, s.phone, t.amount, t.method, t.slipUrl || null, req.employee.id, req.shiftId, t.reference || null, t.method === 'CASH' ? t.received ?? t.amount : null, change, `prepay:${s.id}:${req.idempotencyKey}:${i++}`],
+          )
+        ).rows[0],
+      );
+    }
+    const session = await startPrepaidSession(c, req, s, settings, { amount: sum, key: req.idempotencyKey });
+    await logActivity(c, req, 'ROOM_PREPAY', 'room_session', s.id, { amount: sum, payments: tenders.map((t) => ({ method: t.method, amount: t.amount, reference: t.reference || null })) });
+    return { session, deposits, change: round2(deposits.reduce((a, d) => a + Number(d.change_amount || 0), 0)) };
+  });
+  await refreshRoomStatuses(settings);
+  emitSync(['rooms', 'orders', 'reservations', 'deposits']);
+  res.json(out);
+});
+
+/** Prepay mode: give up before paying → the held room is released (nothing was charged, the empty bill is voided). */
+r.post('/sessions/:id/cancel-pending', can('room.operate'), async (req, res) => {
+  const { reason } = parse(z.object({ reason: z.string().max(300).default('ยกเลิกก่อนชำระค่าห้อง') }), req.body || {});
+  const settings = await getSettings();
+  await tx(async (c) => {
+    const s = await loadSession(c, req.params.id, true);
+    if (s.status !== 'PENDING_PAYMENT') throw conflict('ยกเลิกได้เฉพาะห้องที่ยังรอชำระค่าห้อง');
+    await c.query(`UPDATE room_sessions SET status = 'CANCELLED', ended_at = now(), cancel_reason = $2, updated_at = now() WHERE id = $1`, [s.id, reason]);
+    if (s.order_id) await c.query(`UPDATE orders SET status = 'VOID', voided_at = now(), voided_by = $2, void_reason = $3 WHERE id = $1 AND status = 'OPEN'`, [s.order_id, req.employee.id, reason]);
+    if (s.reservation_id) await c.query(`UPDATE reservations SET status = 'ARRIVED', session_id = NULL, updated_at = now() WHERE id = $1`, [s.reservation_id]);
+    await c.query(`INSERT INTO room_time_adjustments(session_id, type, reason, employee_id) VALUES ($1,'CANCEL',$2,$3)`, [s.id, reason, req.employee.id]);
+    await logActivity(c, req, 'ROOM_CANCEL_PENDING', 'room_session', s.id, { reason });
+  });
+  await refreshRoomStatuses(settings);
+  emitSync(['rooms', 'orders', 'reservations']);
+  res.json({ ok: true });
+});
+
+/** Amount still owed on the room bill (room + extensions + items + other charges − everything already paid). */
+async function outstandingOf(c, s, settings, nowMs = Date.now()) {
+  const bundle = await computeOrder(c, s.order_id, settings, { nowMs });
+  const calc = bundle.calc;
+  const prepaid = round2(bundle.deposits.filter((d) => d.source === 'PREPAY').reduce((a, d) => a + Number(d.amount) - Number(d.refunded_amount), 0));
+  const otherHeld = round2(bundle.deposits.filter((d) => d.source !== 'PREPAY').reduce((a, d) => a + Number(d.amount) - Number(d.refunded_amount), 0));
+  const room = (await c.query('SELECT r.name, r.number, rt.name AS type_name FROM rooms r JOIN room_types rt ON rt.id = r.room_type_id WHERE r.id = $1', [s.room_id])).rows[0];
+  return {
+    session: { id: s.id, status: s.status, sessionNo: s.session_no, paymentMode: s.payment_mode },
+    orderId: s.order_id,
+    room: { name: room?.name, number: room?.number, type: room?.type_name },
+    lines: calc.lines.filter((l) => !l.voided).map((l) => ({ type: l.type, name: l.name, qty: l.qty, unitPrice: l.unitPrice, gross: l.gross, discount: l.discount, net: l.net })),
+    discounts: calc.discounts,
+    totals: { grossTotal: calc.grossTotal, lineDiscountTotal: calc.lineDiscountTotal, discountTotal: calc.discountTotal, serviceCharge: calc.serviceCharge, vat: calc.vat, rounding: calc.rounding, grandTotal: calc.grandTotal },
+    tax: calc.tax,
+    paid: { prepaid, deposits: otherHeld, applied: calc.depositApplied },
+    outstanding: round2(Math.max(0, calc.netTotal)),
+    refundable: calc.depositRefundable || 0,
+    pendingPrepayments: bundle.pendingPrepayments || [],
+  };
+}
+
+r.get('/sessions/:id/outstanding', async (req, res) => {
+  const settings = await getSettings();
+  const s = await loadSession(pool, req.params.id);
+  if (!s.order_id) throw notFound('ไม่พบบิลของห้องนี้');
+  res.json(await outstandingOf(pool, s, settings));
+});
+
+/**
+ * "ปิดห้อง": the server re-checks what is still owed. Something due → 409 with the full breakdown (nothing changes, the room stays as it is).
+ * Nothing due → the clock stops, the bill is closed with the receipt, the room goes to cleaning. Idempotent.
+ */
+r.post('/sessions/:id/checkout', can('room.operate'), requireShift, idempotent('checkout'), async (req, res) => {
+  const settings = await getSettings();
+  const out = await tx(async (c) => {
+    const s = await loadSession(c, req.params.id, true);
+    if (s.status === 'PAID') {
+      const rc = (await c.query('SELECT * FROM receipts WHERE order_id = $1', [s.order_id])).rows[0];
+      return { receipt: rc, alreadyPaid: true };
+    }
+    if (s.status === 'PENDING_PAYMENT') throw conflict('ห้องนี้ยังไม่ได้ชำระค่าห้อง', 'NOT_PREPAID');
+    if (!['ACTIVE', 'PAUSED', 'CLOSED', 'SCHEDULED'].includes(s.status)) throw conflict('ไม่สามารถปิดห้องได้');
+    const nowMs = Date.now();
+    const o = await outstandingOf(c, s, settings, nowMs);
+    if (o.pendingPrepayments.length) throw conflict('มีการชำระเงินจากในห้องที่ยังไม่ได้ตรวจสลิป กรุณาตรวจสอบก่อนปิดห้อง', 'PENDING_PREPAYMENT', o);
+    if (o.outstanding > 0) throw conflict('ห้องนี้มียอดค้างชำระ กรุณาเก็บเงินลูกค้าเพิ่มเติมก่อนปิดห้อง', 'OUTSTANDING_BALANCE', o);
+    const paid = await payOrder(c, req, settings, s.order_id, { payments: [], idempotencyKey: `checkout:${req.idempotencyKey}` });
+    await logActivity(c, req, 'ROOM_CHECKOUT', 'room_session', s.id, { receiptNo: paid.receipt.receipt_no, outstanding: 0 });
+    return { receipt: paid.receipt, change: 0 };
+  });
+  await refreshRoomStatuses(settings);
+  emitSync(['orders', 'rooms', 'reservations', 'members', 'dashboard', 'products', 'deposits']);
+  res.json(out);
 });
 
 r.get('/sessions/:id', async (req, res) => {

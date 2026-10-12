@@ -44,9 +44,16 @@ r.put('/settings/store', can('settings.manage'), async (req, res) => {
   res.json(await getSettings());
 });
 
+const isBadPaymentMode = (v) => v && v.paymentMode !== undefined && !['PREPAY', 'POSTPAY'].includes(v.paymentMode);
+
 r.put('/settings/:section', can('settings.manage'), async (req, res) => {
   const section = req.params.section;
   if (!(section in DEFAULT_SETTINGS)) throw notFound('ไม่พบหมวดการตั้งค่า');
+  // documents have their own validated endpoint (plan feature "receipt settings")
+  if (section === 'documents') throw badRequest('กรุณาบันทึกผ่านหน้าออกแบบเอกสาร');
+  const sectionFeature = { memberSignup: 'members', booking: 'booking', calendar: 'booking', receipt: 'receipt_settings' }[section];
+  if (sectionFeature && !hasFeature(req.subscription, sectionFeature)) throw forbidden('แพ็กเกจปัจจุบันไม่รวมฟังก์ชันนี้ กรุณาอัปเกรดแพ็กเกจ');
+  if (section === 'room' && isBadPaymentMode(req.body)) throw badRequest('โหมดการชำระค่าห้องไม่ถูกต้อง');
   const value = req.body || {};
   if (section === 'tax') {
     const t = parse(

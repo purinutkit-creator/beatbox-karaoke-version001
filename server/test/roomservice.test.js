@@ -45,6 +45,8 @@ before(async () => {
   token = r.body.token;
   deviceId = (await api('POST', '/devices/register', { name: 'POS-RS', deviceKey: 'test-device-key-rs' })).body.id;
   await api('POST', '/shifts/open', { deviceId, openingCash: 500 });
+  const room = (await api('GET', '/settings')).body.room;
+  await api('PUT', '/settings/room', { ...room, paymentMode: 'POSTPAY' });
 });
 
 after(async () => {

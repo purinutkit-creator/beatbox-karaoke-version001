@@ -33,6 +33,8 @@ export function errorHandler(err, req, res, _next) {
     if (c.includes('sku')) msg = 'รหัสสินค้านี้ถูกใช้แล้ว';
     return res.status(409).json({ error: msg, code: 'DUPLICATE', constraint: c });
   }
+  // foreign key / cross-store reference (an id that does not exist in this store)
+  if (err?.code === '23503') return res.status(400).json({ error: 'ข้อมูลอ้างอิงไม่ถูกต้อง หรือไม่ใช่ข้อมูลของร้านนี้', code: 'INVALID_REFERENCE' });
   if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'ข้อมูลมีขนาดใหญ่เกินไป' });
   if (err?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'ไฟล์มีขนาดใหญ่เกินไป' });
   console.error('[error]', req.method, req.originalUrl, err);

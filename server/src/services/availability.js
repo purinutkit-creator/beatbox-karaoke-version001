@@ -3,7 +3,7 @@ import { RESERVATION_BLOCKING } from '@beatbox/shared/constants.js';
 import { conflict } from '../lib/errors.js';
 import { emitSync } from '../lib/realtime.js';
 
-const ACTIVE_SESSION = ['SCHEDULED', 'ACTIVE', 'PAUSED', 'CLOSED'];
+const ACTIVE_SESSION = ['PENDING_PAYMENT', 'SCHEDULED', 'ACTIVE', 'PAUSED', 'CLOSED'];
 
 /** Release online holds whose timer elapsed (also enforced inside every booking transaction). */
 export async function expireStaleHolds(client) {

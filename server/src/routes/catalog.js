@@ -125,7 +125,7 @@ r.put('/rooms/:id', can('room.edit'), async (req, res) => {
 });
 
 r.delete('/rooms/:id', can('room.edit'), async (req, res) => {
-  const active = await one(`SELECT id FROM room_sessions WHERE room_id = $1 AND status IN ('ACTIVE','PAUSED','CLOSED','SCHEDULED')`, [req.params.id]);
+  const active = await one(`SELECT id FROM room_sessions WHERE room_id = $1 AND status IN ('PENDING_PAYMENT','ACTIVE','PAUSED','CLOSED','SCHEDULED')`, [req.params.id]);
   if (active) throw conflict('ห้องนี้กำลังใช้งานอยู่');
   await pool.query(`UPDATE rooms SET deleted_at = now(), is_active = false, status = 'DISABLED' WHERE id = $1`, [req.params.id]);
   await logActivity(null, req, 'ROOM_DELETE', 'room', req.params.id);

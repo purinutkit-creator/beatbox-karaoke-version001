@@ -22,7 +22,8 @@ export function sessionCharges(session, settings, nowMs = Date.now()) {
 
 /** Status shown on the room card (server is the authority, clients only render). */
 export function deriveRoomStatus(room, session, nextReservation, settings, nowMs = Date.now()) {
-  if (session && ['ACTIVE', 'PAUSED', 'CLOSED', 'SCHEDULED'].includes(session.status)) {
+  if (session && ['PENDING_PAYMENT', 'ACTIVE', 'PAUSED', 'CLOSED', 'SCHEDULED'].includes(session.status)) {
+    if (session.status === 'PENDING_PAYMENT') return 'PENDING_PAYMENT';
     if (session.status === 'SCHEDULED') return 'RESERVED';
     if (session.status === 'CLOSED') return 'TIME_UP';
     const t = sessionTiming(session, nowMs);
@@ -51,7 +52,7 @@ export async function getRoomBoard(settings, { branchId = null } = {}) {
       [branchId],
     )
   ).rows;
-  const sessions = (await pool.query(`${SESSION_SELECT} WHERE rs.status IN ('SCHEDULED','ACTIVE','PAUSED','CLOSED')`)).rows;
+  const sessions = (await pool.query(`${SESSION_SELECT} WHERE rs.status IN ('PENDING_PAYMENT','SCHEDULED','ACTIVE','PAUSED','CLOSED')`)).rows;
   const reservations = (
     await pool.query(
       `SELECT DISTINCT ON (room_id) id, booking_no, room_id, customer_name, phone, start_at, end_at, status, guest_count, deposit_paid

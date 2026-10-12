@@ -1,6 +1,7 @@
 import { pool, currentStoreId } from '../db/index.js';
 import { config } from '../config.js';
 import { getIntegrations } from './integrations.js';
+import { DEFAULT_ROUTING } from '@beatbox/shared/documents.js';
 
 export const DEFAULT_SETTINGS = {
   appearance: {
@@ -56,6 +57,8 @@ export const DEFAULT_SETTINGS = {
     methods: { CASH: true, QR: true, TRANSFER: true, CARD: true, CREDIT: false, OTHER: true },
   },
   room: {
+    // PREPAY = pay the room charge before entering (the clock starts after payment); POSTPAY = enter first, pay when closing
+    paymentMode: 'PREPAY',
     extraGuestFee: 50,
     maxExtraGuests: 10, // how many people above the room capacity may book / open (0 = not allowed)
     includedMics: 2,
@@ -138,6 +141,23 @@ export const DEFAULT_SETTINGS = {
     autoAcceptSeconds: 60, // if the cashier hasn't checked the slip within this time the customer sees "paid" (cashier must still verify)
     issueOptions: ['ไมค์ไม่มีเสียง / ไมค์เสีย', 'เครื่องเสียง / ลำโพงมีปัญหา', 'จอ / ระบบคาราโอเกะมีปัญหา', 'แอร์ร้อนหรือเย็นเกินไป', 'ขอแก้ว / น้ำแข็งเพิ่ม', 'ต้องการเพิ่มเวลา'],
     issueSoundUrl: '',
+  },
+  // printed documents: per document type layout (element font / size / bold / alignment / spacing / order) + routing to printers
+  documents: {
+    layouts: {}, // { [docType]: { order: [elementKey], elements: { [elementKey]: { show, size, bold, align, font, spaceBefore, spaceAfter, text, qrSize } } } }
+    routing: DEFAULT_ROUTING, // { [docType]: { printerId, copies, cut, auto } }
+    autoPrintReceipt: true,
+  },
+  // member self sign-up (QR at the end of receipts without a member)
+  memberSignup: {
+    enabled: true,
+    printOnReceipt: true,
+    passwordNote: 'สำหรับการสมัครสมาชิกครั้งแรก รหัสผ่านเริ่มต้นคือเลข 4 ตัวท้ายของเบอร์โทรศัพท์ และสามารถเปลี่ยนรหัสผ่านได้หลังเข้าสู่ระบบ',
+    extraFields: [], // [{ key, label, type: 'text' | 'date' | 'select' | 'email', required, options: [] }]
+  },
+  calendar: {
+    orientation: 'TIME_X', // TIME_X = time horizontal / rooms vertical; TIME_Y = time vertical / rooms horizontal
+    nowLine: { enabled: true, color: '#ef4444', glow: true, speed: 2 }, // speed = seconds per glow cycle
   },
   security: {
     sessionIdleMinutes: 30,
@@ -262,6 +282,7 @@ export function publicSettings(s) {
     room: { extraGuestFee: s.room.extraGuestFee, maxExtraGuests: s.room.maxExtraGuests, includedMics: s.room.includedMics, extraMicFee: s.room.extraMicFee, maxExtraMics: s.room.maxExtraMics, partialRule: s.room.partialRule, graceMinutes: s.room.graceMinutes },
     queue: { prefix: s.queue.prefix },
     receipt: { slogan: s.receipt.slogan, thankYou: s.receipt.thankYou },
+    memberSignup: { enabled: s.memberSignup.enabled, passwordNote: s.memberSignup.passwordNote, extraFields: s.memberSignup.extraFields },
     runtime: { paymentMode: s.runtime.paymentMode, lineLoginEnabled: s.runtime.lineLoginEnabled },
   };
 }

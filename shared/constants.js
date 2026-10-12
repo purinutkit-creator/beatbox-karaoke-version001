@@ -4,6 +4,7 @@ export const ROOM_STATUS = {
   AVAILABLE: 'AVAILABLE',
   RESERVED: 'RESERVED',
   WAITING: 'WAITING',
+  PENDING_PAYMENT: 'PENDING_PAYMENT',
   IN_USE: 'IN_USE',
   NEAR_END: 'NEAR_END',
   TIME_UP: 'TIME_UP',
@@ -16,6 +17,7 @@ export const ROOM_STATUS_LABEL = {
   AVAILABLE: 'ห้องว่าง',
   RESERVED: 'จองแล้ว',
   WAITING: 'รอลูกค้า',
+  PENDING_PAYMENT: 'รอชำระค่าห้อง',
   IN_USE: 'กำลังใช้งาน',
   NEAR_END: 'ใกล้หมดเวลา',
   TIME_UP: 'หมดเวลาแล้ว',
@@ -28,6 +30,7 @@ export const ROOM_STATUS_COLOR = {
   AVAILABLE: '#16a34a',
   RESERVED: '#2563eb',
   WAITING: '#7c3aed',
+  PENDING_PAYMENT: '#ca8a04',
   IN_USE: '#db2777',
   NEAR_END: '#f97316',
   TIME_UP: '#dc2626',
@@ -37,6 +40,7 @@ export const ROOM_STATUS_COLOR = {
 };
 
 export const SESSION_STATUS = {
+  PENDING_PAYMENT: 'PENDING_PAYMENT', // prepay mode: room held, clock not running until the room charge is paid
   ACTIVE: 'ACTIVE',
   PAUSED: 'PAUSED',
   CLOSED: 'CLOSED', // time stopped, waiting for payment

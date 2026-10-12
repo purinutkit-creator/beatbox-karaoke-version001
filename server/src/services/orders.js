@@ -9,6 +9,7 @@ import { moveStock } from './stock.js';
 import { addPointTx, evaluateTier } from './points.js';
 import { readApproval, verifyToken } from '../lib/auth.js';
 import { paymentMode } from '../providers/slip.js';
+import { getSubscription, hasFeature } from './subscription.js';
 
 export async function createOrder(client, { sessionId = null, reservationId = null, memberId = null, customerName = null, phone = null, employeeId, deviceId = null, shiftId = null, branchId = null, clientOpId = null }) {
   if (clientOpId) {
@@ -377,17 +378,25 @@ export async function payOrder(client, req, settings, orderId, { payments, idemp
   }
 
   const employee = req.employee;
-  const snapshot = buildReceiptSnapshot({ settings, order: { ...lockRow, queue_no: queueNo, paid_at: now }, calc, session, member, payments: paymentRows, receiptNo, queueNo, employee, pointsEarned, pointsBalance, change, excessDeposit: excess });
+  const signupAllowed = !member && settings.memberSignup?.enabled !== false && settings.memberSignup?.printOnReceipt !== false && hasFeature(await getSubscription(), 'members');
+  const snapshot = buildReceiptSnapshot({ settings, order: { ...lockRow, queue_no: queueNo, paid_at: now }, calc, session, member, payments: paymentRows, receiptNo, queueNo, employee, pointsEarned, pointsBalance, change, excessDeposit: excess, deposits: bundle.deposits, signupAllowed });
   const rc = await client.query(`INSERT INTO receipts(receipt_no, order_id, queue_no, snapshot, employee_id) VALUES ($1,$2,$3,$4,$5) RETURNING *`, [receiptNo, orderId, queueNo, snapshot, employee.id]);
   return { receipt: rc.rows[0], payments: paymentRows, calc, change, pointsEarned };
 }
 
-export function buildReceiptSnapshot({ settings, order, calc, session, member, payments, receiptNo, queueNo, employee, pointsEarned, pointsBalance, change, excessDeposit = 0 }) {
+export function buildReceiptSnapshot({ settings, order, calc, session, member, payments, receiptNo, queueNo, employee, pointsEarned, pointsBalance, change, excessDeposit = 0, deposits = [], signupAllowed = false }) {
   const s = settings.store;
+  const held = (d) => round2(Number(d.amount) - Number(d.refunded_amount || 0));
+  const prepaid = deposits.filter((d) => d.source === 'PREPAY');
+  const otherDeposits = deposits.filter((d) => d.source !== 'PREPAY');
+  const paidNow = round2(payments.reduce((a, p) => a + Number(p.amount), 0));
   return {
+    version: 2,
     receiptNo,
     queueNo,
     orderNo: order.order_no,
+    sessionNo: session?.session_no || null,
+    timezone: s.timezone || 'Asia/Bangkok',
     issuedAt: order.paid_at || new Date(),
     store: { name: s.name, branchName: s.branchName, address: s.address, phone: s.phone, taxId: s.taxId, logoUrl: s.logoUrl },
     slogan: settings.receipt.slogan || s.slogan,
@@ -412,6 +421,9 @@ export function buildReceiptSnapshot({ settings, order, calc, session, member, p
           capacity: session.room_capacity,
           startedAt: session.started_at,
           endedAt: session.ended_at || new Date(),
+          scheduledEndAt: session.scheduled_end_at,
+          openedBy: session.opened_by_name || null,
+          paymentMode: session.payment_mode || 'POSTPAY',
           packageName: session.package_name,
           billedMinutes: calc.lines.filter((l) => ['ROOM', 'PACKAGE', 'EXTENSION', 'OVERTIME'].includes(l.type)).reduce((a, l) => a + Number(l.minutes || 0), 0),
         }
@@ -435,7 +447,22 @@ export function buildReceiptSnapshot({ settings, order, calc, session, member, p
       excessDeposit,
     },
     tax: calc.tax,
-    payments: payments.map((p) => ({ method: p.method, amount: Number(p.amount), received: Number(p.received ?? p.amount), reference: p.reference })),
+    payments: payments.map((p) => ({ method: p.method, amount: Number(p.amount), received: Number(p.received ?? p.amount), change: Number(p.change_amount || 0), reference: p.reference, no: p.payment_no })),
+    // money received before this payment and deducted from the bill (never charged twice)
+    prepayments: prepaid.map((d) => ({ no: d.deposit_no, method: d.method, amount: held(d), received: d.cash_received != null ? Number(d.cash_received) : null, change: Number(d.change_amount || 0), reference: d.reference || null, at: d.received_at })),
+    deposits: otherDeposits.map((d) => ({ no: d.deposit_no, method: d.method, amount: held(d), source: d.source, at: d.received_at })),
+    settlement: {
+      prepaid: round2(prepaid.reduce((a, d) => a + held(d), 0)),
+      deposits: round2(otherDeposits.reduce((a, d) => a + held(d), 0)),
+      paidAtClose: paidNow,
+      cashReceived: round2(payments.filter((p) => p.method === 'CASH').reduce((a, p) => a + Number(p.received ?? p.amount), 0)),
+      change: round2(change || 0),
+      outstanding: 0,
+      fullyPaid: true,
+    },
+    member: member ? { code: member.member_code, name: `${member.first_name} ${member.last_name || ''}`.trim(), phone: member.phone, tier: member.tier_name || null } : null,
+    // member sign-up QR: only when the bill has no member; the link carries only the store (no password / personal data)
+    memberSignup: signupAllowed ? { path: `/book/signup?store=${encodeURIComponent(s.slug || '')}`, note: settings.memberSignup?.passwordNote || '' } : null,
     points: member ? { earned: pointsEarned, balance: pointsBalance, used: calc.pointsUsed || 0 } : null,
   };
 }

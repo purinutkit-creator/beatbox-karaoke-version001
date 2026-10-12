@@ -29,18 +29,48 @@ const schema = z.object({
   isDefault: z.boolean().default(false),
   isActive: z.boolean().default(true),
   deviceId: z.coerce.number().int().optional().nullable(),
+  // real paper geometry (fixes receipts printing too small): paper width, printable width, margins, font scale
+  printableWidthMm: z.coerce.number().min(20).max(210).optional().nullable(),
+  marginLeftMm: z.coerce.number().min(0).max(20).default(0),
+  marginRightMm: z.coerce.number().min(0).max(20).default(0),
+  marginTopMm: z.coerce.number().min(0).max(30).default(0),
+  marginBottomMm: z.coerce.number().min(0).max(30).default(3),
+  fontScale: z.coerce.number().min(0.5).max(3).default(1),
+  // DRIVER = OS driver (real text with the store's font); ESCPOS_TEXT = printer's own built-in fonts (needs explicit acceptance)
+  renderMode: z.enum(['DRIVER', 'ESCPOS_TEXT']).default('DRIVER'),
+  allowPrinterFont: z.boolean().default(false),
+  escposCodepage: z.coerce.number().int().min(0).max(255).optional().nullable(),
+  charsPerLine: z.coerce.number().int().min(16).max(80).optional().nullable(),
+  model: z.string().max(100).optional().nullable(),
 });
-const cols = (b) => [b.name, b.connection, b.address, b.port, b.station, b.paperWidth, b.density, b.speed, b.marginMm, b.copies, b.autoPrint, b.autoCut, b.openDrawer, b.isDefault, b.isActive, b.deviceId ?? null];
+const cols = (b) => [
+  b.name, b.connection, b.address, b.port, b.station, b.paperWidth, b.density, b.speed, b.marginMm, b.copies, b.autoPrint, b.autoCut, b.openDrawer, b.isDefault, b.isActive, b.deviceId ?? null,
+  b.printableWidthMm ?? null, b.marginLeftMm, b.marginRightMm, b.marginTopMm, b.marginBottomMm, b.fontScale, b.renderMode, b.allowPrinterFont, b.escposCodepage ?? null, b.charsPerLine ?? null, b.model || null,
+];
+
+/** A raw (USB / Bluetooth / Serial / Network) connection can only send ESC/POS commands → printer fonts only. */
+function checkRoute(b) {
+  if (b.paperWidth < 30 || b.paperWidth > 210) throw badRequest('ความกว้างกระดาษต้องอยู่ระหว่าง 30–210 มม.');
+  if (b.printableWidthMm && b.printableWidthMm > b.paperWidth) throw badRequest('พื้นที่พิมพ์ต้องไม่กว้างกว่ากระดาษ');
+  if (b.connection !== 'BROWSER' && b.renderMode === 'DRIVER') {
+    throw badRequest('การเชื่อมต่อแบบ USB / Bluetooth / Serial / Network ตรง ส่งได้เฉพาะคำสั่ง ESC/POS ซึ่งใช้ฟอนต์ในเครื่องพิมพ์เท่านั้น จึงพิมพ์ฟอนต์ที่ตั้งไว้ไม่ได้หากไม่แปลงเป็นภาพ — ให้ติดตั้งไดรเวอร์เครื่องพิมพ์ในระบบปฏิบัติการแล้วเลือก "ไดรเวอร์ระบบ (Browser)" หรือเลือกโหมด "ฟอนต์ของเครื่องพิมพ์ (ESC/POS ข้อความ)"', 'PRINT_ROUTE_UNSUPPORTED');
+  }
+  if (b.renderMode === 'ESCPOS_TEXT' && !b.allowPrinterFont) {
+    throw badRequest('โหมด ESC/POS ข้อความจะพิมพ์ด้วยฟอนต์ในเครื่องพิมพ์ ไม่ใช่ฟอนต์ที่ตั้งไว้ กรุณายืนยัน "ยอมรับการใช้ฟอนต์ของเครื่องพิมพ์" ก่อน', 'PRINTER_FONT_NOT_ACCEPTED');
+  }
+}
 
 r.get('/printers', async (_req, res) => res.json(await many('SELECT * FROM printers ORDER BY is_default DESC, id')));
 
 r.post('/printers', can('settings.manage'), async (req, res) => {
   const b = parse(schema, req.body);
   if (b.connection === 'NETWORK' && !b.address) throw badRequest('กรุณาระบุ IP Address');
+  checkRoute(b);
   if (b.isDefault) await pool.query('UPDATE printers SET is_default = false WHERE station = $1', [b.station]);
   const row = await one(
-    `INSERT INTO printers(name, connection, address, port, station, paper_width, density, speed, margin_mm, copies, auto_print, auto_cut, open_drawer, is_default, is_active, device_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+    `INSERT INTO printers(name, connection, address, port, station, paper_width, density, speed, margin_mm, copies, auto_print, auto_cut, open_drawer, is_default, is_active, device_id,
+       printable_width_mm, margin_left_mm, margin_right_mm, margin_top_mm, margin_bottom_mm, font_scale, render_mode, allow_printer_font, escpos_codepage, chars_per_line, model)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) RETURNING *`,
     cols(b),
   );
   await logActivity(null, req, 'PRINTER_CREATE', 'printer', row.id, b);
@@ -50,12 +80,16 @@ r.post('/printers', can('settings.manage'), async (req, res) => {
 
 r.put('/printers/:id', can('settings.manage'), async (req, res) => {
   const b = parse(schema, req.body);
+  checkRoute(b);
   if (b.isDefault) await pool.query('UPDATE printers SET is_default = false WHERE station = $1 AND id <> $2', [b.station, req.params.id]);
   const row = await one(
     `UPDATE printers SET name=$2, connection=$3, address=$4, port=$5, station=$6, paper_width=$7, density=$8, speed=$9, margin_mm=$10, copies=$11,
-       auto_print=$12, auto_cut=$13, open_drawer=$14, is_default=$15, is_active=$16, device_id=$17 WHERE id=$1 RETURNING *`,
+       auto_print=$12, auto_cut=$13, open_drawer=$14, is_default=$15, is_active=$16, device_id=$17,
+       printable_width_mm=$18, margin_left_mm=$19, margin_right_mm=$20, margin_top_mm=$21, margin_bottom_mm=$22, font_scale=$23, render_mode=$24,
+       allow_printer_font=$25, escpos_codepage=$26, chars_per_line=$27, model=$28 WHERE id=$1 RETURNING *`,
     [req.params.id, ...cols(b)],
   );
+  if (!row) throw notFound();
   await logActivity(null, req, 'PRINTER_UPDATE', 'printer', req.params.id, b);
   emitSync('printers');
   res.json(row);
@@ -125,41 +159,85 @@ r.post('/printers/discover', can('settings.manage'), async (req, res) => {
   res.json({ subnet: base, port, printers: found.map((ip) => ({ name: `Network Printer ${ip}`, connection: 'NETWORK', address: ip, port })) });
 });
 
-/** Send raw ESC/POS bytes (base64) to a network printer — the browser renders the receipt (Kanit) to a raster image. */
+/**
+ * Send ESC/POS *text* bytes (base64, built by the browser from the document: printer-resident fonts, native QR command)
+ * to a network printer. Nothing is rasterized here; the job row is the one the browser queue created.
+ */
 r.post('/printers/:id/raw', async (req, res) => {
-  const { data, jobType, reference, isCopy } = parse(z.object({ data: z.string().min(1), jobType: z.string().default('RECEIPT'), reference: z.string().optional().nullable(), isCopy: z.boolean().default(false) }), req.body);
+  const { data, jobId } = parse(z.object({ data: z.string().min(1), jobId: z.coerce.number().int().optional().nullable() }), req.body);
   const p = await one('SELECT * FROM printers WHERE id = $1', [req.params.id]);
   if (!p) throw notFound();
   if (p.connection !== 'NETWORK') throw badRequest('เครื่องพิมพ์นี้ไม่ใช่ Network Printer');
-  const job = await one(`INSERT INTO print_jobs(printer_id, job_type, reference, is_copy, status, employee_id) VALUES ($1,$2,$3,$4,'PRINTING',$5) RETURNING id`, [p.id, jobType, reference, isCopy, req.employee.id]);
+  if (p.render_mode !== 'ESCPOS_TEXT' || !p.allow_printer_font) throw badRequest('เครื่องพิมพ์นี้ยังไม่ได้เปิดโหมดฟอนต์ของเครื่องพิมพ์ (ESC/POS ข้อความ)', 'PRINT_ROUTE_UNSUPPORTED');
   try {
     await tcpSend(p.address, p.port, Buffer.from(data, 'base64'));
-    await pool.query(`UPDATE print_jobs SET status = 'PRINTED', printed_at = now() WHERE id = $1`, [job.id]);
     await pool.query(`UPDATE printers SET status = 'ONLINE', last_seen_at = now() WHERE id = $1`, [p.id]);
-    res.json({ ok: true, jobId: job.id });
+    res.json({ ok: true, jobId: jobId || null });
   } catch (e) {
-    await pool.query(`UPDATE print_jobs SET status = 'FAILED', error = $2 WHERE id = $1`, [job.id, e.message]);
     await pool.query(`UPDATE printers SET status = 'OFFLINE' WHERE id = $1`, [p.id]);
     await notify({ type: 'PRINTER_OFFLINE', level: 'error', title: 'Printer Offline', message: `${p.name}: ${e.message}`, dedupeKey: `printer-offline:${p.id}:${Math.floor(Date.now() / 600000)}` });
-    res.status(502).json({ error: e.message, code: 'PRINTER_OFFLINE', jobId: job.id });
+    res.status(502).json({ error: e.message, code: 'PRINTER_OFFLINE', jobId: jobId || null });
   }
 });
 
 r.get('/print-jobs', async (req, res) => {
-  res.json(await many(`SELECT pj.*, p.name AS printer_name, e.name AS employee_name FROM print_jobs pj LEFT JOIN printers p ON p.id = pj.printer_id LEFT JOIN employees e ON e.id = pj.employee_id WHERE ($1::text IS NULL OR pj.status = $1) ORDER BY pj.id DESC LIMIT 200`, [req.query.status || null]));
+  const rows = await many(
+    `SELECT pj.id, pj.printer_id, pj.job_type, pj.doc_type, pj.reference, pj.is_copy, pj.status, pj.error, pj.copies, pj.attempts, pj.reprint_of, pj.source,
+            pj.created_at, pj.printed_at, pj.updated_at, pj.client_job_id, p.name AS printer_name, e.name AS employee_name,
+            CASE WHEN $2 THEN pj.payload END AS payload
+     FROM print_jobs pj LEFT JOIN printers p ON p.id = pj.printer_id LEFT JOIN employees e ON e.id = pj.employee_id
+     WHERE ($1::text IS NULL OR pj.status = ANY(string_to_array($1, ','))) ORDER BY pj.id DESC LIMIT 200`,
+    [req.query.status || null, req.query.payload === '1' || req.query.status === 'QUEUED'],
+  );
+  res.json(rows);
 });
 
+const jobSchema = z.object({
+  clientJobId: z.string().max(120).optional().nullable(),
+  printerId: z.coerce.number().int().optional().nullable(),
+  jobType: z.string().max(40).optional(),
+  docType: z.string().max(40).optional().nullable(),
+  reference: z.string().max(120).optional().nullable(),
+  isCopy: z.boolean().default(false),
+  copies: z.coerce.number().int().min(1).max(10).default(1),
+  status: z.enum(['PRINTED', 'FAILED', 'QUEUED', 'PRINTING']).default('PRINTING'),
+  error: z.string().max(1000).optional().nullable(),
+  payload: z.any().optional(),
+  reprintOf: z.coerce.number().int().optional().nullable(),
+});
+
+/** Record a print job (the browser queue prints jobs one by one, in order). clientJobId makes it idempotent (no duplicates). */
 r.post('/print-jobs', async (req, res) => {
-  const b = parse(z.object({ printerId: z.coerce.number().int().optional().nullable(), jobType: z.string(), reference: z.string().optional().nullable(), isCopy: z.boolean().default(false), status: z.enum(['PRINTED', 'FAILED', 'QUEUED']).default('PRINTED'), error: z.string().optional().nullable(), payload: z.any().optional() }), req.body);
-  const row = await one(
-    `INSERT INTO print_jobs(printer_id, job_type, reference, is_copy, status, error, payload, employee_id, printed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8, CASE WHEN $5 = 'PRINTED' THEN now() END) RETURNING *`,
-    [b.printerId || null, b.jobType, b.reference, b.isCopy, b.status, b.error, b.payload ?? null, req.employee.id],
-  );
-  if (b.status === 'FAILED' && b.printerId) {
-    await pool.query(`UPDATE printers SET status = 'OFFLINE' WHERE id = $1`, [b.printerId]);
-    await notify({ type: 'PRINTER_OFFLINE', level: 'error', title: 'Printer Offline', message: b.error || 'พิมพ์ไม่สำเร็จ', dedupeKey: `printer-offline:${b.printerId}:${Math.floor(Date.now() / 600000)}` });
+  const b = parse(jobSchema, req.body);
+  if (b.clientJobId) {
+    const ex = await one('SELECT * FROM print_jobs WHERE client_job_id = $1', [b.clientJobId]);
+    if (ex) return res.json({ ...ex, duplicate: true });
   }
+  const row = await one(
+    `INSERT INTO print_jobs(printer_id, job_type, doc_type, reference, is_copy, copies, status, error, payload, employee_id, device_id, client_job_id, reprint_of, attempts, printed_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, CASE WHEN $7 IN ('PRINTING','PRINTED','FAILED') THEN 1 ELSE 0 END, CASE WHEN $7 = 'PRINTED' THEN now() END)
+     ON CONFLICT (store_id, client_job_id) WHERE client_job_id IS NOT NULL DO UPDATE SET updated_at = now() RETURNING *`,
+    [b.printerId || null, b.jobType || b.docType || 'DOCUMENT', b.docType || null, b.reference, b.isCopy, b.copies, b.status, b.error, b.payload ?? null, req.employee.id, req.deviceId || null, b.clientJobId || null, b.reprintOf || null],
+  );
+  if (b.status === 'FAILED') await printerFailed(b.printerId, b.error);
+  emitSync('print-jobs');
   res.json(row);
+});
+
+async function printerFailed(printerId, error) {
+  if (!printerId) return;
+  await pool.query(`UPDATE printers SET status = 'OFFLINE' WHERE id = $1`, [printerId]);
+  await notify({ type: 'PRINTER_OFFLINE', level: 'error', title: 'พิมพ์ไม่สำเร็จ', message: error || 'พิมพ์ไม่สำเร็จ', dedupeKey: `printer-offline:${printerId}:${Math.floor(Date.now() / 600000)}` });
+}
+
+/** Reprint: the same document data again, marked "สำเนา". Never creates a bill, a payment or a room opening. */
+r.post('/print-jobs/:id/reprint', async (req, res) => {
+  const job = await one('SELECT * FROM print_jobs WHERE id = $1', [req.params.id]);
+  if (!job) throw notFound();
+  if (!job.payload) throw badRequest('งานพิมพ์นี้ไม่มีข้อมูลเอกสารให้พิมพ์ซ้ำ');
+  if ((job.doc_type || job.job_type) === 'RECEIPT' && !req.permissions.has('receipt.reprint')) throw badRequest('คุณไม่มีสิทธิ์พิมพ์ใบเสร็จซ้ำ', 'FORBIDDEN');
+  await logActivity(null, req, 'PRINT_REPRINT', 'print_job', job.id, { docType: job.doc_type, reference: job.reference });
+  res.json({ id: job.id, docType: job.doc_type || job.job_type, reference: job.reference, payload: job.payload, printerId: job.printer_id, copies: job.copies });
 });
 
 /** A POS device claims a server-queued job (e.g. kitchen ticket of an in-room QR order) so it prints exactly once. */
@@ -170,8 +248,15 @@ r.post('/print-jobs/:id/claim', async (req, res) => {
 });
 
 r.patch('/print-jobs/:id', async (req, res) => {
-  const b = parse(z.object({ status: z.enum(['PRINTED', 'FAILED', 'CANCELLED']), error: z.string().optional().nullable() }), req.body);
-  const row = await one(`UPDATE print_jobs SET status = $2, error = $3, printed_at = CASE WHEN $2 = 'PRINTED' THEN now() ELSE printed_at END WHERE id = $1 RETURNING *`, [req.params.id, b.status, b.error || null]);
+  const b = parse(z.object({ status: z.enum(['PRINTING', 'PRINTED', 'FAILED', 'CANCELLED']), error: z.string().max(1000).optional().nullable(), printerId: z.coerce.number().int().optional().nullable() }), req.body);
+  const row = await one(
+    `UPDATE print_jobs SET status = $2, error = $3, printer_id = COALESCE($4, printer_id), attempts = attempts + CASE WHEN $2 = 'PRINTING' THEN 1 ELSE 0 END,
+       printed_at = CASE WHEN $2 = 'PRINTED' THEN now() ELSE printed_at END, updated_at = now() WHERE id = $1 RETURNING *`,
+    [req.params.id, b.status, b.error || null, b.printerId || null],
+  );
+  if (!row) throw notFound();
+  if (b.status === 'FAILED') await printerFailed(row.printer_id, b.error);
+  if (b.status === 'PRINTED' && row.printer_id) await pool.query(`UPDATE printers SET status = 'ONLINE', last_seen_at = now() WHERE id = $1`, [row.printer_id]);
   emitSync('print-jobs');
   res.json(row);
 });

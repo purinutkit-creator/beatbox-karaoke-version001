@@ -17,8 +17,11 @@ export async function shiftSummary(client, shift) {
   const q = async (sql, params = [id]) => (await client.query(sql, params)).rows;
   const pay = await q(`SELECT method, SUM(amount) AS amount, COUNT(*) AS n FROM payments WHERE shift_id = $1 AND purpose = 'SALE' AND status IN ('PAID','PARTIALLY_REFUNDED','REFUNDED') GROUP BY method`);
   const byMethod = Object.fromEntries(pay.map((p) => [p.method, Number(p.amount)]));
-  const dep = await q(`SELECT method, SUM(amount) AS amount, COUNT(*) AS n FROM deposits WHERE shift_id = $1 AND verification_status = 'VERIFIED' GROUP BY method`);
-  const depByMethod = Object.fromEntries(dep.map((p) => [p.method, Number(p.amount)]));
+  const depRows = await q(`SELECT method, source = 'PREPAY' AS prepay, SUM(amount) AS amount, COUNT(*) AS n FROM deposits WHERE shift_id = $1 AND verification_status = 'VERIFIED' GROUP BY method, source = 'PREPAY'`);
+  const sumBy = (rows) => rows.reduce((m, p) => ({ ...m, [p.method]: round2((m[p.method] || 0) + Number(p.amount)) }), {});
+  const depByMethod = sumBy(depRows); // all money held (deposits + prepaid room charges) — used for the cash drawer
+  const bookingDepByMethod = sumBy(depRows.filter((p) => !p.prepay));
+  const prepayByMethod = sumBy(depRows.filter((p) => p.prepay));
   const depRef = await q(`SELECT refund_type, SUM(amount) AS amount, COUNT(*) AS n FROM deposit_refunds WHERE shift_id = $1 GROUP BY refund_type`);
   const depRefByType = Object.fromEntries(depRef.map((p) => [p.refund_type, Number(p.amount)]));
   const refunds = await q(`SELECT rf.*, o.order_no FROM refunds rf JOIN orders o ON o.id = rf.order_id WHERE rf.shift_id = $1 AND rf.status = 'COMPLETED' ORDER BY rf.id`);
@@ -50,8 +53,10 @@ export async function shiftSummary(client, shift) {
     cardSales: byMethod.CARD || 0,
     otherSales: round2((byMethod.OTHER || 0) + (byMethod.CREDIT || 0)),
     salesByMethod: byMethod,
-    depositsReceived: round2(Object.values(depByMethod).reduce((s, v) => s + v, 0)),
-    depositsByMethod: depByMethod,
+    depositsReceived: round2(Object.values(bookingDepByMethod).reduce((s, v) => s + v, 0)),
+    depositsByMethod: bookingDepByMethod,
+    prepaidReceived: round2(Object.values(prepayByMethod).reduce((s, v) => s + v, 0)),
+    prepaidByMethod: prepayByMethod,
     depositsRefunded: round2(Object.values(depRefByType).reduce((s, v) => s + v, 0)),
     refundsTotal: round2(refunds.reduce((s, x) => s + Number(x.amount), 0)),
     discountTotal: Number(orders.discount_total),

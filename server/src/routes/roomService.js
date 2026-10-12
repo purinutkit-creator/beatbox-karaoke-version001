@@ -299,20 +299,32 @@ staff.post('/room-issues/:id/:action', can('room.operate'), async (req, res) => 
   res.json(row);
 });
 
-/** Data for the room tickets printed when a room opens (store copy + customer copy with the ordering QR). */
+/** Data for the room tickets (customer + staff copy) and time-adjustment slips — always computed from the real session. */
 staff.get('/sessions/:id/ticket', async (req, res) => {
   const s = await one(
-    `SELECT rs.*, rm.name AS room_name, rm.number AS room_number, rt.name AS type_name, e.name AS opened_by_name FROM room_sessions rs JOIN rooms rm ON rm.id = rs.room_id
-     JOIN room_types rt ON rt.id = rs.room_type_id LEFT JOIN employees e ON e.id = rs.opened_by WHERE rs.id = $1`,
+    `SELECT rs.*, rm.name AS room_name, rm.number AS room_number, rt.name AS type_name, e.name AS opened_by_name, o.order_no
+     FROM room_sessions rs JOIN rooms rm ON rm.id = rs.room_id JOIN room_types rt ON rt.id = rs.room_type_id
+     LEFT JOIN employees e ON e.id = rs.opened_by LEFT JOIN orders o ON o.id = rs.order_id WHERE rs.id = $1`,
     [req.params.id],
   );
   if (!s) throw notFound();
   const settings = await getSettings();
   const t = sessionTiming(s);
   const minutes = Number(s.package_minutes) + Number(s.booked_minutes) + Number(s.extension_minutes);
+  const adjustments = await many(
+    `SELECT a.id, a.type, a.minutes, a.before, a.after, a.reason, a.created_at, e.name AS employee_name FROM room_time_adjustments a
+     LEFT JOIN employees e ON e.id = a.employee_id WHERE a.session_id = $1 AND a.type IN ('EXTEND','ADJUST','PREPAID_START','MOVE') ORDER BY a.id`,
+    [s.id],
+  );
   res.json({
-    store: { name: settings.store.name, branchName: settings.store.branchName, phone: settings.store.phone, logoUrl: settings.store.logoUrl },
+    store: { name: settings.store.name, branchName: settings.store.branchName, address: settings.store.address, phone: settings.store.phone, taxId: settings.store.taxId, logoUrl: settings.store.logoUrl },
+    timezone: settings.store.timezone || 'Asia/Bangkok',
+    sessionId: s.id,
     sessionNo: s.session_no,
+    refNo: s.order_no || s.session_no,
+    status: s.status,
+    paymentMode: s.payment_mode,
+    prepaidAmount: Number(s.prepaid_amount || 0),
     room: s.room_name,
     roomNumber: s.room_number,
     type: s.type_name,
@@ -324,7 +336,9 @@ staff.get('/sessions/:id/ticket', async (req, res) => {
     startAt: s.started_at,
     endAt: new Date(t.endMs),
     minutes,
+    extensionMinutes: Number(s.extension_minutes),
     employee: s.opened_by_name,
+    adjustments: adjustments.map((a) => ({ id: a.id, type: a.type, minutes: a.minutes, before: a.before, after: a.after, reason: a.reason, at: a.created_at, employee: a.employee_name })),
     orderToken: LIVE_SESSION.includes(s.status) ? s.order_token : null,
     ticket: settings.roomTicket,
     roomServiceEnabled: settings.roomService.enabled !== false,
