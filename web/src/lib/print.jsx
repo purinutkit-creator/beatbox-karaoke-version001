@@ -18,6 +18,7 @@ import { translate } from './i18n.jsx';
 import { buildDoc } from './docs.js';
 import { textLines, encodeLines, DRAWER_KICK } from './escpos.js';
 import { DocView } from '../components/DocView.jsx';
+import { loadFont } from './fonts.js';
 
 const t = (s, v) => translate(s, v);
 
@@ -77,6 +78,7 @@ export async function ensureFonts(families) {
   const missing = [];
   for (const f of [...new Set(families.filter(Boolean))]) {
     if (fontOk.get(f)) continue;
+    loadFont(f); // imported fonts used only inside a document layout are registered here
     try {
       const faces = await Promise.race([document.fonts.load(`16px "${f}"`, 'กขคABC123'), new Promise((r) => setTimeout(() => r(null), 8000))]);
       const ok = Array.isArray(faces) && faces.some((x) => x.status === 'loaded');

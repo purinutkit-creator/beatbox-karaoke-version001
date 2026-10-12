@@ -25,6 +25,12 @@ export const PRESET_FONTS = [
 ];
 
 const loaded = new Set();
+// the store's imported fonts (set from the appearance settings) — so a font chosen anywhere (e.g. one element of a
+// document layout) can be registered on demand, not only the four fonts of the appearance page
+let registry = [];
+export function setCustomFonts(list) {
+  registry = Array.isArray(list) ? list : [];
+}
 
 function addLink(href, id) {
   if (document.getElementById(id)) return;
@@ -48,10 +54,13 @@ function addStyle(css, id) {
 const slug = (s) => String(s).replace(/[^a-z0-9]+/gi, '-').toLowerCase();
 
 /** Load a font family (custom import → local system font → Google Fonts). */
-export function loadFont(family, customFonts = []) {
-  if (!family || loaded.has(family)) return;
-  loaded.add(family);
-  const customs = customFonts.filter((f) => f.family === family);
+export function loadFont(family, customFonts = registry) {
+  if (!family) return;
+  const customs = (customFonts.length ? customFonts : registry).filter((f) => f.family === family);
+  // an imported font is registered even if the family was requested earlier before the settings were known
+  const key = customs.length ? `custom:${family}:${customs.map((f) => f.url).join('|')}` : family;
+  if (loaded.has(key)) return;
+  loaded.add(key);
   if (customs.length) {
     const css = customs
       .filter((f) => f.format !== 'css')
@@ -81,6 +90,7 @@ const q = (f) => `'${String(f).replace(/'/g, '')}'`;
 /** Apply website + receipt fonts for the current language. */
 export function applyAppearance(appearance = {}, lang = 'th') {
   const a = { thFont: 'Sarabun', enFont: 'Poppins', receiptThFont: 'Kanit', receiptEnFont: 'Kanit', customFonts: [], ...appearance };
+  setCustomFonts(a.customFonts);
   [a.thFont, a.enFont, a.receiptThFont, a.receiptEnFont].forEach((f) => loadFont(f, a.customFonts));
   const root = document.documentElement.style;
   root.setProperty('--font-th', q(a.thFont));

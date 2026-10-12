@@ -1,6 +1,7 @@
 // Renders a built document as real HTML text (preview and OS-driver printing). QR codes are vector SVG paths
 // (or a pixel-exact image when the document is drawn for a direct USB / network printer).
 import QRCodeLib from 'qrcode';
+import { loadFont } from '../lib/fonts.js';
 
 /** QR drawn module-by-module on a canvas — synchronous, so it is ready before the page is captured. */
 export function QrImg({ value, sizeMm = 30 }) {
@@ -84,6 +85,7 @@ export function DocView({ sections, geometry, qrAsImage = false }) {
     <div className="doc" style={{ width: `${g.paperMm}mm`, padding: `${g.mt}mm ${g.mr}mm ${g.mb}mm ${g.ml}mm` }}>
       {sections.map((sec, i) => {
         const s = sec.style || {};
+        if (s.font) loadFont(s.font); // idempotent: registers an imported font the first time a document uses it
         return (
           <div
             key={`${sec.key}-${i}`}
