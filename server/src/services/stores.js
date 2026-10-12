@@ -30,7 +30,7 @@ async function uniqueSlug(c, name) {
 
 export async function emailTaken(email) {
   return runAsPlatform(async () => {
-    const e = (await pool.query(`SELECT 1 FROM employees WHERE lower(email) = lower($1) AND deleted_at IS NULL UNION SELECT 1 FROM stores WHERE lower(owner_email) = lower($1)`, [email])).rows[0];
+    const e = (await pool.query(`SELECT 1 FROM employees WHERE lower(email) = lower($1) AND deleted_at IS NULL UNION SELECT 1 FROM stores WHERE lower(owner_email) = lower($1) UNION SELECT 1 FROM platform_users WHERE lower(email) = lower($1)`, [email])).rows[0];
     return !!e;
   });
 }

@@ -8,6 +8,7 @@ import { unauthorized, forbidden } from '../lib/errors.js';
 import { logActivity } from '../lib/activity.js';
 import { z, parse } from '../lib/validate.js';
 import { getSettings } from '../services/settings.js';
+import { findPlatformUser, platformSignIn } from '../services/platformAuth.js';
 
 const r = Router();
 
@@ -70,7 +71,11 @@ r.post('/login', async (req, res) => {
 r.post('/owner-login', async (req, res) => {
   const b = parse(z.object({ email: z.string().trim().min(3).max(200), password: z.string().min(1).max(200), deviceId: z.coerce.number().int().optional().nullable() }), req.body);
   const found = await runAsPlatform(() => one(`SELECT id, store_id FROM employees WHERE lower(email) = lower($1) AND deleted_at IS NULL AND password_hash IS NOT NULL`, [b.email]));
-  if (!found) throw unauthorized('อีเมลหรือรหัสผ่านไม่ถูกต้อง');
+  if (!found) {
+    // the Super Admin's e-mail typed on the store login page → sign in to the central console instead
+    if (await findPlatformUser(b.email)) return res.json({ platform: true, ...(await platformSignIn(b.email, b.password)) });
+    throw unauthorized('อีเมลหรือรหัสผ่านไม่ถูกต้อง');
+  }
   setContextStore(found.store_id);
   const e = await one(`SELECT e.*, r.code AS role FROM employees e JOIN roles r ON r.id = e.role_id WHERE e.id = $1`, [found.id]);
   if (e.locked_until && new Date(e.locked_until) > new Date()) throw unauthorized(`เข้าสู่ระบบผิดหลายครั้ง กรุณารอ ${Math.ceil((new Date(e.locked_until) - Date.now()) / 60000)} นาที`);

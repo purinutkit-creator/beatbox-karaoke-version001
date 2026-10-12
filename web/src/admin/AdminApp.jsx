@@ -112,8 +112,8 @@ function Login() {
     setErr('');
     sessionStorage.removeItem('bb_logout_reason');
     try {
-      await fn();
-      nav('/admin/rooms', { replace: true });
+      const r = await fn();
+      if (!r?.platform) nav('/admin/rooms', { replace: true });
     } catch (e) {
       setErr(e.message);
       setPin('');

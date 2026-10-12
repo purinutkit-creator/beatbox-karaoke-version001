@@ -138,7 +138,17 @@ export function AuthProvider({ children }) {
     return r;
   };
   const login = async (pin) => applyLogin(await api.post('/auth/login', { pin, deviceId: LS.get('bb_device_id') }, { auth: false }));
-  const loginOwner = async (email, password) => applyLogin(await api.post('/auth/owner-login', { email, password, deviceId: LS.get('bb_device_id') }, { auth: false }));
+  const loginOwner = async (email, password) => {
+    const r = await api.post('/auth/owner-login', { email, password, deviceId: LS.get('bb_device_id') }, { auth: false });
+    if (r.platform) {
+      // Super Admin e-mail → central console
+      LS.set('bb_platform_token', r.token);
+      LS.set('bb_platform_user', r.user);
+      window.location.assign('/platform');
+      return r;
+    }
+    return applyLogin(r);
+  };
 
   // subscription: re-read on push from the server (renewed / suspended / plan changed) or when an API call says it expired
   const refreshSubscription = useCallback(async () => {

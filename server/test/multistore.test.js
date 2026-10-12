@@ -11,6 +11,7 @@ process.env.PAYMENT_MODE = 'DEMO';
 process.env.PORT = '4997';
 process.env.SUPER_OWNER_USERNAME = 'purinut kittikunapong';
 process.env.SUPER_OWNER_PASSWORD = '188452PP';
+process.env.SUPER_OWNER_EMAIL = 'purinut.kit@gmail.com';
 
 let server;
 let base;
@@ -104,6 +105,19 @@ test('stores are isolated: data, ids, URLs and headers cannot cross stores', asy
 test('Super Owner: account from server config, 4 plans with editable price / features / limits', async () => {
   const bad = await api('POST', '/platform/login', { username: 'purinut kittikunapong', password: 'wrong' });
   assert.equal(bad.status, 401);
+  // the Super Admin also signs in with the e-mail (here, and on the store login page), no OTP
+  const byEmail = await api('POST', '/platform/login', { username: 'Purinut.Kit@gmail.com', password: '188452PP' });
+  assert.equal(byEmail.status, 200);
+  assert.equal(byEmail.body.user.email, 'purinut.kit@gmail.com');
+  const viaStoreLogin = await api('POST', '/auth/owner-login', { email: 'purinut.kit@gmail.com', password: '188452PP' });
+  assert.equal(viaStoreLogin.status, 200);
+  assert.equal(viaStoreLogin.body.platform, true);
+  assert.ok(viaStoreLogin.body.token);
+  assert.ok(!JSON.stringify(viaStoreLogin.body).includes('188452PP'));
+  assert.equal((await api('POST', '/auth/owner-login', { email: 'purinut.kit@gmail.com', password: 'nope' })).status, 401);
+  // nobody can register a store with the Super Admin's e-mail
+  const taken = await api('POST', '/platform/register', { storeName: 'ปลอม', ownerFirstName: 'ก', ownerLastName: 'ข', email: 'purinut.kit@gmail.com', phone: '0811112222', password: 'password1', confirmPassword: 'password1', planId: 1 });
+  assert.equal(taken.status, 409);
   const r = await api('POST', '/platform/login', { username: 'purinut kittikunapong', password: '188452PP' });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.user.role, 'SUPER_OWNER');

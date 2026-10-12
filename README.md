@@ -157,6 +157,7 @@ Nothing to run by hand: on start the server applies the new migrations in order,
 | `004_multistore.sql` | `store_id` on every business table (existing rows → store #1), per-store unique numbers, **PostgreSQL row-level security** (FORCE) so every query only sees the current store |
 | `005_platform.sql` | Super Owner accounts, 4 plans (features + limits), store subscriptions + history, renewal requests. Existing stores get the top plan, active, no expiry |
 | `006_payments_members_printing.sql` | Prepay room status (`PENDING_PAYMENT`), prepaid room charge on the bill, member password fields, printer paper/print-area settings, print-job queue fields, and **database triggers that refuse any reference to another store's row** |
+| `007_platform_email.sql` | E-mail sign-in for the Super Owner (Super Admin) account |
 
 Back up first (Render: Database → Backups, or `pg_dump`). The server connects with a non-superuser role so RLS always applies
 (locally it switches to the restricted role `beatbox_app` automatically).
@@ -167,8 +168,10 @@ Back up first (Render: Database → Backups, or `pg_dump`). The server connects 
   another store's data (tested). API responses never include password/PIN hashes.
 
 ### Super Owner
-* Created on start from `SUPER_OWNER_USERNAME` / `SUPER_OWNER_PASSWORD` (server environment only, bcrypt-hashed, never sent to the browser
-  or returned by the API). The login name is free text (no e-mail format, no OTP). Change the password in `/platform` → บัญชีของฉัน
+* Created on start from `SUPER_OWNER_USERNAME` and/or `SUPER_OWNER_EMAIL` + `SUPER_OWNER_PASSWORD` (server environment only,
+  bcrypt-hashed, never sent to the browser or returned by the API). Sign in with the **e-mail or the login name** (free text, no OTP) at
+  `/platform`, or with the e-mail on the normal `/login` page (เจ้าของร้าน (อีเมล)), which opens the central console. The Super Admin's
+  e-mail cannot be used to register a store. Adding `SUPER_OWNER_EMAIL` later adds the e-mail to the existing account without touching the password. Change the password in `/platform` → บัญชีของฉัน
   (other sessions are signed out). Changing the environment variable later does **not** overwrite an existing account.
 * `/platform`: all stores (search, status, plan, expiry, time left, counts), add / edit stores, trial (days **or** end date-time),
   add trial days, renew (billing periods or end date), change plan, set expiry, suspend (reason required) / activate, full history with

@@ -10,6 +10,7 @@ import { logActivity } from '../lib/activity.js';
 import { createStore, changeSubscription, addPeriod } from '../services/stores.js';
 import { getSubscription, invalidateSubscription, publicSubscription } from '../services/subscription.js';
 import { issueEmployeeSession } from './auth.js';
+import { platformSignIn } from '../services/platformAuth.js';
 import { PLAN_FEATURES, PLAN_LIMITS } from '@beatbox/shared/plans.js';
 import { emitStaff } from '../lib/realtime.js';
 import { clearStoreCache } from '../lib/tenant.js';
@@ -81,17 +82,8 @@ r.post('/register', rateLimit({ windowMs: 60 * 60000, limit: 10, message: { erro
 // ───────────── Super Owner auth ─────────────
 r.post('/login', rateLimit({ windowMs: 5 * 60000, limit: 20, message: { error: 'พยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอ 5 นาที' } }), async (req, res) => {
   const b = parse(z.object({ username: z.string().trim().min(1).max(200), password: z.string().min(1).max(200) }), req.body);
-  const u = await one('SELECT * FROM platform_users WHERE lower(username) = lower($1)', [b.username]);
-  if (!u || !u.is_active) throw unauthorized('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
-  if (u.locked_until && new Date(u.locked_until) > new Date()) throw unauthorized(`เข้าสู่ระบบผิดหลายครั้ง กรุณารอ ${Math.ceil((new Date(u.locked_until) - Date.now()) / 60000)} นาที`);
-  if (!(await bcrypt.compare(b.password, u.password_hash))) {
-    const n = Number(u.failed_attempts) + 1;
-    await pool.query(`UPDATE platform_users SET failed_attempts = $2, locked_until = CASE WHEN $3 THEN now() + interval '15 minutes' ELSE locked_until END WHERE id = $1`, [u.id, n >= 5 ? 0 : n, n >= 5]);
-    throw unauthorized(n >= 5 ? 'เข้าสู่ระบบผิดเกิน 5 ครั้ง ระบบพักการเข้าสู่ระบบ 15 นาที' : 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
-  }
-  const s = await one('INSERT INTO platform_sessions(platform_user_id) VALUES ($1) RETURNING id', [u.id]);
-  await pool.query('UPDATE platform_users SET failed_attempts = 0, locked_until = NULL, last_login_at = now() WHERE id = $1', [u.id]);
-  res.json({ token: signToken({ typ: 'platform', psid: s.id, pid: u.id }, '12h'), user: { id: u.id, username: u.username, displayName: u.display_name, role: u.role } });
+  // login name or e-mail (no e-mail format required, no OTP)
+  res.json(await platformSignIn(b.username, b.password));
 });
 
 async function requirePlatform(req, _res, next) {
@@ -103,7 +95,7 @@ async function requirePlatform(req, _res, next) {
     [p.psid],
   );
   if (!u) throw unauthorized('กรุณาเข้าสู่ระบบผู้ดูแลระบบ');
-  req.platformUser = { id: u.id, username: u.username, displayName: u.display_name || u.username, role: u.role };
+  req.platformUser = { id: u.id, username: u.username, email: u.email || null, displayName: u.display_name || u.username, role: u.role };
   req.platformSessionId = p.psid;
   pool.query('UPDATE platform_sessions SET last_active_at = now() WHERE id = $1', [p.psid]).catch(() => {});
   next();

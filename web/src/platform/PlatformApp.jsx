@@ -48,7 +48,7 @@ function PlatformLogin({ onDone }) {
         <h2 className="center" style={{ margin: 0 }}>Super Owner</h2>
         <p className="muted center small">{t('ศูนย์จัดการร้านค้าทั้งหมด')}</p>
         {/* the login name is free text (no e-mail format check) */}
-        <Field label="ชื่อเข้าสู่ระบบ"><Input autoComplete="username" value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} required /></Field>
+        <Field label="อีเมลหรือชื่อเข้าสู่ระบบ"><Input autoComplete="username" value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} required /></Field>
         <Field label="รหัสผ่าน"><Input type="password" autoComplete="current-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required /></Field>
         {err && <div style={{ color: 'var(--danger)' }}>{t(err)}</div>}
         <Button type="submit" variant="primary" loading={busy} icon={LogIn}>{t('เข้าสู่ระบบ')}</Button>
@@ -477,6 +477,7 @@ function AccountTab({ user }) {
   return (
     <form className="card col" style={{ maxWidth: 480 }} onSubmit={save}>
       <div><span className="muted small">{t('ชื่อเข้าสู่ระบบ')}</span><div className="bold">{user?.username}</div></div>
+      {user?.email && <div><span className="muted small">{t('อีเมล')}</span><div className="bold">{user.email}</div></div>}
       <Field label="รหัสผ่านปัจจุบัน"><Input type="password" autoComplete="current-password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} required /></Field>
       <Field label="รหัสผ่านใหม่ (อย่างน้อย 8 ตัวอักษร)"><Input type="password" autoComplete="new-password" minLength={8} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required /></Field>
       <Field label="ยืนยันรหัสผ่านใหม่"><Input type="password" autoComplete="new-password" minLength={8} value={f.confirm} onChange={(e) => setF({ ...f, confirm: e.target.value })} required /></Field>

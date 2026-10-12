@@ -64,15 +64,27 @@ export async function seedStoreData(c, { storeId, branchName = 'สาขาห�
 }
 
 /** Super Owner account from server configuration (env), stored as a bcrypt hash. Never overwrites an existing password. */
+/**
+ * Super Owner (Super Admin) from server config: SUPER_OWNER_USERNAME and/or SUPER_OWNER_EMAIL + SUPER_OWNER_PASSWORD.
+ * Created once with a bcrypt hash. An existing account is never overwritten (its password is changed in /platform);
+ * an e-mail is only added when the account has none yet.
+ */
 export async function ensureSuperOwner() {
-  const username = process.env.SUPER_OWNER_USERNAME;
+  const email = (process.env.SUPER_OWNER_EMAIL || '').trim().toLowerCase() || null;
+  const username = (process.env.SUPER_OWNER_USERNAME || '').trim() || email;
   const password = process.env.SUPER_OWNER_PASSWORD;
   if (!username || !password) return null;
   return runAsPlatform(async () => {
-    const ex = (await pool.query('SELECT id FROM platform_users WHERE lower(username) = lower($1)', [username])).rows[0];
-    if (ex) return ex.id;
-    const r = (await pool.query(`INSERT INTO platform_users(username, display_name, password_hash, role) VALUES ($1,$1,$2,'SUPER_OWNER') RETURNING id`, [username.trim(), await bcrypt.hash(password, 12)])).rows[0];
-    console.log(`[seed] Super Owner account "${username}" created`);
+    const ex = (await pool.query('SELECT id, email FROM platform_users WHERE lower(username) = lower($1) OR ($2::text IS NOT NULL AND lower(email) = $2)', [username, email])).rows[0];
+    if (ex) {
+      if (email && !ex.email) {
+        await pool.query('UPDATE platform_users SET email = $2 WHERE id = $1', [ex.id, email]);
+        console.log(`[seed] Super Owner e-mail ${email} added to the existing account`);
+      }
+      return ex.id;
+    }
+    const r = (await pool.query(`INSERT INTO platform_users(username, email, display_name, password_hash, role) VALUES ($1,$2,$1,$3,'SUPER_OWNER') RETURNING id`, [username, email, await bcrypt.hash(password, 12)])).rows[0];
+    console.log(`[seed] Super Owner account "${username}"${email ? ` (${email})` : ''} created`);
     return r.id;
   });
 }

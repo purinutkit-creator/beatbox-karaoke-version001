@@ -2292,4 +2292,5 @@ export const EN = {
 "จำนวนพนักงานสูงสุด": "Max staff",
 "จำนวนเครื่อง POS สูงสุด": "Max POS devices",
 "1 ปี 2 เดือน 3 วัน 4 ชม. 5 นาที": "1 y 2 mo 3 d 4 h 5 min",
+"อีเมลหรือชื่อเข้าสู่ระบบ": "E-mail or login name",
 };
