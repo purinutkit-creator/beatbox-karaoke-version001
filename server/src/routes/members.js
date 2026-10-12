@@ -15,6 +15,8 @@ r.use(requireAuth);
 
 export const MEMBER_SELECT = `
   SELECT m.*, t.name AS tier_name, t.color AS tier_color, t.point_multiplier,
+         (m.password_hash IS NULL) AS password_is_default,
+         (SELECT e.name FROM employees e WHERE e.id = m.password_reset_by) AS password_reset_by_name,
          EXISTS (SELECT 1 FROM line_connections lc WHERE lc.member_id = m.id AND lc.status = 'CONNECTED') AS line_connected,
          (SELECT rm.name FROM room_sessions rs JOIN rooms rm ON rm.id = rs.room_id WHERE rs.member_id = m.id GROUP BY rm.name ORDER BY COUNT(*) DESC LIMIT 1) AS favorite_room
   FROM members m LEFT JOIN member_tiers t ON t.id = m.tier_id`;
@@ -110,6 +112,27 @@ r.put('/members/:id', can('member.edit'), async (req, res) => {
   });
   emitSync('members');
   res.json(row);
+});
+
+/**
+ * Reset a member's password back to the default (last 4 digits of the phone). Staff never see or set the member's own
+ * password; the member must change it at the next login. Who and when is kept on the member and in the activity log.
+ */
+r.post('/members/:id/reset-password', can('member.edit'), async (req, res) => {
+  const { reason } = parse(z.object({ reason: z.string().max(300).optional().nullable() }), req.body || {});
+  const m = await tx(async (c) => {
+    const row = (await c.query(
+      `UPDATE members SET password_hash = NULL, must_change_password = true, password_reset_at = now(), password_reset_by = $2, login_failed_attempts = 0, login_locked_until = NULL, updated_at = now()
+       WHERE id = $1 AND deleted_at IS NULL RETURNING id, member_code, first_name, phone`,
+      [req.params.id, req.employee.id],
+    )).rows[0];
+    if (!row) throw notFound('ไม่พบสมาชิก');
+    await c.query('UPDATE member_sessions SET revoked_at = now() WHERE member_id = $1 AND revoked_at IS NULL', [row.id]);
+    await logActivity(c, req, 'MEMBER_PASSWORD_RESET', 'member', row.id, { memberCode: row.member_code, reason: reason || null });
+    return row;
+  });
+  emitSync('members');
+  res.json({ ok: true, memberCode: m.member_code, message: 'รีเซ็ตเป็นรหัสผ่านเริ่มต้นแล้ว (เลข 4 ตัวท้ายของเบอร์โทรศัพท์) สมาชิกต้องเปลี่ยนรหัสผ่านเมื่อเข้าสู่ระบบครั้งถัดไป' });
 });
 
 r.post('/members/:id/points', can('member.points'), idempotent('points-adjust', { required: false }), async (req, res) => {

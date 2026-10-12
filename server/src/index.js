@@ -39,6 +39,9 @@ import roomServiceRoutes, { publicRoom } from './routes/roomService.js';
 export function createApp() {
   const app = express();
   app.set('trust proxy', 1);
+  // secrets never leave the server, whatever query produced the row (member passwords, staff PIN / password hashes)
+  const SECRET_KEYS = new Set(['password_hash', 'pin_hash', 'pin_lookup', 'code_hash']);
+  app.set('json replacer', (k, v) => (SECRET_KEYS.has(k) ? undefined : v));
   app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(cors({ origin: config.corsOrigins.length ? config.corsOrigins : true, credentials: true }));
   app.use(compression());

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Users, Plus, Pencil, Crown, Coins, Gift, Search } from 'lucide-react';
+import { Users, Plus, Pencil, Crown, Coins, Gift, Search, KeyRound, RotateCcw } from 'lucide-react';
 import { PageHead, Button, Input, Modal, Field, Select, Switch, Textarea, Badge, Tabs, Loading, Empty, Drawer, Img, ImageUrlInput, money, useToast, useDialog, QRCode } from '../../components/ui.jsx';
 import { StatusBadge } from '../../components/ReservationParts.jsx';
 import { useT } from '../../lib/i18n.jsx';
@@ -45,6 +45,46 @@ function MemberForm({ initial, tiers, onClose, onSaved }) {
         <Switch checked={f.marketingConsent} onChange={(v) => set('marketingConsent', v)} label="ยินยอมรับข่าวสารโปรโมชั่น" />
       </div>
     </Modal>
+  );
+}
+
+/** Member login: phone + password. Staff see the status only — never the password — and can reset it to the default. */
+function MemberLoginCard({ m, onDone }) {
+  const { t } = useT();
+  const toast = useToast();
+  const { prompt } = useDialog();
+  const { can } = useAuth();
+  const locked = m.login_locked_until && new Date(m.login_locked_until) > new Date();
+  const reset = async () => {
+    const reason = await prompt({ title: 'รีเซ็ตรหัสผ่านสมาชิก', message: `${t('รีเซ็ตรหัสผ่านของ')} ${m.first_name} (${m.phone}) ${t('กลับเป็นรหัสเริ่มต้น = เลข 4 ตัวท้ายของเบอร์โทรศัพท์ สมาชิกต้องตั้งรหัสใหม่เมื่อเข้าสู่ระบบครั้งถัดไป')}\n${t('ระบุเหตุผล')}`, options: ['ลูกค้าลืมรหัสผ่าน', 'ลูกค้าขอให้รีเซ็ต'] });
+    if (!reason) return;
+    try {
+      const r = await api.post(`/members/${m.id}/reset-password`, { reason });
+      toast.success(r.message);
+      onDone();
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+  return (
+    <div className="card flat">
+      <div className="card-title"><span><KeyRound size={16} /> {t('การเข้าสู่ระบบสมาชิก')}</span>{can('member.edit') && <Button size="sm" icon={RotateCcw} onClick={reset}>{t('รีเซ็ตรหัสผ่าน')}</Button>}</div>
+      <div className="grid grid-2 small">
+        <div><span className="muted">{t('เบอร์โทรที่ใช้เข้าสู่ระบบ')}</span><div className="bold">{m.phone}</div></div>
+        <div>
+          <span className="muted">{t('สถานะรหัสผ่าน')}</span>
+          <div>
+            {m.password_is_default ? <Badge color="#f97316">{t('ยังเป็นรหัสผ่านเริ่มต้น')}</Badge> : <Badge color="#16a34a">{t('สมาชิกเปลี่ยนรหัสผ่านแล้ว')}</Badge>}
+            {m.must_change_password && !m.password_is_default && <Badge color="#f97316">{t('ต้องเปลี่ยนเมื่อเข้าสู่ระบบ')}</Badge>}
+            {locked && <Badge color="#dc2626">{t('ถูกพักการเข้าสู่ระบบชั่วคราว')}</Badge>}
+          </div>
+        </div>
+        {m.password_changed_at && <div><span className="muted">{t('เปลี่ยนรหัสผ่านล่าสุด')}</span><div>{fmtDateTime(m.password_changed_at)}</div></div>}
+        {m.password_reset_at && <div><span className="muted">{t('รีเซ็ตล่าสุดโดย')}</span><div>{m.password_reset_by_name || '-'} · {fmtDateTime(m.password_reset_at)}</div></div>}
+        {m.last_login_at && <div><span className="muted">{t('เข้าสู่ระบบล่าสุด')}</span><div>{fmtDateTime(m.last_login_at)}</div></div>}
+      </div>
+      <div className="xs muted mt">{t('รหัสผ่านเริ่มต้นคือเลข 4 ตัวท้ายของเบอร์โทรศัพท์ (เช่น 081-234-0099 → 0099) ระบบเก็บรหัสผ่านแบบเข้ารหัสทางเดียว พนักงานไม่สามารถดูรหัสผ่านของสมาชิกได้ — ใช้ปุ่มรีเซ็ตเมื่อลูกค้าลืมรหัสผ่าน')}</div>
+    </div>
   );
 }
 
@@ -99,6 +139,7 @@ function MemberDrawer({ id, tiers, onClose, onEdit }) {
         <div className="small muted">{t('ห้องที่ใช้บ่อย')}: {m.favorite_room || '-'} · {t('รายการโปรด')}: {m.favorite_items || m.topItems.map((x) => x.name).join(', ') || '-'}</div>
         {m.note && <div className="small">📝 {m.note}</div>}
         {can('member.points') && <div className="row"><Button icon={Coins} onClick={() => setAdj({ points: '', reason: '' })}>{t('เพิ่ม/ลดคะแนน')}</Button></div>}
+        <MemberLoginCard m={m} onDone={reload} />
         <Tabs value={tab} onChange={setTab} tabs={[{ value: 'points', label: 'ประวัติคะแนน' }, { value: 'rewards', label: 'แลกรางวัล' }, { value: 'orders', label: 'ประวัติการใช้บริการ' }, { value: 'bookings', label: 'ประวัติการจอง' }, { value: 'login', label: 'การเชื่อมบัญชี' }]} />
         {tab === 'points' && (
           <div className="table-wrap"><table className="table"><thead><tr><th>{t('วันเวลา')}</th><th>{t('ประเภท')}</th><th className="right">{t('คะแนน')}</th><th className="right">{t('คงเหลือ')}</th><th>{t('รายละเอียด')}</th></tr></thead>

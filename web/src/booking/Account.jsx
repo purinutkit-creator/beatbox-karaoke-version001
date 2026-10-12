@@ -93,24 +93,12 @@ function CancelFlow({ booking, onDone, onClose }) {
   const { t } = useT();
   const toast = useToast();
   const { me } = useMember();
-  const [otp, setOtp] = useState({ sent: false, code: '' });
   const [busy, setBusy] = useState(false);
   const preview = booking.cancelPreview;
-  const needOtp = !me;
-  const send = async () => {
-    try {
-      const r = await api.post('/public/auth/otp/request', { phone: booking.phone, purpose: 'CANCEL' }, { auth: false });
-      setOtp({ sent: true, code: '', debug: r.debugCode });
-    } catch (e) {
-      toast.error(e);
-    }
-  };
   const confirmCancel = async () => {
     setBusy(true);
     try {
-      let otpToken = null;
-      if (needOtp) otpToken = (await api.post('/public/auth/otp/verify', { phone: booking.phone, code: otp.code, purpose: 'CANCEL' }, { auth: false })).otpToken;
-      await api.post(`/public/bookings/${booking.bookingNo}/cancel`, { phone: booking.phone, otpToken }, { member: true });
+      await api.post(`/public/bookings/${booking.bookingNo}/cancel`, { phone: booking.phone }, { member: true });
       toast.success('ยกเลิกการจองเรียบร้อย');
       onDone();
     } catch (e) {
@@ -120,22 +108,17 @@ function CancelFlow({ booking, onDone, onClose }) {
     }
   };
   return (
-    <Modal title={t('ยกเลิกการจอง')} onClose={onClose} footer={<Button variant="danger" loading={busy} disabled={needOtp && !otp.code} onClick={confirmCancel}>{t('ยืนยันยกเลิก')}</Button>}>
+    <Modal title={t('ยกเลิกการจอง')} onClose={onClose} footer={me ? <Button variant="danger" loading={busy} onClick={confirmCancel}>{t('ยืนยันยกเลิก')}</Button> : null}>
       {preview && (
         <div className="card flat">
           {t('ยอดที่จะได้รับคืน')}: <b style={{ fontSize: '1.3rem' }}>฿{money(preview.amount)}</b> ({preview.percent}%)
           <div className="small muted">{t('ยกเลิกล่วงหน้า')} {preview.hoursLeft} {t('ชั่วโมงก่อนเวลาจอง')}</div>
         </div>
       )}
-      {needOtp && (
-        <div className="mt">
-          <p className="small">{t('ยืนยันตัวตนด้วยรหัส OTP ที่ส่งไปยัง')} {booking.phone}</p>
-          {!otp.sent ? <Button onClick={send}>{t('ขอรหัส OTP')}</Button> : (
-            <>
-              <Input value={otp.code} onChange={(e) => setOtp({ ...otp, code: e.target.value })} placeholder="OTP" />
-              {otp.debug && <div className="xs muted">Demo OTP: {otp.debug}</div>}
-            </>
-          )}
+      {!me && (
+        <div className="mt col">
+          <p className="small">{t('กรุณาเข้าสู่ระบบสมาชิกด้วยเบอร์โทรศัพท์ที่ใช้จอง')} ({booking.phone})</p>
+          <Link className="btn primary" to={`/book/login?phone=${encodeURIComponent(booking.phone)}&redirect=${encodeURIComponent(`/book/check`)}`}>{t('เข้าสู่ระบบ / สมัครสมาชิก')}</Link>
         </div>
       )}
     </Modal>
@@ -340,84 +323,155 @@ export function LoginPage() {
   const { login, me } = useMember();
   const { publicSettings } = useApp();
   const redirect = params.get('redirect') || '/book/account';
-  const [phone, setPhone] = useState('');
-  const [otp, setOtp] = useState(null);
-  const [code, setCode] = useState('');
-  const [profile, setProfile] = useState(null);
+  const [phone, setPhone] = useState(params.get('phone') || '');
+  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
   useEffect(() => {
-    if (me) nav(redirect, { replace: true });
+    if (me && !me.mustChangePassword) nav(redirect, { replace: true });
   }, [me]);
-  const request = async () => {
+  const submit = async (e) => {
+    e.preventDefault();
     setBusy(true);
+    setErr('');
     try {
-      setOtp(await api.post('/public/auth/otp/request', { phone, purpose: 'LOGIN' }, { auth: false }));
-    } catch (e) {
-      toast.error(e);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const verify = async () => {
-    setBusy(true);
-    try {
-      const r = await api.post('/public/auth/otp/verify', { phone, code, purpose: 'LOGIN' }, { auth: false });
-      if (r.needProfile) setProfile({ profileToken: r.profileToken, firstName: '', lastName: '', birthday: '' });
-      else {
-        await login(r.token);
-        nav(redirect, { replace: true });
-      }
-    } catch (e) {
-      toast.error(e);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const complete = async () => {
-    try {
-      const r = await api.post('/public/auth/profile', profile, { auth: false });
+      const r = await api.post('/public/auth/login', { phone, password }, { auth: false });
       await login(r.token);
-      nav(redirect, { replace: true });
-    } catch (e) {
-      toast.error(e);
+      if (!r.mustChangePassword) nav(redirect, { replace: true });
+    } catch (er) {
+      setErr(er.message);
+    } finally {
+      setBusy(false);
     }
   };
   return (
     <div className="card" style={{ maxWidth: 440, margin: '0 auto' }}>
-      <h1>{t('สมาชิก')}</h1>
-      <p className="muted">{t('สมัครหรือเข้าสู่ระบบด้วยเบอร์โทรศัพท์ หรือบัญชี LINE — ใช้คะแนนร่วมกับหน้าร้าน')}</p>
+      <h1>{t('เข้าสู่ระบบสมาชิก')}</h1>
+      <p className="muted">{t('ใช้เบอร์โทรศัพท์และรหัสผ่าน — ไม่ต้องใช้รหัส OTP')}</p>
       {params.get('error') && <p style={{ color: 'var(--danger)' }}>{t('เข้าสู่ระบบด้วย LINE ไม่สำเร็จ')}</p>}
-      {profile ? (
-        <div className="col">
-          <h3>{t('สมัครสมาชิกใหม่')}</h3>
-          <Field label="ชื่อ *"><Input value={profile.firstName} onChange={(e) => setProfile({ ...profile, firstName: e.target.value })} /></Field>
-          <Field label="นามสกุล"><Input value={profile.lastName} onChange={(e) => setProfile({ ...profile, lastName: e.target.value })} /></Field>
-          <Field label="วันเกิด"><Input type="date" value={profile.birthday} onChange={(e) => setProfile({ ...profile, birthday: e.target.value })} /></Field>
-          <Button variant="primary" disabled={!profile.firstName} onClick={complete}>{t('สมัครสมาชิก')}</Button>
-        </div>
-      ) : (
-        <div className="col">
-          <Field label="เบอร์โทรศัพท์"><Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08xxxxxxxx" /></Field>
-          {!otp ? (
-            <Button variant="primary" icon={Smartphone} loading={busy} onClick={request} disabled={phone.length < 9}>{t('ขอรหัส OTP')}</Button>
-          ) : (
-            <>
-              <Field label="รหัส OTP 6 หลัก"><Input value={code} onChange={(e) => setCode(e.target.value)} maxLength={6} /></Field>
-              {otp.debugCode && <div className="xs muted">Demo OTP: <b>{otp.debugCode}</b> {t('(ยังไม่ได้เชื่อม SMS Provider)')}</div>}
-              <Button variant="primary" loading={busy} onClick={verify} disabled={code.length < 4}>{t('ยืนยัน')}</Button>
-              <Button variant="ghost" onClick={request}>{t('ขอรหัสใหม่')}</Button>
-            </>
-          )}
-          <div className="divider" />
-          <a className="btn block" style={{ background: '#06c755', color: '#fff' }} href={`/api/public/auth/line/start?redirect=${encodeURIComponent(redirect)}`}><MessageCircle size={18} /> {t('เข้าสู่ระบบด้วย LINE')}</a>
-          {!publicSettings?.runtime?.lineLoginEnabled && <div className="xs muted center">{t('LINE Login ยังไม่ได้ตั้งค่า (โหมดทดสอบ)')}</div>}
-        </div>
-      )}
+      <form className="col" onSubmit={submit}>
+        <Field label="เบอร์โทรศัพท์"><Input type="tel" autoComplete="username" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08xxxxxxxx" required /></Field>
+        <Field label="รหัสผ่าน" hint="สมาชิกใหม่: รหัสผ่านเริ่มต้นคือเลข 4 ตัวท้ายของเบอร์โทรศัพท์"><Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
+        {err && <div style={{ color: 'var(--danger)' }}>{t(err)}</div>}
+        <Button type="submit" variant="primary" icon={Smartphone} loading={busy} disabled={phone.length < 9 || !password}>{t('เข้าสู่ระบบ')}</Button>
+      </form>
+      <div className="center mt small">{t('ยังไม่เป็นสมาชิก?')} <Link to={`/book/signup?redirect=${encodeURIComponent(redirect)}${phone ? `&phone=${encodeURIComponent(phone)}` : ''}`}>{t('สมัครสมาชิก')}</Link></div>
+      <div className="divider" />
+      <a className="btn block" style={{ background: '#06c755', color: '#fff' }} href={`/api/public/auth/line/start?redirect=${encodeURIComponent(redirect)}`}><MessageCircle size={18} /> {t('เข้าสู่ระบบด้วย LINE')}</a>
+      {!publicSettings?.runtime?.lineLoginEnabled && <div className="xs muted center">{t('LINE Login ยังไม่ได้ตั้งค่า (โหมดทดสอบ)')}</div>}
     </div>
   );
 }
 
-/** First LINE login: verify phone by OTP before linking/merging (prevents linking the wrong person). */
+/** Member sign-up for this store (QR at the end of a receipt opens this page). Same phone → log in instead. */
+export function SignupPage() {
+  const { t } = useT();
+  const nav = useNavigate();
+  const [params] = useSearchParams();
+  const { publicSettings } = useApp();
+  const ms = publicSettings?.memberSignup || {};
+  const extraFields = ms.extraFields || [];
+  const link = params.get('link');
+  const [f, setF] = useState({ phone: params.get('phone') || '', firstName: params.get('name') || '', lastName: '', consent: true, extra: {} });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState(null);
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setErr('');
+    try {
+      const r = await api.post('/public/auth/signup', { ...f, linkToken: link || null }, { auth: false });
+      setDone(r);
+    } catch (er) {
+      if (er.code === 'MEMBER_EXISTS') return nav(`/book/login?phone=${encodeURIComponent(f.phone)}&exists=1&redirect=${encodeURIComponent(params.get('redirect') || '/book/account')}`, { replace: true });
+      setErr(er.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (ms.enabled === false) return <div className="card center" style={{ maxWidth: 460, margin: '0 auto' }}>{t('ร้านนี้ปิดการสมัครสมาชิกออนไลน์ กรุณาติดต่อพนักงาน')}</div>;
+  if (done) {
+    return (
+      <div className="card center col" style={{ maxWidth: 460, margin: '0 auto' }}>
+        <CheckCircle2 size={64} color="var(--ok)" />
+        <h2 style={{ margin: 0 }}>{t('สมัครสมาชิกสำเร็จ')}</h2>
+        <div className="card flat" style={{ borderColor: 'var(--ok)' }}>{t(done.message)}</div>
+        {done.memberCode && <div className="small muted">{t('รหัสสมาชิก')}: <b>{done.memberCode}</b></div>}
+        <Link className="btn primary" to={`/book/login?phone=${encodeURIComponent(f.phone)}&redirect=${encodeURIComponent(params.get('redirect') || '/book/account')}`}>{t('เข้าสู่ระบบ')}</Link>
+      </div>
+    );
+  }
+  const setExtra = (k, v) => setF((x) => ({ ...x, extra: { ...x.extra, [k]: v } }));
+  return (
+    <div className="card" style={{ maxWidth: 480, margin: '0 auto' }}>
+      <h1>{t('สมัครสมาชิก')}{publicSettings?.store?.name ? ` · ${publicSettings.store.name}` : ''}</h1>
+      <p className="muted small">{t('สมัครฟรี ไม่ต้องใช้รหัส OTP · รหัสผ่านเริ่มต้นคือเลข 4 ตัวท้ายของเบอร์โทรศัพท์ และเปลี่ยนได้หลังเข้าสู่ระบบ')}</p>
+      <form className="col" onSubmit={submit}>
+        <Field label="เบอร์โทรศัพท์ *"><Input type="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} placeholder="08xxxxxxxx" required /></Field>
+        <div className="grid grid-2">
+          <Field label="ชื่อ *"><Input value={f.firstName} onChange={(e) => setF({ ...f, firstName: e.target.value })} required /></Field>
+          <Field label="นามสกุล *"><Input value={f.lastName} onChange={(e) => setF({ ...f, lastName: e.target.value })} required /></Field>
+        </div>
+        {extraFields.map((x) => (
+          <Field key={x.key} label={`${x.label}${x.required ? ' *' : ''}`}>
+            {x.type === 'select' ? (
+              <select className="input" value={f.extra[x.key] || ''} onChange={(e) => setExtra(x.key, e.target.value)} required={x.required}>
+                <option value="">-</option>
+                {(x.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            ) : (
+              <Input type={x.type === 'date' ? 'date' : x.type === 'email' ? 'email' : 'text'} value={f.extra[x.key] || ''} onChange={(e) => setExtra(x.key, e.target.value)} required={x.required} />
+            )}
+          </Field>
+        ))}
+        <Switch checked={f.consent} onChange={(v) => setF({ ...f, consent: v })} label="รับข่าวสารและโปรโมชั่นจากร้าน" />
+        {err && <div style={{ color: 'var(--danger)' }}>{t(err)}</div>}
+        <Button type="submit" variant="primary" loading={busy}>{t('สมัครสมาชิก')}</Button>
+      </form>
+      <div className="center mt small">{t('เป็นสมาชิกอยู่แล้ว?')} <Link to={`/book/login${f.phone ? `?phone=${encodeURIComponent(f.phone)}` : ''}`}>{t('เข้าสู่ระบบ')}</Link></div>
+    </div>
+  );
+}
+
+/** Shown after logging in with the default password (first login or reset by staff): a new password is required. */
+export function SetPasswordPage() {
+  const { t } = useT();
+  const toast = useToast();
+  const { me, reload, logout } = useMember();
+  const [f, setF] = useState({ current: '', password: '', confirm: '' });
+  const [busy, setBusy] = useState(false);
+  const save = async (e) => {
+    e.preventDefault();
+    if (f.password !== f.confirm) return toast.error(t('รหัสผ่านใหม่และการยืนยันไม่ตรงกัน'));
+    setBusy(true);
+    try {
+      await api.post('/public/me/password', { current: f.current, password: f.password }, { member: true });
+      toast.success('ตั้งรหัสผ่านใหม่เรียบร้อย');
+      await reload();
+    } catch (er) {
+      toast.error(er);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="card" style={{ maxWidth: 460, margin: '0 auto' }}>
+      <h1>{t('ตั้งรหัสผ่านใหม่')}</h1>
+      <p className="muted small">{t('คุณเข้าสู่ระบบด้วยรหัสผ่านเริ่มต้น (เลข 4 ตัวท้ายของเบอร์โทรศัพท์) กรุณาตั้งรหัสผ่านใหม่ก่อนใช้งาน')}</p>
+      {me && <div className="small">{t('สมาชิก')}: <b>{me.first_name}</b> · {me.phone}</div>}
+      <form className="col mt" onSubmit={save}>
+        <Field label="รหัสผ่านปัจจุบัน"><Input type="password" autoComplete="current-password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} required /></Field>
+        <Field label="รหัสผ่านใหม่ (อย่างน้อย 6 ตัวอักษร)"><Input type="password" autoComplete="new-password" minLength={6} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required /></Field>
+        <Field label="ยืนยันรหัสผ่านใหม่"><Input type="password" autoComplete="new-password" minLength={6} value={f.confirm} onChange={(e) => setF({ ...f, confirm: e.target.value })} required /></Field>
+        <Button type="submit" variant="primary" loading={busy}>{t('บันทึกรหัสผ่านใหม่')}</Button>
+      </form>
+      <Button variant="ghost" icon={LogOut} onClick={logout} className="mt">{t('ออกจากระบบ')}</Button>
+    </div>
+  );
+}
+
+/** First LINE login: link to an existing member (phone + password) or sign up — never merged by name. */
 export function LineLinkPage() {
   const { t } = useT();
   const toast = useToast();
@@ -427,53 +481,30 @@ export function LineLinkPage() {
   const link = params.get('link');
   const redirect = params.get('redirect') || '/book/account';
   const [phone, setPhone] = useState('');
-  const [otp, setOtp] = useState(null);
-  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
   const [consent, setConsent] = useState(true);
-  const [profile, setProfile] = useState(null);
-  const verify = async () => {
+  const submit = async (e) => {
+    e.preventDefault();
     try {
-      const r = await api.post('/public/auth/otp/verify', { phone, code, purpose: 'LINK', linkToken: link, consent }, { auth: false });
-      if (r.needProfile) return setProfile({ profileToken: r.profileToken, firstName: params.get('name') || '', consent });
+      const r = await api.post('/public/auth/login', { phone, password, linkToken: link, consent }, { auth: false });
       await login(r.token);
       toast.success('เชื่อมบัญชี LINE เรียบร้อย');
-      nav(redirect, { replace: true });
-    } catch (e) {
-      toast.error(e);
-    }
-  };
-  const complete = async () => {
-    try {
-      const r = await api.post('/public/auth/profile', profile, { auth: false });
-      await login(r.token);
-      nav(redirect, { replace: true });
-    } catch (e) {
-      toast.error(e);
+      if (!r.mustChangePassword) nav(redirect, { replace: true });
+    } catch (er) {
+      toast.error(er);
     }
   };
   return (
     <div className="card" style={{ maxWidth: 460, margin: '0 auto' }}>
       <h1><Link2 size={22} /> {t('เชื่อมบัญชี LINE')}</h1>
-      <p>{t('สวัสดี')} <b>{params.get('name')}</b> — {t('กรุณายืนยันเบอร์โทรศัพท์ เพื่อเชื่อมกับสมาชิกเดิม หรือสมัครสมาชิกใหม่')}</p>
-      {profile ? (
-        <div className="col">
-          <Field label="ชื่อ *"><Input value={profile.firstName} onChange={(e) => setProfile({ ...profile, firstName: e.target.value })} /></Field>
-          <Field label="นามสกุล"><Input value={profile.lastName || ''} onChange={(e) => setProfile({ ...profile, lastName: e.target.value })} /></Field>
-          <Button variant="primary" onClick={complete}>{t('สมัครสมาชิก')}</Button>
-        </div>
-      ) : (
-        <div className="col">
-          <Field label="เบอร์โทรศัพท์"><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></Field>
-          {!otp ? <Button variant="primary" onClick={async () => { try { setOtp(await api.post('/public/auth/otp/request', { phone, purpose: 'LINK' }, { auth: false })); } catch (e) { toast.error(e); } }}>{t('ขอรหัส OTP')}</Button> : (
-            <>
-              <Field label="รหัส OTP"><Input value={code} onChange={(e) => setCode(e.target.value)} /></Field>
-              {otp.debugCode && <div className="xs muted">Demo OTP: <b>{otp.debugCode}</b></div>}
-              <Switch checked={consent} onChange={setConsent} label="ยินยอมรับข้อความแจ้งเตือนการจองทาง LINE" />
-              <Button variant="primary" onClick={verify}>{t('ยืนยันและเชื่อมบัญชี')}</Button>
-            </>
-          )}
-        </div>
-      )}
+      <p>{t('สวัสดี')} <b>{params.get('name')}</b> — {t('เข้าสู่ระบบสมาชิกเพื่อเชื่อมกับบัญชี LINE หรือสมัครสมาชิกใหม่')}</p>
+      <form className="col" onSubmit={submit}>
+        <Field label="เบอร์โทรศัพท์"><Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} required /></Field>
+        <Field label="รหัสผ่าน"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
+        <Switch checked={consent} onChange={setConsent} label="ยินยอมรับข้อความแจ้งเตือนการจองทาง LINE" />
+        <Button type="submit" variant="primary">{t('ยืนยันและเชื่อมบัญชี')}</Button>
+      </form>
+      <div className="center mt small">{t('ยังไม่เป็นสมาชิก?')} <Link to={`/book/signup?link=${encodeURIComponent(link || '')}&name=${encodeURIComponent(params.get('name') || '')}&redirect=${encodeURIComponent(redirect)}`}>{t('สมัครสมาชิกใหม่และเชื่อม LINE')}</Link></div>
     </div>
   );
 }
@@ -512,6 +543,7 @@ function Account() {
   const { me, reload, logout } = useMember();
   const [edit, setEdit] = useState(null);
   const [disc, setDisc] = useState(null);
+  const [pw, setPw] = useState(null);
   const [up, setUp] = useState(null);
   useEffect(() => {
     api.get('/public/me/bookings', { member: true }).then((d) => setUp(d.upcoming)).catch(() => {});
@@ -563,14 +595,25 @@ function Account() {
             <span className="row nowrap"><Img src={me.line.picture_url} style={{ width: 36, height: 36, borderRadius: 99 }} /> {me.line.display_name} · {t('เชื่อมเมื่อ')} {fmtDate(me.line.linked_at)}</span>
             <div className="row">
               <Switch checked={me.line.messaging_consent} onChange={async (v) => { await api.post('/public/me/line/consent', { consent: v }, { member: true }); reload(); }} label="รับการแจ้งเตือนทาง LINE" />
-              <Button size="sm" variant="danger" icon={Unlink} onClick={async () => { const r = await api.post('/public/auth/otp/request', { phone: me.phone, purpose: 'LINK' }, { auth: false }); setDisc({ code: '', debug: r.debugCode }); }}>{t('ยกเลิกการเชื่อมต่อ')}</Button>
+              <Button size="sm" variant="danger" icon={Unlink} onClick={() => setDisc({ code: '' })}>{t('ยกเลิกการเชื่อมต่อ')}</Button>
             </div>
           </div>
         ) : (
           <a className="btn" style={{ background: '#06c755', color: '#fff' }} href={`/api/public/auth/line/start?redirect=/book/account`}><MessageCircle size={16} /> {t('เชื่อมบัญชี LINE')}</a>
         )}
       </div>
+      <div className="card">
+        <div className="card-title"><span>{t('รหัสผ่าน')}</span><Button size="sm" onClick={() => setPw({ current: '', password: '', confirm: '' })}>{t('เปลี่ยนรหัสผ่าน')}</Button></div>
+        <div className="small muted">{t('เข้าสู่ระบบด้วยเบอร์')} {me.phone} {me.passwordChangedAt ? `· ${t('เปลี่ยนรหัสผ่านล่าสุด')} ${fmtDate(me.passwordChangedAt)}` : ''}</div>
+      </div>
       <Button variant="ghost" icon={LogOut} onClick={logout}>{t('ออกจากระบบ')}</Button>
+      {pw && (
+        <Modal title={t('เปลี่ยนรหัสผ่าน')} onClose={() => setPw(null)} footer={<Button variant="primary" onClick={async () => { if (pw.password !== pw.confirm) return toast.error(t('รหัสผ่านใหม่และการยืนยันไม่ตรงกัน')); try { await api.post('/public/me/password', { current: pw.current, password: pw.password }, { member: true }); toast.success('เปลี่ยนรหัสผ่านแล้ว'); setPw(null); reload(); } catch (e) { toast.error(e); } }}>{t('บันทึก')}</Button>}>
+          <Field label="รหัสผ่านปัจจุบัน"><Input type="password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} /></Field>
+          <Field label="รหัสผ่านใหม่ (อย่างน้อย 6 ตัวอักษร)"><Input type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} /></Field>
+          <Field label="ยืนยันรหัสผ่านใหม่"><Input type="password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} /></Field>
+        </Modal>
+      )}
       {edit && (
         <Modal title={t('แก้ไขข้อมูล')} onClose={() => setEdit(null)} footer={<Button variant="primary" onClick={save}>{t('บันทึก')}</Button>}>
           <div className="grid grid-2">
@@ -585,10 +628,9 @@ function Account() {
         </Modal>
       )}
       {disc && (
-        <Modal title={t('ยกเลิกการเชื่อมต่อ LINE')} onClose={() => setDisc(null)} footer={<Button variant="danger" onClick={async () => { try { await api.post('/public/me/line/disconnect', { otpCode: disc.code }, { member: true }); toast.success('ยกเลิกการเชื่อมต่อแล้ว'); setDisc(null); reload(); } catch (e) { toast.error(e); } }}>{t('ยืนยัน')}</Button>}>
-          <p>{t('กรอกรหัส OTP ที่ส่งไปยัง')} {me.phone}</p>
-          <Input value={disc.code} onChange={(e) => setDisc({ ...disc, code: e.target.value })} />
-          {disc.debug && <div className="xs muted">Demo OTP: {disc.debug}</div>}
+        <Modal title={t('ยกเลิกการเชื่อมต่อ LINE')} onClose={() => setDisc(null)} footer={<Button variant="danger" onClick={async () => { try { await api.post('/public/me/line/disconnect', { password: disc.code }, { member: true }); toast.success('ยกเลิกการเชื่อมต่อแล้ว'); setDisc(null); reload(); } catch (e) { toast.error(e); } }}>{t('ยืนยัน')}</Button>}>
+          <p>{t('กรอกรหัสผ่านสมาชิกเพื่อยืนยัน')}</p>
+          <Input type="password" value={disc.code} onChange={(e) => setDisc({ ...disc, code: e.target.value })} />
         </Modal>
       )}
     </div>

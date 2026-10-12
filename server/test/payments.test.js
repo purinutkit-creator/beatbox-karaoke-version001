@@ -251,3 +251,78 @@ test('cross-store guard: an id of another store can never be attached (even thou
   // and cannot read it
   assert.equal((await api('GET', `/members/${m.body.id}`)).status, 404);
 });
+
+// ───── members: phone + password, no OTP ─────
+const pub = (method, url, body, tok = null) => api(method, url, body, { tok, headers: { 'X-Store': 'beatbox' } });
+
+let memberId;
+test('member sign-up without OTP; same phone → log in instead; leading-zero default password', async () => {
+  const r = await pub('POST', '/public/auth/signup', { phone: '081-234-0099', firstName: 'ทดสอบ', lastName: 'สมาชิก' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.message, 'สมัครสมาชิกสำเร็จ รหัสผ่านเริ่มต้นของคุณคือเลข 4 ตัวท้ายของเบอร์โทรศัพท์ กรุณาเปลี่ยนรหัสผ่านเมื่อเข้าสู่ระบบครั้งแรก');
+  assert.ok(!JSON.stringify(r.body).includes('0099'), 'the password is never sent back');
+  const dup = await pub('POST', '/public/auth/signup', { phone: '0812340099', firstName: 'ซ้ำ', lastName: 'ซ้ำ' });
+  assert.equal(dup.status, 409);
+  assert.equal(dup.body.code, 'MEMBER_EXISTS');
+  assert.equal(dup.body.login, true);
+  // missing last name → validation
+  assert.equal((await pub('POST', '/public/auth/signup', { phone: '0812340100', firstName: 'ก' })).status, 400);
+});
+
+test('first login with the last 4 digits forces a new password before member data', async () => {
+  assert.equal((await pub('POST', '/public/auth/login', { phone: '0812340099', password: '99' })).status, 401);
+  const r = await pub('POST', '/public/auth/login', { phone: '0812340099', password: '0099' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.mustChangePassword, true);
+  memberId = r.body.member.id;
+  const me = await pub('GET', '/public/me', null, r.body.token);
+  assert.equal(me.status, 200);
+  assert.equal(me.body.mustChangePassword, true);
+  assert.equal((await pub('GET', '/public/me/bookings', null, r.body.token)).body.code, 'PASSWORD_CHANGE_REQUIRED');
+  assert.equal((await pub('POST', '/public/me/password', { current: '0099', password: '0099' }, r.body.token)).status, 400);
+  assert.equal((await pub('POST', '/public/me/password', { current: '1111', password: 'secret99' }, r.body.token)).status, 401);
+  assert.equal((await pub('POST', '/public/me/password', { current: '0099', password: 'secret99' }, r.body.token)).status, 200);
+  assert.equal((await pub('GET', '/public/me/bookings', null, r.body.token)).status, 200);
+  assert.equal((await pub('POST', '/public/auth/login', { phone: '0812340099', password: '0099' })).status, 401, 'default no longer works');
+  const r2 = await pub('POST', '/public/auth/login', { phone: '0812340099', password: 'secret99' });
+  assert.equal(r2.body.mustChangePassword, false);
+  const { pool, runWithStore } = await import('../src/db/index.js');
+  const row = (await runWithStore(1, () => pool.query('SELECT password_hash FROM members WHERE id = $1', [memberId]))).rows[0];
+  assert.match(row.password_hash, /^\$2[aby]\$/, 'stored hashed');
+});
+
+test('member lockout after 5 wrong passwords; staff reset unlocks, back to default, logged with who and when', async () => {
+  for (let i = 0; i < 4; i++) assert.equal((await pub('POST', '/public/auth/login', { phone: '0812340099', password: 'wrong' })).status, 401);
+  assert.equal((await pub('POST', '/public/auth/login', { phone: '0812340099', password: 'wrong' })).status, 429);
+  const locked = await pub('POST', '/public/auth/login', { phone: '0812340099', password: 'secret99' });
+  assert.equal(locked.status, 429, 'correct password still refused while locked');
+  // staff: status shown, never the password
+  const list = await api('GET', '/members?q=0812340099');
+  const m = list.body.find((x) => x.id === memberId);
+  assert.equal(m.password_is_default, false);
+  assert.ok(!('password_hash' in m));
+  assert.ok(!JSON.stringify(list.body).includes('$2'), 'no hash in any staff response');
+  const rs = await api('POST', `/members/${memberId}/reset-password`, { reason: 'ลูกค้าลืมรหัสผ่าน' });
+  assert.equal(rs.status, 200);
+  const after = (await api('GET', '/members?q=0812340099')).body.find((x) => x.id === memberId);
+  assert.equal(after.password_is_default, true);
+  assert.equal(after.must_change_password, true);
+  assert.ok(after.password_reset_at);
+  assert.ok(after.password_reset_by_name);
+  const log = (await api('GET', '/activity-logs?action=MEMBER_PASSWORD_RESET')).body;
+  assert.ok(JSON.stringify(log).includes('MEMBER_PASSWORD_RESET'));
+  const r = await pub('POST', '/public/auth/login', { phone: '0812340099', password: '0099' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.mustChangePassword, true);
+});
+
+test('receipt: no sign-up QR when the bill has a member', async () => {
+  const o = await api('POST', '/orders', { memberId, items: [{ productId: 1, qty: 1 }] });
+  assert.equal(o.status, 200, JSON.stringify(o.body));
+  const total = (await api('GET', `/orders/${o.body.id}`)).body.calc.netTotal;
+  const pay = await api('POST', `/orders/${o.body.id}/pay`, { payments: [{ method: 'CASH', amount: total, received: total }] }, key('pay-member'));
+  assert.equal(pay.status, 200, JSON.stringify(pay.body));
+  assert.equal(pay.body.receipt.snapshot.memberSignup, null);
+  assert.equal(pay.body.receipt.snapshot.member.code.length > 0, true);
+  assert.ok(!JSON.stringify(pay.body).includes('password_hash'));
+});

@@ -21,6 +21,8 @@ const P = {
   rewards: lazy(() => import('./Account.jsx').then((m) => ({ default: m.RewardsPage }))),
   account: lazy(() => import('./Account.jsx').then((m) => ({ default: m.AccountPage }))),
   login: lazy(() => import('./Account.jsx').then((m) => ({ default: m.LoginPage }))),
+  signup: lazy(() => import('./Account.jsx').then((m) => ({ default: m.SignupPage }))),
+  setPassword: lazy(() => import('./Account.jsx').then((m) => ({ default: m.SetPasswordPage }))),
   lineLink: lazy(() => import('./Account.jsx').then((m) => ({ default: m.LineLinkPage }))),
   lineDemo: lazy(() => import('./Account.jsx').then((m) => ({ default: m.LineDemoPage }))),
   booking: lazy(() => import('./Account.jsx').then((m) => ({ default: m.BookingDetailPage }))),
@@ -118,6 +120,9 @@ function Shell() {
       </header>
       <main className="bk-main">
         <Suspense fallback={<Loading />}>
+          {me?.mustChangePassword ? (
+            <P.setPassword />
+          ) : (
           <Routes>
             <Route index element={<P.home />} />
             <Route path="reserve" element={<BookFlow />} />
@@ -134,7 +139,9 @@ function Shell() {
             <Route path="line-demo" element={<P.lineDemo />} />
             <Route path="booking/:token" element={<P.booking />} />
             <Route path="contact" element={<P.contact />} />
+            <Route path="signup" element={<P.signup />} />
           </Routes>
+          )}
         </Suspense>
       </main>
       <footer className="center muted small" style={{ padding: 20, borderTop: '1px solid var(--border)' }}>

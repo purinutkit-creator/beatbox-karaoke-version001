@@ -8,7 +8,7 @@ import { optionalMember, requireMember, createMemberSession, signToken, verifyTo
 import { idempotent } from '../lib/idempotency.js';
 import { logActivity } from '../lib/activity.js';
 import { z, parse } from '../lib/validate.js';
-import { notFound, badRequest, conflict, unauthorized, forbidden } from '../lib/errors.js';
+import { notFound, badRequest, conflict, unauthorized, forbidden, AppError } from '../lib/errors.js';
 import { emitSync } from '../lib/realtime.js';
 import { config } from '../config.js';
 import { getSettings, publicSettings } from '../services/settings.js';
@@ -464,8 +464,8 @@ r.post('/bookings/:bookingNo/cancel', optionalMember, async (req, res) => {
     const rv = (await c.query('SELECT * FROM reservations WHERE id = $1 FOR UPDATE', [rv0.id])).rows[0];
     // ownership: logged-in member or a phone verified by OTP
     const otp = b.otpToken ? verifyToken(b.otpToken) : null;
-    const owns = (req.member && req.member.id === rv.member_id) || (otp?.typ === 'otp' && otp.phone === rv.phone);
-    if (!owns) throw unauthorized('กรุณายืนยันตัวตนด้วย OTP หรือเข้าสู่ระบบสมาชิก');
+    const owns = (req.member && (req.member.id === rv.member_id || req.member.phone === rv.phone)) || (otp?.typ === 'otp' && otp.phone === rv.phone);
+    if (!owns) throw unauthorized('กรุณาเข้าสู่ระบบสมาชิกด้วยเบอร์โทรที่ใช้จอง');
     if (!['PENDING', 'CONFIRMED', 'DEPOSIT_PAID'].includes(rv.status) || new Date(rv.start_at) <= new Date()) throw conflict('ไม่สามารถยกเลิกการจองนี้ทางออนไลน์ได้');
     const held = (await c.query(`SELECT COALESCE(SUM(amount - refunded_amount),0) AS amt FROM deposits WHERE reservation_id = $1 AND status = 'RECEIVED' AND verification_status = 'VERIFIED'`, [rv.id])).rows[0];
     const preview = calculateCancellationRefund(Number(held.amt), rv.start_at, settings.booking.cancellation);
@@ -501,7 +501,99 @@ r.get('/checkin/:token', async (req, res) => {
   res.json(publicBooking(rv));
 });
 
-// ───────────── Member authentication (phone OTP / LINE) ─────────────
+// ───────────── Member authentication: phone + password (no OTP) ─────────────
+// The first password is the last 4 digits of the phone (kept as a string, so a leading 0 stays). It is never stored
+// readable: password_hash stays NULL until the member sets their own password, and NULL forces a change at login.
+const MEMBER_MAX_FAILS = 5;
+const MEMBER_LOCK_MINUTES = 15;
+export const defaultMemberPassword = (phone) => String(phone || '').replace(/\D/g, '').slice(-4);
+async function memberPasswordOk(m, password) {
+  if (!m.password_hash) return String(password) === defaultMemberPassword(m.phone);
+  return bcrypt.compare(String(password), m.password_hash);
+}
+const SIGNUP_DONE = 'สมัครสมาชิกสำเร็จ รหัสผ่านเริ่มต้นของคุณคือเลข 4 ตัวท้ายของเบอร์โทรศัพท์ กรุณาเปลี่ยนรหัสผ่านเมื่อเข้าสู่ระบบครั้งแรก';
+
+/** Self sign-up (QR at the end of a receipt / booking site). Same phone in this store → log in instead. */
+r.post('/auth/signup', async (req, res) => {
+  const settings = await getSettings();
+  if (settings.memberSignup?.enabled === false) throw forbidden('ร้านนี้ปิดการสมัครสมาชิกออนไลน์ กรุณาติดต่อพนักงาน');
+  const b = parse(
+    z.object({
+      phone: z.string().min(9).max(20),
+      firstName: z.string().trim().min(1, 'กรุณากรอกชื่อ').max(100),
+      lastName: z.string().trim().min(1, 'กรุณากรอกนามสกุล').max(100),
+      extra: z.record(z.string(), z.any()).default({}),
+      consent: z.boolean().default(false),
+      linkToken: z.string().optional().nullable(),
+    }),
+    req.body,
+  );
+  const phone = normalizePhone(b.phone);
+  if (!/^0\d{8,9}$/.test(phone)) throw badRequest('เบอร์โทรศัพท์ไม่ถูกต้อง');
+  const extra = {};
+  for (const f of settings.memberSignup?.extraFields || []) {
+    const v = b.extra?.[f.key];
+    const empty = v == null || String(v).trim() === '';
+    if (f.required && empty) throw badRequest(`กรุณากรอก ${f.label}`);
+    if (!empty) extra[f.key] = String(v).trim().slice(0, 300);
+  }
+  const line = b.linkToken ? verifyToken(b.linkToken) : null;
+  const m = await tx(async (c) => {
+    const ex = (await c.query('SELECT id FROM members WHERE phone = $1 AND deleted_at IS NULL', [phone])).rows[0];
+    if (ex) throw conflict('เบอร์โทรศัพท์นี้เป็นสมาชิกของร้านแล้ว กรุณาเข้าสู่ระบบ', 'MEMBER_EXISTS', { login: true });
+    const birthday = /^\d{4}-\d{2}-\d{2}$/.test(extra.birthday || '') ? extra.birthday : null;
+    const member = await createMember(c, { firstName: b.firstName, lastName: b.lastName, phone, source: line?.typ === 'line-link' ? 'LINE' : 'SIGNUP', birthday, email: extra.email || null });
+    await c.query('UPDATE members SET extra_fields = $2, marketing_consent = $3, must_change_password = true WHERE id = $1', [member.id, extra, b.consent]);
+    if (line?.typ === 'line-link') await attachLine(c, member.id, { ...line, consent: b.consent });
+    await logActivity(c, actor('MEMBER'), 'MEMBER_SIGNUP', 'member', member.id, { source: 'SELF', fields: Object.keys(extra) });
+    return member;
+  });
+  emitSync('members');
+  res.json({ ok: true, memberCode: m.member_code, firstName: m.first_name, message: SIGNUP_DONE });
+});
+
+/** Phone + password login. 5 wrong passwords → locked for 15 minutes. */
+r.post('/auth/login', async (req, res) => {
+  const b = parse(z.object({ phone: z.string().min(9).max(20), password: z.string().min(1).max(200), linkToken: z.string().optional().nullable(), consent: z.boolean().optional() }), req.body);
+  const phone = normalizePhone(b.phone);
+  const out = await tx(async (c) => {
+    const m = (await c.query('SELECT * FROM members WHERE phone = $1 AND deleted_at IS NULL FOR UPDATE', [phone])).rows[0];
+    if (!m) return { fail: 'bad' };
+    if (m.login_locked_until && new Date(m.login_locked_until) > new Date()) return { fail: 'locked', minutes: Math.ceil((new Date(m.login_locked_until) - Date.now()) / 60000) };
+    if (!(await memberPasswordOk(m, b.password))) {
+      const n = Number(m.login_failed_attempts) + 1;
+      await c.query(`UPDATE members SET login_failed_attempts = $2, login_locked_until = CASE WHEN $3 THEN now() + ($4 || ' minutes')::interval ELSE login_locked_until END WHERE id = $1`, [m.id, n >= MEMBER_MAX_FAILS ? 0 : n, n >= MEMBER_MAX_FAILS, String(MEMBER_LOCK_MINUTES)]);
+      await logActivity(c, actor('MEMBER'), 'MEMBER_LOGIN_FAILED', 'member', m.id, { attempt: n });
+      return { fail: n >= MEMBER_MAX_FAILS ? 'locked' : 'bad', minutes: MEMBER_LOCK_MINUTES, left: MEMBER_MAX_FAILS - n };
+    }
+    if (m.status !== 'ACTIVE') throw forbidden('บัญชีสมาชิกถูกระงับ กรุณาติดต่อร้าน');
+    const line = b.linkToken ? verifyToken(b.linkToken) : null;
+    if (line?.typ === 'line-link') await attachLine(c, m.id, { ...line, consent: b.consent });
+    await c.query('UPDATE members SET login_failed_attempts = 0, login_locked_until = NULL, last_login_at = now() WHERE id = $1', [m.id]);
+    await c.query(`UPDATE member_auth_identities SET last_login_at = now() WHERE member_id = $1 AND provider = 'PHONE' AND status = 'ACTIVE'`, [m.id]);
+    await logActivity(c, actor('MEMBER'), line ? 'MEMBER_LINE_LINK' : 'MEMBER_LOGIN', 'member', m.id, { method: 'PASSWORD' });
+    return { token: await createMemberSession(c, m.id), mustChangePassword: !m.password_hash || m.must_change_password, member: { id: m.id, firstName: m.first_name, memberCode: m.member_code } };
+  });
+  if (out.fail === 'locked') throw new AppError(429, `เข้าสู่ระบบผิดหลายครั้ง ระบบพักการเข้าสู่ระบบ ${out.minutes} นาที`, 'LOCKED');
+  if (out.fail) throw unauthorized(out.left > 0 && out.left <= 2 ? `เบอร์โทรศัพท์หรือรหัสผ่านไม่ถูกต้อง (เหลืออีก ${out.left} ครั้ง)` : 'เบอร์โทรศัพท์หรือรหัสผ่านไม่ถูกต้อง');
+  res.json(out);
+});
+
+/** Change password (required right after the first login with the default password). */
+r.post('/me/password', requireMember, async (req, res) => {
+  const b = parse(z.object({ current: z.string().min(1).max(200), password: z.string().min(6, 'รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัวอักษร').max(100) }), req.body);
+  const m = await one('SELECT * FROM members WHERE id = $1', [req.member.id]);
+  if (!(await memberPasswordOk(m, b.current))) throw unauthorized('รหัสผ่านปัจจุบันไม่ถูกต้อง');
+  if (b.password === defaultMemberPassword(m.phone)) throw badRequest('กรุณาตั้งรหัสผ่านใหม่ที่ไม่ใช่เลข 4 ตัวท้ายของเบอร์โทรศัพท์');
+  if (b.password === b.current) throw badRequest('รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม');
+  await pool.query('UPDATE members SET password_hash = $2, must_change_password = false, password_changed_at = now(), login_failed_attempts = 0, login_locked_until = NULL, updated_at = now() WHERE id = $1', [m.id, await bcrypt.hash(b.password, 10)]);
+  // other devices signed in with the old password are signed out
+  await pool.query('UPDATE member_sessions SET revoked_at = now() WHERE member_id = $1 AND id <> $2 AND revoked_at IS NULL', [m.id, req.memberSessionId]);
+  await logActivity(null, actor('MEMBER'), 'MEMBER_PASSWORD_CHANGE', 'member', m.id, {});
+  res.json({ ok: true });
+});
+
+// ───────────── Member authentication (legacy phone OTP / LINE) ─────────────
 r.post('/auth/otp/request', async (req, res) => {
   const { phone, purpose } = parse(z.object({ phone: z.string().min(9).max(20), purpose: z.enum(['LOGIN', 'LINK', 'CANCEL']).default('LOGIN') }), req.body);
   const p = normalizePhone(phone);
@@ -671,7 +763,7 @@ r.get('/me', requireMember, async (req, res) => {
   );
   const nextTier = await one(`SELECT * FROM member_tiers WHERE is_active AND sort_order > COALESCE((SELECT sort_order FROM member_tiers WHERE id = $1), -1) ORDER BY sort_order LIMIT 1`, [m.tier_id]);
   const line = await one(`SELECT line_user_id, display_name, picture_url, messaging_consent, linked_at, last_login_at, status FROM line_connections WHERE member_id = $1 AND status = 'CONNECTED' ORDER BY id DESC LIMIT 1`, [m.id]);
-  res.json({ ...m, nextTier, line, lineLoginEnabled: (await lineLogin.enabled()) || !config.isProd });
+  res.json({ ...m, nextTier, line, lineLoginEnabled: (await lineLogin.enabled()) || !config.isProd, mustChangePassword: !req.member.password_hash || !!req.member.must_change_password, passwordChangedAt: req.member.password_changed_at });
 });
 
 r.put('/me', requireMember, async (req, res) => {
@@ -753,11 +845,12 @@ r.get('/me/coupons', requireMember, async (req, res) => {
 });
 
 r.post('/me/line/disconnect', requireMember, async (req, res) => {
-  const { otpCode } = parse(z.object({ otpCode: z.string().min(4) }), req.body);
+  const { password } = parse(z.object({ password: z.string().min(1) }), req.body);
   await tx(async (c) => {
     const phoneIdent = (await c.query(`SELECT 1 FROM member_auth_identities WHERE member_id = $1 AND provider = 'PHONE' AND status = 'ACTIVE'`, [req.member.id])).rows[0];
-    if (!phoneIdent) throw badRequest('ต้องมีเบอร์โทรที่ยืนยันแล้วก่อนยกเลิกการเชื่อม LINE');
-    await checkOtp(c, req.member.phone, otpCode, 'LINK');
+    if (!phoneIdent) throw badRequest('ต้องมีเบอร์โทรก่อนยกเลิกการเชื่อม LINE');
+    const m = (await c.query('SELECT * FROM members WHERE id = $1', [req.member.id])).rows[0];
+    if (!(await memberPasswordOk(m, password))) throw unauthorized('รหัสผ่านไม่ถูกต้อง');
     await c.query(`UPDATE member_auth_identities SET status = 'DISCONNECTED', disconnected_at = now() WHERE member_id = $1 AND provider = 'LINE' AND status = 'ACTIVE'`, [req.member.id]);
     await c.query(`UPDATE line_connections SET status = 'DISCONNECTED', disconnected_at = now() WHERE member_id = $1 AND status = 'CONNECTED'`, [req.member.id]);
     await logActivity(c, actor('MEMBER'), 'MEMBER_LINE_DISCONNECT', 'member', req.member.id, {});

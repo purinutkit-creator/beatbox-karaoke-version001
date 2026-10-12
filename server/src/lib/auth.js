@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { config } from '../config.js';
 import { pool, currentStoreId } from '../db/index.js';
-import { unauthorized, forbidden } from './errors.js';
+import { unauthorized, forbidden, AppError } from './errors.js';
 import { getSettings } from '../services/settings.js';
 import { getSubscription, planAllowsPermission } from '../services/subscription.js';
 import { ALL_PERMISSION_CODES } from '@beatbox/shared/constants.js';
@@ -175,6 +175,10 @@ export async function requireMember(req, _res, next) {
   if (!s.rows[0]) throw unauthorized('กรุณาเข้าสู่ระบบสมาชิก');
   req.member = s.rows[0];
   req.memberSessionId = p.sid;
+  // still on the default password (first login or reset by staff) → only the profile header, password change and logout
+  const mustChange = !req.member.password_hash || req.member.must_change_password;
+  const allowed = (req.method === 'GET' && req.path === '/me') || req.path === '/me/password' || req.path === '/me/logout';
+  if (mustChange && !allowed) throw new AppError(403, 'กรุณาเปลี่ยนรหัสผ่านก่อนใช้งาน', 'PASSWORD_CHANGE_REQUIRED');
   next();
 }
 
