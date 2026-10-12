@@ -3,6 +3,7 @@
 import { Router } from 'express';
 import { one, many, runAsPlatform, currentStoreId } from '../db/index.js';
 import { requireAuth, hasPerm } from '../lib/auth.js';
+import { effectivePermissions } from './auth.js';
 import { z, parse } from '../lib/validate.js';
 import { logActivity } from '../lib/activity.js';
 import { getSubscription, publicSubscription } from '../services/subscription.js';
@@ -22,6 +23,7 @@ r.get('/subscription', async (req, res) => {
   }));
   res.json({
     subscription: publicSubscription(sub),
+    permissions: await effectivePermissions(req.employee, sub),
     plans: data.plans.map((p) => ({ id: p.id, name: p.name, description: p.description, price: Number(p.price), currency: p.currency, billingCycle: p.billing_cycle, billingInterval: p.billing_interval, features: p.features, limits: p.limits, trialDays: p.trial_days })),
     features: PLAN_FEATURES,
     limits: PLAN_LIMITS,

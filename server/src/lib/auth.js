@@ -102,6 +102,19 @@ export async function authenticateToken(token) {
   };
 }
 
+// a device id sent by the browser must belong to the current store (a device of another store is ignored)
+const deviceSeen = new Map(); // "store:id" -> { ok, at }
+export async function ownDevice(id) {
+  if (!id) return null;
+  const key = `${currentStoreId()}:${id}`;
+  const hit = deviceSeen.get(key);
+  if (hit && Date.now() - hit.at < 300000) return hit.ok ? id : null;
+  const ok = !!(await pool.query('SELECT 1 FROM pos_devices WHERE id = $1', [id])).rows[0];
+  if (deviceSeen.size > 5000) deviceSeen.clear();
+  deviceSeen.set(key, { ok, at: Date.now() });
+  return ok ? id : null;
+}
+
 export async function requireAuth(req, _res, next) {
   if (req.employee) return next(); // already authenticated by an earlier router
   const token = getBearer(req);
@@ -111,7 +124,7 @@ export async function requireAuth(req, _res, next) {
   if (auth.expired) throw unauthorized('หมดเวลาการใช้งาน กรุณาเข้าสู่ระบบใหม่');
   req.employee = auth.employee;
   req.authSessionId = auth.sessionId;
-  req.deviceId = Number(req.headers['x-device-id']) || auth.deviceId || null;
+  req.deviceId = await ownDevice(Number(req.headers['x-device-id']) || auth.deviceId || null);
   // effective rights = staff permission AND the store plan's feature (an ADMIN still can't use features outside the plan)
   req.subscription = req.subscription || (await getSubscription());
   const own = auth.employee.role === 'ADMIN' ? ALL_PERMISSION_CODES : await loadPermissions(auth.employee.id);

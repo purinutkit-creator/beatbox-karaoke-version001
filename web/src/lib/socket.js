@@ -1,7 +1,7 @@
 // Realtime layer: Socket.IO + server clock offset (countdowns always use SERVER time, never the device clock).
 import { io } from 'socket.io-client';
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { LS } from './api.js';
+import { LS, storeRef } from './api.js';
 
 let socket = null;
 let offset = 0;
@@ -26,7 +26,7 @@ export function connectSocket(kind = 'staff') {
     if (socket.auth?.kind === kind && socket.auth?.token === (kind === 'staff' ? LS.get('bb_token') : null)) return socket;
     socket.disconnect();
   }
-  socket = io({ path: '/socket.io', auth: { kind, token: kind === 'staff' ? LS.get('bb_token') : null }, transports: ['websocket', 'polling'] });
+  socket = io({ path: '/socket.io', auth: { kind, token: kind === 'staff' ? LS.get('bb_token') : null, store: storeRef() || null }, transports: ['websocket', 'polling'] });
   socket.on('connect', syncClock);
   socket.on('server:time', ({ now }) => (offset = now - Date.now()));
   socket.on('sync', (msg) => syncHandlers.forEach((h) => h(msg)));

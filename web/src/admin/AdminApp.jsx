@@ -3,17 +3,21 @@ import { Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'reac
 import {
   LayoutDashboard, ShoppingCart, DoorOpen, CalendarDays, ClipboardList, Users, Package, Tags, Boxes, LayoutGrid, Timer, BadgePercent, Wallet,
   Receipt, Clock, BarChart3, UserCog, MonitorSmartphone, Printer, Settings, History, Bell, Sun, Moon, LogOut, Menu, Wifi, WifiOff, Globe, ScanLine,
-  Gift, AlertTriangle, VolumeX, Plus, CreditCard, X, Mic2, Lock,
+  Gift, AlertTriangle, VolumeX, Plus, CreditCard, X, Mic2, Lock, KeyRound, Mail, Store, Shield,
 } from 'lucide-react';
 import { useAuth, useApp } from '../lib/store.jsx';
 import { useT } from '../lib/i18n.jsx';
 import { api, offlineQueue } from '../lib/api.js';
 import { useServerNow, useSocketEvent, useSync, getSocket } from '../lib/socket.js';
-import { Button, Modal, Loading, PinPad, useToast, Badge } from '../components/ui.jsx';
+import { Button, Modal, Loading, PinPad, useToast, Badge, Field, Input, Seg } from '../components/ui.jsx';
+import { LicenseWidget, ExpiredScreen, SuperOwnerBanner } from '../components/License.jsx';
 import { PrintProvider, usePrint } from '../components/PrintPreview.jsx';
 import { KitchenTicket } from '../components/Receipt.jsx';
 import { PrepayReview } from '../components/RoomService.jsx';
 import { fmtTime, fmtDateTime } from '@beatbox/shared/format.js';
+
+const RegisterStore = lazy(() => import('../platform/RegisterStore.jsx'));
+const PlatformApp = lazy(() => import('../platform/PlatformApp.jsx'));
 
 const pages = {
   dashboard: lazy(() => import('./pages/Dashboard.jsx')),
@@ -46,56 +50,68 @@ const pages = {
 
 export const MENU = [
   { group: 'ภาพรวม' },
-  { to: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, perm: 'sales.view' },
-  { to: 'pos', label: 'หน้าขาย POS', icon: ShoppingCart, perm: 'pos.access' },
-  { to: 'rooms', label: 'ห้องทั้งหมด', icon: DoorOpen },
+  { to: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, perm: 'sales.view', feature: 'reports' },
+  { to: 'pos', label: 'หน้าขาย POS', icon: ShoppingCart, perm: 'pos.access', feature: 'pos' },
+  { to: 'rooms', label: 'ห้องทั้งหมด', icon: DoorOpen, feature: 'rooms' },
   { group: 'การจอง' },
-  { to: 'calendar', label: 'ตารางการจอง', icon: CalendarDays },
-  { to: 'reservations', label: 'รายการจอง', icon: ClipboardList },
-  { to: 'online', label: 'Online Booking', icon: Globe, badge: 'online' },
-  { to: 'checkin', label: 'Check-in / ค้นหาการจอง', icon: ScanLine },
-  { to: 'deposits', label: 'เงินมัดจำ', icon: Wallet },
+  { to: 'calendar', label: 'ตารางการจอง', icon: CalendarDays, feature: 'booking' },
+  { to: 'reservations', label: 'รายการจอง', icon: ClipboardList, feature: 'booking' },
+  { to: 'online', label: 'Online Booking', icon: Globe, badge: 'online', feature: 'booking' },
+  { to: 'checkin', label: 'Check-in / ค้นหาการจอง', icon: ScanLine, feature: 'booking' },
+  { to: 'deposits', label: 'เงินมัดจำ', icon: Wallet, feature: 'pos' },
   { group: 'ลูกค้า' },
-  { to: 'members', label: 'สมาชิก', icon: Users, perm: 'member.view' },
-  { to: 'rewards', label: 'Rewards & Tier', icon: Gift, perm: 'member.view' },
+  { to: 'members', label: 'สมาชิก', icon: Users, perm: 'member.view', feature: 'members' },
+  { to: 'rewards', label: 'Rewards & Tier', icon: Gift, perm: 'member.view', feature: 'members' },
   { group: 'สินค้าและห้อง' },
-  { to: 'products', label: 'สินค้า', icon: Package },
-  { to: 'categories', label: 'หมวดหมู่', icon: Tags },
-  { to: 'stock', label: 'สต็อก', icon: Boxes },
-  { to: 'room-types', label: 'Type ห้อง', icon: LayoutGrid },
-  { to: 'rooms-manage', label: 'จัดการห้อง', icon: DoorOpen },
-  { to: 'packages', label: 'แพ็กเกจเวลา', icon: Timer },
-  { to: 'promotions', label: 'โปรโมชั่น', icon: BadgePercent },
+  { to: 'products', label: 'สินค้า', icon: Package, feature: 'pos' },
+  { to: 'categories', label: 'หมวดหมู่', icon: Tags, feature: 'pos' },
+  { to: 'stock', label: 'สต็อก', icon: Boxes, feature: 'stock' },
+  { to: 'room-types', label: 'Type ห้อง', icon: LayoutGrid, feature: 'rooms' },
+  { to: 'rooms-manage', label: 'จัดการห้อง', icon: DoorOpen, feature: 'rooms' },
+  { to: 'packages', label: 'แพ็กเกจเวลา', icon: Timer, feature: 'rooms' },
+  { to: 'promotions', label: 'โปรโมชั่น', icon: BadgePercent, feature: 'promotions' },
   { group: 'การเงิน' },
-  { to: 'receipts', label: 'ประวัติใบเสร็จ', icon: Receipt },
-  { to: 'shifts', label: 'เปิดและปิดรอบ', icon: Clock },
-  { to: 'reports', label: 'รายงาน', icon: BarChart3, perm: 'reports.view' },
+  { to: 'receipts', label: 'ประวัติใบเสร็จ', icon: Receipt, feature: 'pos' },
+  { to: 'shifts', label: 'เปิดและปิดรอบ', icon: Clock, feature: 'pos' },
+  { to: 'reports', label: 'รายงาน', icon: BarChart3, perm: 'reports.view', feature: 'reports' },
   { group: 'ระบบ' },
-  { to: 'employees', label: 'พนักงาน', icon: UserCog, perm: 'employee.manage' },
-  { to: 'display', label: 'Customer Display', icon: MonitorSmartphone },
-  { to: 'printers', label: 'เครื่องพิมพ์', icon: Printer },
+  { to: 'employees', label: 'พนักงาน', icon: UserCog, perm: 'employee.manage', feature: 'staff' },
+  { to: 'display', label: 'Customer Display', icon: MonitorSmartphone, feature: 'display' },
+  { to: 'printers', label: 'เครื่องพิมพ์', icon: Printer, feature: 'printing' },
   { to: 'settings', label: 'ตั้งค่าร้าน', icon: Settings, perm: 'settings.manage' },
   { to: 'activity', label: 'Activity Log', icon: History, perm: 'activity.view' },
   { to: 'notifications', label: 'การแจ้งเตือน', icon: Bell, badge: 'notifications' },
 ];
 
 function Login() {
-  const { login, employee } = useAuth();
+  const { login, loginOwner, employee } = useAuth();
   const { publicSettings } = useApp();
   const { t, lang, setLang } = useT();
+  const [mode, setMode] = useState(() => localStorage.getItem('bb_login_mode') || 'pin');
   const [pin, setPin] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [err, setErr] = useState(sessionStorage.getItem('bb_logout_reason') || '');
   const [busy, setBusy] = useState(false);
   const nav = useNavigate();
   useEffect(() => {
     if (employee) nav('/admin/rooms', { replace: true });
   }, [employee]);
-  const submit = async (p) => {
+  const switchMode = (m) => {
+    setMode(m);
+    setErr('');
+    try {
+      localStorage.setItem('bb_login_mode', m);
+    } catch {
+      /* ignore */
+    }
+  };
+  const run = async (fn) => {
     setBusy(true);
     setErr('');
     sessionStorage.removeItem('bb_logout_reason');
     try {
-      await login(p);
+      await fn();
       nav('/admin/rooms', { replace: true });
     } catch (e) {
       setErr(e.message);
@@ -117,17 +133,76 @@ function Login() {
           {store?.logoUrl ? <img src={store.logoUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 20 }} /> : <Mic2 size={36} />}
         </div>
         <h2 style={{ marginTop: 12 }}>{store?.name || 'BEATBOX Karaoke'}</h2>
-        <p className="muted">{t('กรอกรหัสพนักงาน 4 หลัก')}</p>
-        <PinPad value={pin} onChange={setPin} onComplete={submit} busy={busy} />
-        {busy && <div className="mt"><span className="spinner" /></div>}
+        <Seg value={mode} onChange={switchMode} options={[{ value: 'pin', label: 'พนักงาน (PIN)' }, { value: 'owner', label: 'เจ้าของร้าน (อีเมล)' }]} />
+        {mode === 'pin' ? (
+          <>
+            <p className="muted">{t('กรอกรหัสพนักงาน 4 หลัก')}</p>
+            <PinPad value={pin} onChange={setPin} onComplete={(p) => run(() => login(p))} busy={busy} />
+            {busy && <div className="mt"><span className="spinner" /></div>}
+          </>
+        ) : (
+          <form
+            className="col mt"
+            style={{ textAlign: 'left' }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              run(() => loginOwner(email, password));
+            }}
+          >
+            <Field label="อีเมล">
+              <Input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            </Field>
+            <Field label="รหัสผ่าน">
+              <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            </Field>
+            <Button type="submit" variant="primary" icon={Mail} loading={busy} block>{t('เข้าสู่ระบบ')}</Button>
+          </form>
+        )}
         {err && <p style={{ color: 'var(--danger)' }}>{t(err)}</p>}
+        <div className="row mt" style={{ justifyContent: 'center' }}>
+          <a href="/register" className="small"><Store size={13} /> {t('สมัครใช้งานสำหรับร้านใหม่')}</a>
+        </div>
         <div className="row mt" style={{ justifyContent: 'center' }}>
           <a href="/display" className="small">Customer Display</a>
           <span className="muted">·</span>
           <a href="/book" className="small">{t('เว็บไซต์จองห้อง')}</a>
+          <span className="muted">·</span>
+          <a href="/platform" className="small"><Shield size={12} /> Super Owner</a>
         </div>
       </div>
     </div>
+  );
+}
+
+/** Store owner: change own password (owner accounts log in with e-mail + password). */
+function ChangePassword({ onClose }) {
+  const { t } = useT();
+  const toast = useToast();
+  const [f, setF] = useState({ current: '', password: '', confirm: '' });
+  const [busy, setBusy] = useState(false);
+  const save = async (e) => {
+    e.preventDefault();
+    if (f.password !== f.confirm) return toast.error(t('รหัสผ่านใหม่และการยืนยันไม่ตรงกัน'));
+    setBusy(true);
+    try {
+      await api.post('/auth/password', { current: f.current, password: f.password });
+      toast.success(t('เปลี่ยนรหัสผ่านแล้ว'));
+      onClose();
+    } catch (er) {
+      toast.error(er);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal onClose={onClose} title={t('เปลี่ยนรหัสผ่าน')}>
+      <form className="col" onSubmit={save}>
+        <Field label="รหัสผ่านปัจจุบัน"><Input type="password" autoComplete="current-password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} required /></Field>
+        <Field label="รหัสผ่านใหม่ (อย่างน้อย 8 ตัวอักษร)"><Input type="password" autoComplete="new-password" minLength={8} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required /></Field>
+        <Field label="ยืนยันรหัสผ่านใหม่"><Input type="password" autoComplete="new-password" minLength={8} value={f.confirm} onChange={(e) => setF({ ...f, confirm: e.target.value })} required /></Field>
+        <Button type="submit" variant="primary" loading={busy}>{t('บันทึก')}</Button>
+      </form>
+    </Modal>
   );
 }
 
@@ -376,7 +451,8 @@ function Clock2() {
 }
 
 function Layout() {
-  const { employee, logout, can, shift, settings, device } = useAuth();
+  const { employee, logout, can, hasFeature, shift, settings, device } = useAuth();
+  const [pwOpen, setPwOpen] = useState(false);
   const { theme, setTheme } = useApp();
   const { t, lang, setLang } = useT();
   const [open, setOpen] = useState(false);
@@ -421,6 +497,10 @@ function Layout() {
   useSocketEvent('notification:new', loadCounts);
   useSocketEvent('notification:read', loadCounts);
   const isOffline = !online || !sockOk;
+  const gate = (path, el) => {
+    const m = MENU.find((x) => x.to === path);
+    return m?.feature && !hasFeature(m.feature) ? <NotInPlan /> : el;
+  };
   const store = settings?.store;
   return (
     <div className="app">
@@ -433,7 +513,7 @@ function Layout() {
           </div>
         </div>
         <nav>
-          {MENU.filter((m) => m.group || !m.perm || can(m.perm)).map((m, i) =>
+          {MENU.filter((m) => m.group || ((!m.perm || can(m.perm)) && hasFeature(m.feature))).map((m, i) =>
             m.group ? (
               <div key={i} className="nav-group">{t(m.group)}</div>
             ) : (
@@ -451,11 +531,13 @@ function Layout() {
             <div className="small bold ellipsis">{employee?.name}</div>
             <div className="xs muted">{employee?.role}</div>
           </div>
+          {employee?.isOwner && <Button variant="ghost icon" icon={KeyRound} title={t('เปลี่ยนรหัสผ่าน')} onClick={() => setPwOpen(true)} />}
           <Button variant="ghost icon" icon={LogOut} title={t('ออกจากระบบ')} onClick={logout} />
         </div>
       </aside>
       {open && <div className="drawer-back" style={{ zIndex: 45 }} onClick={() => setOpen(false)} />}
       <div className="main">
+        <SuperOwnerBanner />
         {isOffline && <div className="offline-bar">OFFLINE — {t('ระบบจะซิงก์ข้อมูลอัตโนมัติเมื่อกลับมาออนไลน์')} {queue > 0 && `(${queue} ${t('รายการรอซิงก์')})`}</div>}
         <header className="topbar">
           <Button variant="ghost icon" className="menu-btn" icon={Menu} onClick={() => setOpen(true)} />
@@ -464,6 +546,7 @@ function Layout() {
           </button>
           <span className="status-pill hide-sm">{device?.name || `POS #${device?.id || '-'}`}</span>
           <div className="grow" />
+          <LicenseWidget />
           <Clock2 />
           <span className="status-pill" title={isOffline ? 'Offline' : 'Online'}>{isOffline ? <WifiOff size={14} color="var(--danger)" /> : <Wifi size={14} color="var(--ok)" />}<span className="hide-sm">{isOffline ? 'Offline' : 'Online'}</span></span>
           <Button variant="ghost" size="sm" icon={Globe} onClick={() => setLang(lang === 'th' ? 'en' : 'th')}>{lang === 'th' ? 'EN' : 'TH'}</Button>
@@ -476,32 +559,32 @@ function Layout() {
         <main className="content">
           <Suspense fallback={<Loading />}>
             <Routes>
-              <Route path="dashboard" element={can('sales.view') ? <pages.dashboard /> : <Navigate to="/admin/rooms" />} />
-              <Route path="pos" element={<pages.pos />} />
-              <Route path="rooms" element={<pages.rooms />} />
-              <Route path="calendar" element={<pages.calendar />} />
-              <Route path="reservations" element={<pages.reservations />} />
-              <Route path="online" element={<pages.online />} />
-              <Route path="checkin" element={<pages.checkin />} />
-              <Route path="members" element={<pages.members />} />
-              <Route path="rewards" element={<pages.rewards />} />
-              <Route path="products" element={<pages.products />} />
-              <Route path="categories" element={<pages.categories />} />
-              <Route path="stock" element={<pages.stock />} />
-              <Route path="room-types" element={<pages.roomTypes />} />
-              <Route path="rooms-manage" element={<pages.roomsManage />} />
-              <Route path="packages" element={<pages.packages />} />
-              <Route path="promotions" element={<pages.promotions />} />
-              <Route path="deposits" element={<pages.deposits />} />
-              <Route path="receipts" element={<pages.receipts />} />
-              <Route path="shifts" element={<pages.shifts />} />
-              <Route path="reports" element={<pages.reports />} />
-              <Route path="employees" element={can('employee.manage') ? <pages.employees /> : <Forbidden />} />
-              <Route path="display" element={<pages.display />} />
-              <Route path="printers" element={<pages.printers />} />
-              <Route path="settings" element={can('settings.manage') ? <pages.settings /> : <Forbidden />} />
-              <Route path="activity" element={can('activity.view') ? <pages.activity /> : <Forbidden />} />
-              <Route path="notifications" element={<pages.notifications />} />
+              <Route path="dashboard" element={gate('dashboard', can('sales.view') ? <pages.dashboard /> : <Navigate to="/admin/rooms" />)} />
+              <Route path="pos" element={gate('pos', <pages.pos />)} />
+              <Route path="rooms" element={gate('rooms', <pages.rooms />)} />
+              <Route path="calendar" element={gate('calendar', <pages.calendar />)} />
+              <Route path="reservations" element={gate('reservations', <pages.reservations />)} />
+              <Route path="online" element={gate('online', <pages.online />)} />
+              <Route path="checkin" element={gate('checkin', <pages.checkin />)} />
+              <Route path="members" element={gate('members', <pages.members />)} />
+              <Route path="rewards" element={gate('rewards', <pages.rewards />)} />
+              <Route path="products" element={gate('products', <pages.products />)} />
+              <Route path="categories" element={gate('categories', <pages.categories />)} />
+              <Route path="stock" element={gate('stock', <pages.stock />)} />
+              <Route path="room-types" element={gate('room-types', <pages.roomTypes />)} />
+              <Route path="rooms-manage" element={gate('rooms-manage', <pages.roomsManage />)} />
+              <Route path="packages" element={gate('packages', <pages.packages />)} />
+              <Route path="promotions" element={gate('promotions', <pages.promotions />)} />
+              <Route path="deposits" element={gate('deposits', <pages.deposits />)} />
+              <Route path="receipts" element={gate('receipts', <pages.receipts />)} />
+              <Route path="shifts" element={gate('shifts', <pages.shifts />)} />
+              <Route path="reports" element={gate('reports', <pages.reports />)} />
+              <Route path="employees" element={gate('employees', can('employee.manage') ? <pages.employees /> : <Forbidden />)} />
+              <Route path="display" element={gate('display', <pages.display />)} />
+              <Route path="printers" element={gate('printers', <pages.printers />)} />
+              <Route path="settings" element={gate('settings', can('settings.manage') ? <pages.settings /> : <Forbidden />)} />
+              <Route path="activity" element={gate('activity', can('activity.view') ? <pages.activity /> : <Forbidden />)} />
+              <Route path="notifications" element={gate('notifications', <pages.notifications />)} />
               <Route path="*" element={<Navigate to="/admin/rooms" />} />
             </Routes>
           </Suspense>
@@ -511,6 +594,19 @@ function Layout() {
       <RoomServiceAlerts />
       <QueuedPrintWorker />
       <IdleGuard />
+      {pwOpen && <ChangePassword onClose={() => setPwOpen(false)} />}
+    </div>
+  );
+}
+
+/** Page of a feature outside the store's plan (the API refuses it too). */
+function NotInPlan() {
+  const { t } = useT();
+  return (
+    <div className="card center" style={{ padding: 40 }}>
+      <Lock size={48} color="var(--warn)" />
+      <h2>{t('แพ็กเกจปัจจุบันไม่รวมฟังก์ชันนี้')}</h2>
+      <p className="muted">{t('กดที่แถบแพ็กเกจมุมขวาบนเพื่อดูแพ็กเกจและขออัปเกรด')}</p>
     </div>
   );
 }
@@ -525,19 +621,30 @@ function Forbidden() {
   );
 }
 
+function StoreGate() {
+  const { subscription } = useAuth();
+  // package expired / suspended → every screen of the store switches to the expired page (data is kept)
+  if (subscription && subscription.usable === false) return <ExpiredScreen />;
+  return (
+    <PrintProvider>
+      <Layout />
+    </PrintProvider>
+  );
+}
+
 export default function AdminApp() {
   const { employee, ready } = useAuth();
   if (!ready) return <Loading />;
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Suspense fallback={<Loading />}><RegisterStore /></Suspense>} />
+      <Route path="/platform/*" element={<Suspense fallback={<Loading />}><PlatformApp /></Suspense>} />
       <Route
         path="/admin/*"
         element={
           employee ? (
-            <PrintProvider>
-              <Layout />
-            </PrintProvider>
+            <StoreGate />
           ) : (
             <Navigate to="/login" replace />
           )

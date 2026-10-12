@@ -427,3 +427,35 @@ html, body { overflow-x: hidden; }
 .cd .cd-checkin .btn { font-size: clamp(18px, 2.2vw, 28px); padding: 2.2vh 3vw; width: 100%; }
 .cd .cd-checkin video { width: min(80vw, 520px); max-height: 55vh; border-radius: 16px; background: #111; object-fit: cover; }
 .cd .cd-checkin .pin-pad { width: min(80vw, 420px); }
+
+/* ── store license (package) widget, plans, expired page, Super Owner ── */
+.license-pill { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; max-width: 340px; padding: 4px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: pointer; text-align: left; font: inherit; line-height: 1.25; }
+.license-pill .lic-store { font-weight: 800; font-size: 0.82rem; max-width: 100%; }
+.license-pill .lic-plan, .license-pill .lic-left { display: inline-flex; align-items: center; gap: 4px; font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+.license-pill.lv-warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--surface-2)); }
+.license-pill.lv-warn .lic-left { color: var(--warn); font-weight: 700; }
+.license-pill.lv-danger { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, var(--surface-2)); animation: lic-pulse 1.6s ease-in-out infinite; }
+.license-pill.lv-danger .lic-left, .license-pill.lv-expired .lic-left { color: var(--danger); font-weight: 800; }
+.license-pill.lv-expired { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 22%, var(--surface-2)); }
+@keyframes lic-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 45%, transparent); } 50% { box-shadow: 0 0 0 5px transparent; } }
+.lic-units { display: flex; gap: 8px; flex-wrap: wrap; }
+.lic-unit { display: flex; flex-direction: column; align-items: center; min-width: 58px; padding: 6px 8px; border-radius: 10px; background: var(--surface-3); }
+.lic-unit b { font-size: 1.4rem; }
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.plan-card { display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: var(--radius-sm); border: 2px solid var(--border); background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.plan-card.on { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 25%, transparent); }
+.plan-price { font-size: 1.25rem; font-weight: 800; }
+.plan-feats { list-style: none; margin: 4px 0 0; padding: 0; font-size: 0.75rem; display: grid; gap: 2px; }
+.plan-feats li { display: flex; align-items: center; gap: 4px; }
+.plan-feats li.off { color: var(--muted); text-decoration: line-through; opacity: 0.7; }
+.expired-wrap { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; gap: 12px; }
+.expired-card { width: min(640px, 100%); display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 28px 20px; }
+.expired-card h1 { margin: 4px 0; color: var(--danger); }
+.super-banner { position: sticky; top: 0; z-index: 41; display: flex; align-items: center; gap: 10px; padding: 8px 16px; background: linear-gradient(90deg, #b45309, #d97706); color: #fff; font-size: 0.88rem; width: 100%; }
+.super-banner .btn { background: rgba(255, 255, 255, 0.18); color: #fff; border-color: rgba(255, 255, 255, 0.4); }
+.platform { min-height: 100vh; }
+@media (max-width: 720px) {
+  .license-pill { max-width: 170px; padding: 3px 8px; }
+  .license-pill .lic-plan { display: none; }
+  .super-banner { flex-wrap: wrap; padding: 6px 10px; }
+}

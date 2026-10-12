@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { pool, tx, one, currentStoreId, runAsPlatform, setContextStore } from '../db/index.js';
 import { getSubscription, planAllowsPermission, publicSubscription } from '../services/subscription.js';
 import { ALL_PERMISSION_CODES } from '@beatbox/shared/constants.js';
-import { pinLookup, verifyPin, signToken, requireAuth, loadPermissions, signApproval, hasPerm } from '../lib/auth.js';
+import { pinLookup, verifyPin, signToken, requireAuth, loadPermissions, signApproval, hasPerm, ownDevice } from '../lib/auth.js';
 import { unauthorized, forbidden } from '../lib/errors.js';
 import { logActivity } from '../lib/activity.js';
 import { z, parse } from '../lib/validate.js';
@@ -54,7 +54,8 @@ export async function issueEmployeeSession(req, e, { deviceId = null, method = '
 }
 
 r.post('/login', async (req, res) => {
-  const { pin, deviceId } = parse(z.object({ pin: z.string(), deviceId: z.coerce.number().int().optional().nullable() }), req.body);
+  const { pin, deviceId: rawDevice } = parse(z.object({ pin: z.string(), deviceId: z.coerce.number().int().optional().nullable() }), req.body);
+  const deviceId = await ownDevice(rawDevice);
   const e = await findByPin(pin);
   const ua = req.headers['user-agent'] || '';
   if (!e) {
@@ -80,7 +81,7 @@ r.post('/owner-login', async (req, res) => {
     throw unauthorized(n >= 5 ? 'เข้าสู่ระบบผิดเกิน 5 ครั้ง ระบบพักการเข้าสู่ระบบ 15 นาที' : 'อีเมลหรือรหัสผ่านไม่ถูกต้อง');
   }
   if (!e.is_active) throw forbidden('บัญชีนี้ถูกปิดใช้งาน');
-  res.json(await issueEmployeeSession(req, e, { deviceId: b.deviceId, method: 'EMAIL' }));
+  res.json(await issueEmployeeSession(req, e, { deviceId: await ownDevice(b.deviceId), method: 'EMAIL' }));
 });
 
 /** Owner changes their own password. */

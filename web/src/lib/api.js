@@ -32,6 +32,40 @@ export function getDeviceKey() {
   return k;
 }
 
+/**
+ * Which store (tenant) this browser talks to when no staff token says it:
+ *  - a public link may carry ?store=<slug> (booking site, member signup QR) → remembered for this tab
+ *  - a POS device remembers the store it was set up for (bb_store)
+ * Staff / member tokens always carry their own store on the server side, so this is only a hint for public pages.
+ */
+export function storeRef() {
+  try {
+    const q = new URLSearchParams(window.location.search).get('store');
+    if (q) {
+      sessionStorage.setItem('bb_store_q', q);
+      return q;
+    }
+    return sessionStorage.getItem('bb_store_q') || LS.get('bb_store') || '';
+  } catch {
+    return LS.get('bb_store') || '';
+  }
+}
+export function setDeviceStore(store) {
+  if (!store) return;
+  const prev = LS.get('bb_store_id');
+  // device registrations (bb_device_id) belong to one store → forget them when this device moves to another store
+  if (prev && Number(prev) !== Number(store.id)) {
+    ['bb_device_id', 'bb_device'].forEach((k) => LS.set(k, null));
+  }
+  LS.set('bb_store_id', store.id);
+  LS.set('bb_store', store.slug);
+  try {
+    sessionStorage.removeItem('bb_store_q');
+  } catch {
+    /* ignore */
+  }
+}
+
 export class ApiError extends Error {
   constructor(message, status, data) {
     super(message);
@@ -86,8 +120,14 @@ export async function request(method, url, body, opts = {}) {
   if (opts.queueable && !opts.idempotencyKey) opts = { ...opts, idempotencyKey: uid() };
   const token = opts.member ? LS.get('bb_member_token') : LS.get('bb_token');
   if (token && opts.auth !== false) headers.Authorization = `Bearer ${token}`;
+  if (opts.platform) {
+    const pt = LS.get('bb_platform_token');
+    if (pt) headers.Authorization = `Bearer ${pt}`;
+  }
+  const ref = opts.store || storeRef();
+  if (ref) headers['X-Store'] = String(ref);
   const deviceId = LS.get('bb_device_id');
-  if (deviceId) headers['X-Device-Id'] = String(deviceId);
+  if (deviceId && !opts.platform) headers['X-Device-Id'] = String(deviceId);
   if (opts.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
   if (opts.passive) headers['X-Passive'] = '1';
   let payload;
@@ -111,7 +151,10 @@ export async function request(method, url, body, opts = {}) {
   const ct = res.headers.get('content-type') || '';
   const data = ct.includes('json') ? await res.json().catch(() => ({})) : await res.text();
   if (!res.ok) {
-    if (res.status === 401 && !opts.member && opts.auth !== false) window.dispatchEvent(new CustomEvent('bb:unauthorized', { detail: data?.error }));
+    if (res.status === 401 && opts.platform) window.dispatchEvent(new CustomEvent('bb:platform-unauthorized'));
+    else if (res.status === 401 && !opts.member && opts.auth !== false) window.dispatchEvent(new CustomEvent('bb:unauthorized', { detail: data?.error }));
+    // the store's package expired / was suspended → every open screen switches to the "package expired" page
+    if (res.status === 402 && data?.code === 'SUBSCRIPTION_EXPIRED') window.dispatchEvent(new CustomEvent('bb:subscription-expired', { detail: data }));
     throw new ApiError(translatePhrase(data?.error || `Error ${res.status}`), res.status, data);
   }
   return data;

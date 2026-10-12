@@ -11,6 +11,8 @@ import { createStore, changeSubscription, addPeriod } from '../services/stores.j
 import { getSubscription, invalidateSubscription, publicSubscription } from '../services/subscription.js';
 import { issueEmployeeSession } from './auth.js';
 import { PLAN_FEATURES, PLAN_LIMITS } from '@beatbox/shared/plans.js';
+import { emitStaff } from '../lib/realtime.js';
+import { clearStoreCache } from '../lib/tenant.js';
 
 const r = Router();
 
@@ -173,6 +175,8 @@ r.put('/stores/:id', requirePlatform, async (req, res) => {
   await pool.query(`UPDATE stores SET name = $2, phone = $3, address = $4, owner_name = $5, slug = COALESCE($6, slug), updated_at = now() WHERE id = $1`, [req.params.id, b.name, b.phone, b.address, b.ownerName, b.slug || null]);
   await pool.query(`INSERT INTO subscription_events(store_id, action, before, after, actor_type, actor_id, actor_name) VALUES ($1,'EDIT_STORE',$2,$3,'PLATFORM',$4,$5)`, [req.params.id, before, b, req.platformUser.id, actorOf(req).name]);
   invalidateSubscription(req.params.id);
+  clearStoreCache();
+  emitStaff('subscription:changed', { at: Date.now() }, Number(req.params.id));
   res.json({ ok: true });
 });
 
@@ -249,8 +253,11 @@ r.put('/plans/:id', requirePlatform, async (req, res) => {
     `UPDATE plans SET name=$2, description=$3, price=$4, currency=$5, billing_cycle=$6, billing_interval=$7, features=$8, limits=$9, is_public=$10, trial_days=$11, sort_order=COALESCE($12, sort_order), updated_at=now() WHERE id=$1 RETURNING *`,
     [req.params.id, b.name, b.description, b.price, b.currency, b.billingCycle, b.billingInterval, features, limits, b.isPublic, b.trialDays, b.sortOrder ?? null],
   );
-  // every store on this plan sees the new rights immediately
+  // every store on this plan sees the new rights immediately (open screens re-read their package)
   invalidateSubscription();
+  await pool.query(`INSERT INTO subscription_events(store_id, action, before, after, actor_type, actor_id, actor_name)
+                    SELECT store_id, 'EDIT_PLAN', $1, $2, 'PLATFORM', $3, $4 FROM store_subscriptions WHERE plan_id = $5`, [planOut(before), planOut(row), req.platformUser.id, actorOf(req).name, row.id]);
+  for (const s of await many('SELECT store_id FROM store_subscriptions WHERE plan_id = $1', [row.id])) emitStaff('subscription:changed', { at: Date.now() }, s.store_id);
   res.json(planOut(row));
 });
 

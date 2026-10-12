@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useId, Children, isValidElement, cloneElement } from 'react';
 import { createPortal } from 'react-dom';
 import { X, CheckCircle2, AlertTriangle, Info, XCircle, ImageOff, KeyRound, Delete } from 'lucide-react';
 import QRCodeLib from 'qrcode';
@@ -66,10 +66,21 @@ export function Drawer({ onClose, title, children, footer, actions }) {
 
 export function Field({ label, hint, children, style, className = '' }) {
   const { t } = useT();
+  const autoId = useId();
+  // link the label to the (first) form control so screen readers / tests can find it by its label
+  let controlId = null;
+  let linked = false;
+  const kids = Children.map(children, (c) => {
+    if (linked || !isValidElement(c) || typeof c.type === 'string' && !['input', 'select', 'textarea'].includes(c.type)) return c;
+    if (c.type !== Input && c.type !== Textarea && c.type !== Select && typeof c.type !== 'string') return c;
+    linked = true;
+    controlId = c.props.id || autoId;
+    return c.props.id ? c : cloneElement(c, { id: controlId });
+  });
   return (
     <div className={`field ${className}`} style={style}>
-      {label && <label>{typeof label === 'string' ? t(label) : label}</label>}
-      {children}
+      {label && <label htmlFor={controlId || undefined}>{typeof label === 'string' ? t(label) : label}</label>}
+      {kids}
       {hint && <span className="hint">{typeof hint === 'string' ? t(hint) : hint}</span>}
     </div>
   );
