@@ -2,7 +2,7 @@
 // Secrets are encrypted at rest (AES-256-GCM) and never sent back to the browser — the UI only sees "set / last 4".
 // Environment variables remain as fallbacks so existing deployments keep working.
 import crypto from 'node:crypto';
-import { pool } from '../db/index.js';
+import { pool, currentStoreId } from '../db/index.js';
 import { config } from '../config.js';
 
 const env = process.env;
@@ -87,8 +87,7 @@ export function decryptJson(text) {
 
 const resolveDef = (f) => (typeof f.def === 'function' ? f.def() : f.def);
 
-let cache = null;
-let cacheAt = 0;
+const cache = new Map(); // storeId -> { out, at }
 
 async function loadRows() {
   return (await pool.query('SELECT key, config, secrets, updated_at FROM integration_settings')).rows;
@@ -96,7 +95,9 @@ async function loadRows() {
 
 /** Full integration settings with decrypted secrets — server-side only. */
 export async function getIntegrations() {
-  if (cache && Date.now() - cacheAt < 5000) return cache;
+  const sid = currentStoreId();
+  const hit = cache.get(sid);
+  if (hit && Date.now() - hit.at < 5000) return hit.out;
   const rows = await loadRows();
   const out = {};
   for (const [section, fields] of Object.entries(INTEGRATION_FIELDS)) {
@@ -110,13 +111,12 @@ export async function getIntegrations() {
     }
   }
   out.line.callbackUrl = out.line.callbackUrl || `${config.publicUrl}/api/public/auth/line/callback`;
-  cache = out;
-  cacheAt = Date.now();
+  cache.set(sid, { out, at: Date.now() });
   return out;
 }
 
 export function invalidateIntegrations() {
-  cache = null;
+  cache.delete(currentStoreId());
 }
 
 const mask = (v) => (v ? { set: true, last4: String(v).slice(-4) } : { set: false });
@@ -166,7 +166,7 @@ export async function saveIntegration(client, section, body, employeeId) {
   }
   await client.query(
     `INSERT INTO integration_settings(key, config, secrets, updated_by) VALUES ($1,$2,$3,$4)
-     ON CONFLICT (key) DO UPDATE SET config = $2, secrets = $3, updated_by = $4, updated_at = now()`,
+     ON CONFLICT (store_id, key) DO UPDATE SET config = $2, secrets = $3, updated_by = $4, updated_at = now()`,
     [section, cfg, Object.keys(sec).length ? encryptJson(sec) : null, employeeId || null],
   );
   invalidateIntegrations();

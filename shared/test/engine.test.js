@@ -105,3 +105,18 @@ test('promotion engine', () => {
   assert.equal(code.amount, 50);
   assert.equal(evaluatePromotion({ type: 'COUPON', code: 'SING50', value: 50, conditions: {} }, { lines }).eligible, false);
 });
+
+test('remaining time is counted on the real calendar (years, months, days, hours, minutes)', async () => {
+  const { remainingParts, formatRemaining } = await import('../time.js');
+  const at = (s) => new Date(s).getTime();
+  // 31 Jan → 1 Mar: one month (to 28/29 Feb) plus the rest in days
+  let p = remainingParts(at('2026-01-31T10:00:00+07:00'), at('2026-03-01T10:00:00+07:00'));
+  assert.deepEqual([p.years, p.months, p.days, p.hours, p.minutes], [0, 1, 1, 0, 0]);
+  p = remainingParts(at('2026-10-12T09:30:00+07:00'), at('2027-12-14T12:45:00+07:00'));
+  assert.deepEqual([p.years, p.months, p.days, p.hours, p.minutes], [1, 2, 2, 3, 15]);
+  assert.equal(formatRemaining(p), '1 ปี 2 เดือน 2 วัน 3 ชม. 15 นาที');
+  p = remainingParts(at('2026-10-12T23:00:00+07:00'), at('2026-10-13T01:05:00+07:00'));
+  assert.deepEqual([p.years, p.months, p.days, p.hours, p.minutes], [0, 0, 0, 2, 5]);
+  assert.equal(remainingParts(at('2026-10-12T10:00:00Z'), at('2026-10-12T09:00:00Z')).expired, true);
+  assert.equal(remainingParts(1, null).unlimited, true);
+});

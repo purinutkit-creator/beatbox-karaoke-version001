@@ -33,7 +33,7 @@ export async function nextQueueNo(client, settings, shiftId) {
   const start = Number(q.start ?? 1);
   const r = await client.query(
     `INSERT INTO counters(name, period, value) VALUES ('queue', $1, $2)
-     ON CONFLICT (name, period) DO UPDATE SET value = counters.value + 1, updated_at = now() RETURNING value`,
+     ON CONFLICT (store_id, name, period) DO UPDATE SET value = counters.value + 1, updated_at = now() RETURNING value`,
     [period, start],
   );
   return renderQueue(q, r.rows[0].value);

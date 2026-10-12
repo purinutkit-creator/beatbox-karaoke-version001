@@ -1,5 +1,6 @@
 // Initial data for a fresh database (only runs when there is no store yet).
-import { pool, tx } from './index.js';
+import bcrypt from 'bcryptjs';
+import { pool, tx, runAsPlatform, runWithStore } from './index.js';
 import { migrate } from './migrate.js';
 import { hashPin, pinLookup } from '../lib/auth.js';
 import { PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, ROLES } from '@beatbox/shared/constants.js';
@@ -7,51 +8,108 @@ import { halfHourPrice } from '@beatbox/shared/roomPricing.js';
 
 const img = (id) => `https://images.unsplash.com/${id}?auto=format&fit=crop&w=800&q=70`;
 
-export async function seedIfEmpty({ demo = process.env.SEED_DEMO !== 'false' } = {}) {
-  const has = await pool.query('SELECT 1 FROM stores LIMIT 1');
-  // permissions are always synced (new permissions added in updates)
-  for (const p of PERMISSIONS) {
-    await pool.query('INSERT INTO permissions(code, name, group_name) VALUES ($1,$2,$3) ON CONFLICT (code) DO UPDATE SET name = $2, group_name = $3', [p.code, p.name, p.group]);
+/** Insert a store row (platform context) and its subscription. Returns the store id. */
+export async function insertStore(c, { name, slug, address = null, phone = null, taxId = null, slogan = null, ownerName = null, ownerEmail = null }) {
+  const store = (
+    await c.query(
+      `INSERT INTO stores(name, slug, address, phone, tax_id, slogan, owner_name, owner_email) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [name, slug, address, phone, taxId, slogan, ownerName, ownerEmail],
+    )
+  ).rows[0];
+  return store.id;
+}
+
+/**
+ * Default data of a store (runs inside that store's context): branch, roles + permissions, first employee, member tiers,
+ * a browser printer and optionally demo rooms / products.
+ * employee: { name, pin } (PIN login) and/or { email, passwordHash } (store owner).
+ */
+export async function seedStoreData(c, { storeId, branchName = 'สาขาหลัก', address = null, phone = null, demo = false, employee, demoStaff = false }) {
+  const branch = (await c.query(`INSERT INTO branches(store_id, code, name, address, phone, open_time, close_time) VALUES ($1,'HQ',$2,$3,$4,'12:00','02:00') RETURNING id`, [storeId, branchName, address, phone])).rows[0];
+  const roleIds = {};
+  for (const [code, name] of Object.entries(ROLES)) {
+    const r = (await c.query('INSERT INTO roles(code, name) VALUES ($1,$2) RETURNING id', [code, name])).rows[0];
+    roleIds[code] = r.id;
+    for (const p of DEFAULT_ROLE_PERMISSIONS[code]) await c.query('INSERT INTO role_permissions(role_id, permission_code) VALUES ($1,$2)', [r.id, p]);
   }
-  if (has.rows[0]) return false;
-  await tx(async (c) => {
-    const store = (
+  const emps = [];
+  if (employee) emps.push([employee.name, employee.pin || null, 'ADMIN', employee.position || 'เจ้าของร้าน', 100, employee.email || null, employee.passwordHash || null, !!employee.isOwner]);
+  if (demo && demoStaff) emps.push(['สมชาย ผู้จัดการ', '2222', 'MANAGER', 'ผู้จัดการร้าน', 50], ['มานี แคชเชียร์', '3333', 'CASHIER', 'แคชเชียร์', 10], ['ปิติ พนักงาน', '4444', 'STAFF', 'พนักงานบริการ', 0]);
+  let ownerId = null;
+  for (const [name, pin, role, position, limit, email = null, passwordHash = null, isOwner = false] of emps) {
+    const row = (
       await c.query(
-        `INSERT INTO stores(name, logo_url, address, phone, tax_id, slogan) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-        ['BEATBOX Karaoke', '', '99/9 ถนนสุขุมวิท แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110', '02-123-4567', '0105566012345', 'ร้องให้สุด หยุดที่ BEATBOX'],
+        `INSERT INTO employees(name, pin_hash, pin_lookup, role_id, position, discount_limit_percent, email, password_hash, is_owner) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        [name, pin ? await hashPin(pin) : null, pin ? pinLookup(pin) : null, roleIds[role], position, limit, email, passwordHash, isOwner],
       )
     ).rows[0];
-    const branch = (await c.query(`INSERT INTO branches(store_id, code, name, address, phone, open_time, close_time) VALUES ($1,'HQ','สาขาสุขุมวิท',$2,'02-123-4567','12:00','02:00') RETURNING id`, [store.id, '99/9 ถนนสุขุมวิท กรุงเทพฯ'])).rows[0];
+    if (!ownerId) ownerId = row.id;
+  }
+  const tiers = [
+    ['MEMBER', 'Member', '#9ca3af', 0, null, null, 1, 0, 0],
+    ['SILVER', 'Silver', '#94a3b8', 1, null, 5000, 1.2, 0, 0],
+    ['GOLD', 'Gold', '#eab308', 2, null, 15000, 1.5, 5, 0],
+    ['PLATINUM', 'Platinum', '#a78bfa', 3, null, 40000, 2, 10, 5],
+    ['VIP', 'VIP', '#ec4899', 4, null, 100000, 3, 15, 10],
+  ];
+  for (const [code, name, color, sort, pts, spend, mult, rd, pd] of tiers) {
+    await c.query(
+      `INSERT INTO member_tiers(code, name, color, sort_order, min_points, min_spending, point_multiplier, room_discount_percent, product_discount_percent, benefits) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [code, name, color, sort, pts, spend, mult, rd, pd, { birthdayReward: sort >= 2, priorityBooking: sort >= 3 }],
+    );
+  }
+  await c.query(`INSERT INTO printers(name, connection, station, is_default) VALUES ('เครื่องพิมพ์หลัก (ไดรเวอร์ระบบ)','BROWSER','MAIN',true)`);
+  if (demo) await seedDemo(c, branch);
+  return { branchId: branch.id, ownerId, roleIds };
+}
 
-    const roleIds = {};
-    for (const [code, name] of Object.entries(ROLES)) {
-      const r = (await c.query('INSERT INTO roles(code, name) VALUES ($1,$2) RETURNING id', [code, name])).rows[0];
-      roleIds[code] = r.id;
-      for (const p of DEFAULT_ROLE_PERMISSIONS[code]) await c.query('INSERT INTO role_permissions(role_id, permission_code) VALUES ($1,$2)', [r.id, p]);
-    }
-    const adminPin = process.env.ADMIN_PIN || '1234';
-    const emps = [['ผู้ดูแลระบบ', adminPin, 'ADMIN', 'เจ้าของร้าน', 100]];
-    // demo staff have well-known PINs; SEED_DEMO_STAFF=false keeps demo data but only the admin account
-    if (demo && process.env.SEED_DEMO_STAFF !== 'false') emps.push(['สมชาย ผู้จัดการ', '2222', 'MANAGER', 'ผู้จัดการร้าน', 50], ['มานี แคชเชียร์', '3333', 'CASHIER', 'แคชเชียร์', 10], ['ปิติ พนักงาน', '4444', 'STAFF', 'พนักงานบริการ', 0]);
-    for (const [name, pin, role, position, limit] of emps) {
-      await c.query(`INSERT INTO employees(name, pin_hash, pin_lookup, role_id, position, discount_limit_percent) VALUES ($1,$2,$3,$4,$5,$6)`, [name, await hashPin(pin), pinLookup(pin), roleIds[role], position, limit]);
-    }
+/** Super Owner account from server configuration (env), stored as a bcrypt hash. Never overwrites an existing password. */
+export async function ensureSuperOwner() {
+  const username = process.env.SUPER_OWNER_USERNAME;
+  const password = process.env.SUPER_OWNER_PASSWORD;
+  if (!username || !password) return null;
+  return runAsPlatform(async () => {
+    const ex = (await pool.query('SELECT id FROM platform_users WHERE lower(username) = lower($1)', [username])).rows[0];
+    if (ex) return ex.id;
+    const r = (await pool.query(`INSERT INTO platform_users(username, display_name, password_hash, role) VALUES ($1,$1,$2,'SUPER_OWNER') RETURNING id`, [username.trim(), await bcrypt.hash(password, 12)])).rows[0];
+    console.log(`[seed] Super Owner account "${username}" created`);
+    return r.id;
+  });
+}
 
-    const tiers = [
-      ['MEMBER', 'Member', '#9ca3af', 0, null, null, 1, 0, 0],
-      ['SILVER', 'Silver', '#94a3b8', 1, null, 5000, 1.2, 0, 0],
-      ['GOLD', 'Gold', '#eab308', 2, null, 15000, 1.5, 5, 0],
-      ['PLATINUM', 'Platinum', '#a78bfa', 3, null, 40000, 2, 10, 5],
-      ['VIP', 'VIP', '#ec4899', 4, null, 100000, 3, 15, 10],
-    ];
-    for (const [code, name, color, sort, pts, spend, mult, rd, pd] of tiers) {
-      await c.query(
-        `INSERT INTO member_tiers(code, name, color, sort_order, min_points, min_spending, point_multiplier, room_discount_percent, product_discount_percent, benefits) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [code, name, color, sort, pts, spend, mult, rd, pd, { birthdayReward: sort >= 2, priorityBooking: sort >= 3 }],
-      );
+export async function seedIfEmpty({ demo = process.env.SEED_DEMO !== 'false' } = {}) {
+  return runAsPlatform(async () => {
+    // permissions are always synced (new permissions added in updates)
+    for (const p of PERMISSIONS) {
+      await pool.query('INSERT INTO permissions(code, name, group_name) VALUES ($1,$2,$3) ON CONFLICT (code) DO UPDATE SET name = $2, group_name = $3', [p.code, p.name, p.group]);
     }
-    await c.query(`INSERT INTO printers(name, connection, station, is_default) VALUES ('เครื่องพิมพ์ใบเสร็จหลัก (Browser/USB)','BROWSER','MAIN',true)`);
-    if (!demo) return;
+    const has = await pool.query('SELECT 1 FROM stores LIMIT 1');
+    if (has.rows[0]) return false;
+    const storeId = await tx((c) => insertStore(c, { name: 'BEATBOX Karaoke', slug: 'beatbox', address: '99/9 ถนนสุขุมวิท แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110', phone: '02-123-4567', taxId: '0105566012345', slogan: 'ร้องให้สุด หยุดที่ BEATBOX' }));
+    await pool.query(
+      `INSERT INTO store_subscriptions(store_id, plan_id, status, expires_at) VALUES ($1, (SELECT id FROM plans ORDER BY sort_order DESC, id DESC LIMIT 1), 'ACTIVE', NULL) ON CONFLICT (store_id) DO NOTHING`,
+      [storeId],
+    );
+    await runWithStore(storeId, () =>
+      tx((c) =>
+        seedStoreData(c, {
+          storeId,
+          branchName: 'สาขาสุขุมวิท',
+          address: '99/9 ถนนสุขุมวิท กรุงเทพฯ',
+          phone: '02-123-4567',
+          demo,
+          demoStaff: process.env.SEED_DEMO_STAFF !== 'false',
+          employee: { name: 'ผู้ดูแลระบบ', pin: process.env.ADMIN_PIN || '1234' },
+        }),
+      ),
+    );
+    console.log('[seed] initial data created');
+    return true;
+  });
+}
+
+async function seedDemo(c, branch) {
+  {
 
     const types = [
       ['STD', 'Standard', 6, 299, 300, '#22c55e', ['จอ 55 นิ้ว', 'ไมค์ไร้สาย 2 ตัว', 'แอร์'], img('photo-1516280440614-37939bbacd81')],
@@ -151,14 +209,13 @@ export async function seedIfEmpty({ demo = process.env.SEED_DEMO !== 'false' } =
       ['สมาชิกสะสมคะแนน แลกห้องฟรี', img('photo-1501612780327-45045538702b')],
     ];
     for (const [i, [title, url]] of banners.entries()) await c.query('INSERT INTO promotion_images(title, image_url, sort_order) VALUES ($1,$2,$3)', [title, url, i]);
-  });
-  console.log('[seed] initial data created');
-  return true;
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   migrate()
     .then(() => seedIfEmpty())
+    .then(() => ensureSuperOwner())
     .then(() => pool.end())
     .catch((e) => {
       console.error(e);

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool, tx, many } from '../db/index.js';
+import { assertLimit } from '../services/subscription.js';
 import { requireAuth, can, hashPin, pinLookup, clearPermCache, loadPermissions } from '../lib/auth.js';
 import { logActivity } from '../lib/activity.js';
 import { z, parse, zUrl } from '../lib/validate.js';
@@ -29,14 +30,14 @@ r.put('/roles/:id/permissions', can('employee.manage'), async (req, res) => {
 r.get('/employees', can('employee.manage'), async (_req, res) => {
   const rows = await many(
     `SELECT e.id, e.name, e.photo_url, e.position, e.phone, e.role_id, r.code AS role, r.name AS role_name, e.is_active, e.created_at, e.last_login_at, e.discount_limit_percent
-     FROM employees e JOIN roles r ON r.id = e.role_id WHERE e.deleted_at IS NULL ORDER BY e.id`,
+     FROM employees e JOIN roles r ON r.id = e.role_id WHERE e.deleted_at IS NULL AND NOT e.is_hidden ORDER BY e.id`,
   );
   const overrides = await many('SELECT * FROM employee_permissions');
   res.json(rows.map((e) => ({ ...e, overrides: overrides.filter((o) => o.employee_id === e.id) })));
 });
 
 r.get('/employees/directory', async (_req, res) => {
-  res.json(await many(`SELECT id, name, photo_url, position FROM employees WHERE deleted_at IS NULL ORDER BY name`));
+  res.json(await many(`SELECT id, name, photo_url, position FROM employees WHERE deleted_at IS NULL AND NOT is_hidden ORDER BY name`));
 });
 
 const empSchema = z.object({
@@ -54,6 +55,7 @@ r.post('/employees', can('employee.manage'), async (req, res) => {
   const b = parse(empSchema, req.body);
   if (!b.pin) throw badRequest('กรุณากำหนดรหัสพนักงาน 4 หลัก');
   const row = await tx(async (c) => {
+    await assertLimit(c, 'employees', 'SELECT count(*) AS n FROM employees WHERE deleted_at IS NULL AND NOT is_hidden');
     const e = (
       await c.query(
         `INSERT INTO employees(name, pin_hash, pin_lookup, photo_url, position, phone, role_id, is_active, discount_limit_percent) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, name`,

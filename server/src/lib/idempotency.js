@@ -1,4 +1,4 @@
-import { pool } from '../db/index.js';
+import { pool, currentStoreId } from '../db/index.js';
 import { conflict } from './errors.js';
 
 /**
@@ -12,7 +12,7 @@ export function idempotent(scope, { required = true } = {}) {
       if (required) return res.status(400).json({ error: 'ต้องระบุ Idempotency-Key', code: 'IDEMPOTENCY_REQUIRED' });
       return next();
     }
-    const fullKey = `${scope}:${key}`;
+    const fullKey = `${currentStoreId() || 0}:${scope}:${key}`;
     req.idempotencyKey = String(key);
     const ins = await pool.query(`INSERT INTO idempotency_keys(key, scope) VALUES ($1,$2) ON CONFLICT (key) DO NOTHING RETURNING key`, [fullKey, scope]);
     if (!ins.rows[0]) {

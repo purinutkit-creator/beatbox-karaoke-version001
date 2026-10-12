@@ -2,9 +2,11 @@ import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { config } from '../config.js';
-import { pool } from '../db/index.js';
+import { pool, currentStoreId } from '../db/index.js';
 import { unauthorized, forbidden } from './errors.js';
 import { getSettings } from '../services/settings.js';
+import { getSubscription, planAllowsPermission } from '../services/subscription.js';
+import { ALL_PERMISSION_CODES } from '@beatbox/shared/constants.js';
 
 export function pinLookup(pin) {
   return crypto.createHmac('sha256', config.pinPepper).update(String(pin)).digest('hex');
@@ -65,9 +67,11 @@ export function clearPermCache(employeeId) {
 export async function authenticateToken(token) {
   const payload = verifyToken(token);
   if (!payload || payload.typ !== 'employee') return null;
+  // the token belongs to exactly one store; row-level security only shows that store's sessions
+  if (payload.st && Number(payload.st) !== Number(currentStoreId())) return null;
   const s = await pool.query(
     `SELECT s.id, s.last_active_at, s.revoked_at, s.device_id, e.id AS employee_id, e.name, e.photo_url, e.position, e.is_active,
-            e.discount_limit_percent, r.code AS role
+            e.discount_limit_percent, e.is_owner, e.platform_user_id, r.code AS role
      FROM auth_sessions s JOIN employees e ON e.id = s.employee_id JOIN roles r ON r.id = e.role_id
      WHERE s.id = $1 AND e.deleted_at IS NULL`,
     [payload.sid],
@@ -91,6 +95,9 @@ export async function authenticateToken(token) {
       position: row.position,
       role: row.role,
       discountLimitPercent: Number(row.discount_limit_percent),
+      isOwner: row.is_owner,
+      platformUserId: row.platform_user_id || payload.sup || null,
+      superOwnerName: payload.supName || null,
     },
   };
 }
@@ -105,7 +112,10 @@ export async function requireAuth(req, _res, next) {
   req.employee = auth.employee;
   req.authSessionId = auth.sessionId;
   req.deviceId = Number(req.headers['x-device-id']) || auth.deviceId || null;
-  req.permissions = new Set(await loadPermissions(auth.employee.id));
+  // effective rights = staff permission AND the store plan's feature (an ADMIN still can't use features outside the plan)
+  req.subscription = req.subscription || (await getSubscription());
+  const own = auth.employee.role === 'ADMIN' ? ALL_PERMISSION_CODES : await loadPermissions(auth.employee.id);
+  req.permissions = new Set(own.filter((p) => planAllowsPermission(req.subscription, p)));
   // passive requests (polling) should not extend the session
   if (req.headers['x-passive'] !== '1' && Date.now() - new Date(auth.lastActiveAt).getTime() > 15000) {
     pool.query('UPDATE auth_sessions SET last_active_at = now() WHERE id = $1', [auth.sessionId]).catch(() => {});
@@ -116,14 +126,15 @@ export async function requireAuth(req, _res, next) {
 export function can(...perms) {
   return (req, _res, next) => {
     if (!req.employee) throw unauthorized();
-    if (req.employee.role === 'ADMIN') return next();
+    const outside = perms.filter((p) => !planAllowsPermission(req.subscription, p));
+    if (outside.length) throw forbidden(`แพ็กเกจปัจจุบันไม่รวมฟังก์ชันนี้ (${outside.join(', ')}) กรุณาอัปเกรดแพ็กเกจ`);
     if (!perms.every((p) => req.permissions.has(p))) throw forbidden(`คุณไม่มีสิทธิ์ทำรายการนี้ (${perms.join(', ')})`);
     next();
   };
 }
 
 export function hasPerm(req, perm) {
-  return req.employee?.role === 'ADMIN' || req.permissions?.has(perm);
+  return !!req.permissions?.has(perm);
 }
 
 /** Manager approval token (short lived) issued after a manager enters their PIN. */
@@ -142,6 +153,7 @@ export async function requireMember(req, _res, next) {
   const token = getBearer(req);
   const p = token ? verifyToken(token) : null;
   if (!p || p.typ !== 'member') throw unauthorized('กรุณาเข้าสู่ระบบสมาชิก');
+  if (p.st && Number(p.st) !== Number(currentStoreId())) throw unauthorized('กรุณาเข้าสู่ระบบสมาชิก');
   const s = await pool.query(
     `SELECT ms.id, m.* FROM member_sessions ms JOIN members m ON m.id = ms.member_id
      WHERE ms.id = $1 AND ms.revoked_at IS NULL AND ms.expires_at > now() AND m.deleted_at IS NULL`,
@@ -169,5 +181,5 @@ export async function optionalMember(req, _res, next) {
 
 export async function createMemberSession(client, memberId) {
   const r = await client.query(`INSERT INTO member_sessions(member_id, expires_at) VALUES ($1, now() + interval '30 days') RETURNING id`, [memberId]);
-  return signToken({ typ: 'member', sid: r.rows[0].id, mid: memberId }, '30d');
+  return signToken({ typ: 'member', sid: r.rows[0].id, mid: memberId, st: currentStoreId() }, '30d');
 }

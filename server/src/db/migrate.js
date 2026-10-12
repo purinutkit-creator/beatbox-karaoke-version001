@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { pool } from './index.js';
+import { pool, adminConnect } from './index.js';
 
 const dir = new URL('./migrations/', import.meta.url).pathname;
 
 export async function migrate({ log = true } = {}) {
-  const client = await pool.connect();
+  const client = await adminConnect();
   try {
     await client.query('SELECT pg_advisory_lock(424242)');
     await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);

@@ -8,6 +8,7 @@ import { logActivity } from '../lib/activity.js';
 import { z, parse } from '../lib/validate.js';
 import { notFound, badRequest, conflict } from '../lib/errors.js';
 import { emitSync } from '../lib/realtime.js';
+import { useStoreOf } from '../lib/tenant.js';
 import { getSettings, invalidateSettings } from '../services/settings.js';
 import { maskedIntegrations, saveIntegration, INTEGRATION_FIELDS, fillTemplate } from '../services/integrations.js';
 import { lineLogin, lineMessaging } from '../providers/line.js';
@@ -193,6 +194,7 @@ terminalPublic.post('/terminal/beam/webhook', async (req, res) => {
   const b = req.body || {};
   const ids = [b.id, b.boltIntentId, b.data?.id, b.data?.boltIntentId, b.data?.referenceId, b.referenceId].filter((x) => typeof x === 'string' && x.length < 200);
   for (const id of ids) {
+    if (!(await useStoreOf('terminal_payments', 'provider_ref', id))) continue;
     const row = await one(`SELECT * FROM terminal_payments WHERE provider = 'beam' AND provider_ref = $1`, [id]);
     if (row) {
       const u = await refreshTerminal(row);

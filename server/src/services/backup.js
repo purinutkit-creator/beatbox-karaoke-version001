@@ -1,42 +1,33 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { spawn } from 'node:child_process';
-import { pool, many } from '../db/index.js';
+import { pool, many, currentStoreId } from '../db/index.js';
+
+const PLATFORM_TABLES = new Set(['platform_users', 'platform_sessions', 'plans', 'store_subscriptions', 'subscription_events', 'platform_settings', 'renewal_requests', 'idempotency_keys', 'schema_migrations', 'permissions', 'stored_files']);
 import { config } from '../config.js';
 import { getSettings } from './settings.js';
-
-function pgDump(file) {
-  return new Promise((resolve, reject) => {
-    const out = fs.createWriteStream(file);
-    const gz = zlib.createGzip();
-    const p = spawn('pg_dump', ['--no-owner', '--format=plain', config.databaseUrl]);
-    let err = '';
-    p.stderr.on('data', (d) => (err += d));
-    p.on('error', reject);
-    p.stdout.pipe(gz).pipe(out);
-    p.on('close', (code) => (code === 0 ? out.on('finish', resolve) : reject(new Error(err || `pg_dump exited ${code}`))));
-  });
-}
 
 async function jsonDump(file) {
   const tables = (await pool.query(`SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`)).rows.map((r) => r.tablename);
   const data = {};
-  for (const t of tables) data[t] = (await pool.query(`SELECT * FROM "${t}"`)).rows;
+  for (const t of tables) {
+    // platform tables (plans, platform users, other stores' subscriptions) are never part of a store backup
+    if (PLATFORM_TABLES.has(t)) continue;
+    data[t] = (await pool.query(`SELECT * FROM "${t}"`)).rows;
+  }
   fs.writeFileSync(file, zlib.gzipSync(JSON.stringify({ createdAt: new Date(), tables: data })));
 }
 
+/**
+ * Store backup: a JSON export of this store's rows only (row-level security scopes every table to the store),
+ * so a store admin can never download another store's data. A full database dump is a platform task (pg_dump).
+ */
 export async function runBackup(kind = 'AUTO') {
   fs.mkdirSync(config.backupDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  let file = path.join(config.backupDir, `beatbox-${kind.toLowerCase()}-${stamp}.sql.gz`);
+  const file = path.join(config.backupDir, `store-${currentStoreId()}-${kind.toLowerCase()}-${stamp}.json.gz`);
   try {
-    try {
-      await pgDump(file);
-    } catch {
-      file = file.replace('.sql.gz', '.json.gz');
-      await jsonDump(file);
-    }
+    await jsonDump(file);
     const size = fs.statSync(file).size;
     const row = (await pool.query(`INSERT INTO backups(file_name, size_bytes, status) VALUES ($1,$2,'SUCCESS') RETURNING *`, [path.basename(file), size])).rows[0];
     await prune();
@@ -50,7 +41,7 @@ export async function runBackup(kind = 'AUTO') {
 async function prune() {
   const s = await getSettings();
   const keep = Number(s.backup.keep || 14);
-  const files = fs.readdirSync(config.backupDir).filter((f) => f.startsWith('beatbox-')).sort().reverse();
+  const files = fs.readdirSync(config.backupDir).filter((f) => f.startsWith(`store-${currentStoreId()}-`)).sort().reverse();
   for (const f of files.slice(keep)) fs.rmSync(path.join(config.backupDir, f), { force: true });
 }
 

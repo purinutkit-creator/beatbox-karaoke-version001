@@ -7,6 +7,7 @@ import { logActivity } from '../lib/activity.js';
 import { z, parse } from '../lib/validate.js';
 import { notFound, badRequest, conflict } from '../lib/errors.js';
 import { emitStaff, emitSync } from '../lib/realtime.js';
+import { useStoreOf } from '../lib/tenant.js';
 import { getSettings } from '../services/settings.js';
 import { saveFile, sendStored } from '../services/files.js';
 import { verifySlip } from '../providers/slip.js';
@@ -19,6 +20,11 @@ const actor = (name) => ({ employee: { id: null, name }, ip: null });
 
 // ───────────── public: /api/public/room/:token ─────────────
 export const publicRoom = Router();
+// the one-time room token decides the store (the QR is printed by that store)
+publicRoom.param('token', async (_req, _res, next, token) => {
+  await useStoreOf('room_sessions', 'order_token', String(token));
+  next();
+});
 
 async function liveSession(c, token, lock = false) {
   const s = (

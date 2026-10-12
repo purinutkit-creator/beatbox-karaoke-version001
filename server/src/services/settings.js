@@ -1,4 +1,4 @@
-import { pool } from '../db/index.js';
+import { pool, currentStoreId } from '../db/index.js';
 import { config } from '../config.js';
 import { getIntegrations } from './integrations.js';
 
@@ -163,8 +163,8 @@ export const DEFAULT_SETTINGS = {
   },
 };
 
-let cache = null;
-let cacheAt = 0;
+// cache per store (the store comes from the request / job context)
+const cache = new Map(); // storeId -> { s, at }
 
 function deepMerge(base, over) {
   if (Array.isArray(base) || typeof base !== 'object' || base === null) return over === undefined ? base : over;
@@ -176,7 +176,9 @@ function deepMerge(base, over) {
 }
 
 export async function getSettings(client) {
-  if (!client && cache && Date.now() - cacheAt < 5000) return cache;
+  const sid = currentStoreId();
+  const hit = cache.get(sid);
+  if (!client && hit && Date.now() - hit.at < 5000) return hit.s;
   const c = client || pool;
   const rows = (await c.query('SELECT key, value FROM system_settings')).rows;
   const s = structuredClone(DEFAULT_SETTINGS);
@@ -184,6 +186,9 @@ export async function getSettings(client) {
   const store = (await c.query('SELECT * FROM stores ORDER BY id LIMIT 1')).rows[0] || {};
   const branch = (await c.query('SELECT * FROM branches WHERE is_active ORDER BY sort_order, id LIMIT 1')).rows[0] || {};
   s.store = {
+    id: store.id || null,
+    slug: store.slug || null,
+    timezone: store.timezone || 'Asia/Bangkok',
     name: store.name || 'BEATBOX Karaoke',
     logoUrl: store.logo_url || '',
     address: store.address || '',
@@ -204,15 +209,12 @@ export async function getSettings(client) {
     terminalProvider: integ.terminal.provider,
     appEnv: config.appEnv,
   };
-  if (!client) {
-    cache = s;
-    cacheAt = Date.now();
-  }
+  if (!client) cache.set(sid, { s, at: Date.now() });
   return s;
 }
 
 export function invalidateSettings() {
-  cache = null;
+  cache.delete(currentStoreId());
 }
 
 /** Tax snapshot passed to the calculation engine and stored on every order. */
@@ -232,7 +234,7 @@ export function taxSnapshot(settings) {
 export async function saveSettingsSection(client, key, value, employeeId) {
   await client.query(
     `INSERT INTO system_settings(key, value, updated_by) VALUES ($1,$2,$3)
-     ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now(), updated_by = $3`,
+     ON CONFLICT (store_id, key) DO UPDATE SET value = $2, updated_at = now(), updated_by = $3`,
     [key, value, employeeId || null],
   );
   invalidateSettings();

@@ -78,11 +78,11 @@ test('integration secrets are encrypted and masked', async () => {
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.deepEqual(r.body.slip.apiKey, { set: true, last4: '9876' });
   assert.equal(r.body.slip.branchId, '12345');
-  const { pool } = await import('../src/db/index.js');
-  const row = (await pool.query(`SELECT config, secrets FROM integration_settings WHERE key = 'slip'`)).rows[0];
-  assert.ok(!JSON.stringify(row).includes('sk-live-secret'));
+  const { pool, runWithStore } = await import('../src/db/index.js');
+  const row = await runWithStore(1, async () => (await pool.query(`SELECT config, secrets FROM integration_settings WHERE key = 'slip'`)).rows[0]);
+  assert.ok(row && !JSON.stringify(row).includes('sk-live-secret'));
   const { getIntegrations } = await import('../src/services/integrations.js');
-  assert.equal((await getIntegrations()).slip.apiKey, 'sk-live-secret-9876');
+  assert.equal((await runWithStore(1, () => getIntegrations())).slip.apiKey, 'sk-live-secret-9876');
   // keep (empty) and clear (null)
   await api('PUT', '/integrations/slip', { apiKey: '' });
   assert.equal((await api('GET', '/integrations')).body.slip.apiKey.set, true);
@@ -162,7 +162,8 @@ test('nobody checks the slip → customer order auto-accepted, checkout blocked 
   await new Promise((r) => setTimeout(r, 1300));
   const { autoAcceptRoomOrders } = await import('../src/services/roomService.js');
   const { getSettings } = await import('../src/services/settings.js');
-  await autoAcceptRoomOrders(await getSettings());
+  const { runWithStore } = await import('../src/db/index.js');
+  await runWithStore(1, async () => autoAcceptRoomOrders(await getSettings()));
   const room = await api('GET', `/public/room/${orderToken}`, null, { auth: false });
   const mine = room.body.orders.find((x) => x.id === o.body.order.id);
   assert.equal(mine.status, 'PLACED');

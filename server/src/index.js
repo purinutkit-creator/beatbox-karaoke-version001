@@ -8,11 +8,15 @@ import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import { config } from './config.js';
 import { migrate } from './db/migrate.js';
-import { seedIfEmpty } from './db/seed.js';
+import { seedIfEmpty, ensureSuperOwner } from './db/seed.js';
 import { errorHandler } from './lib/errors.js';
 import { initRealtime } from './lib/realtime.js';
 import { startScheduler } from './services/scheduler.js';
-import { pool } from './db/index.js';
+import { pool, ensureAppRole } from './db/index.js';
+import { tenantContext } from './lib/tenant.js';
+import { subscriptionGuard } from './services/subscription.js';
+import platformRoutes from './routes/platform.js';
+import subscriptionRoutes from './routes/subscription.js';
 
 import authRoutes from './routes/auth.js';
 import settingsRoutes from './routes/settings.js';
@@ -46,16 +50,23 @@ export function createApp() {
   app.use('/api/public/room', rateLimit({ windowMs: 60000, limit: 120, message: { error: 'มีการเรียกใช้งานถี่เกินไป กรุณาลองใหม่ภายหลัง' } }));
   app.use('/api/public/holds', rateLimit({ windowMs: 60000, limit: 20, message: { error: 'มีการจองถี่เกินไป กรุณาลองใหม่ภายหลัง' } }));
 
+  // every API request runs in the context of one store (row-level security in PostgreSQL)
+  app.use('/api', tenantContext);
+  // expired / suspended stores and features outside the plan are refused on the server
+  app.use('/api', subscriptionGuard);
+
   app.get('/api/health', async (_req, res) => {
     await pool.query('SELECT 1');
     res.json({ ok: true, env: config.appEnv, time: new Date().toISOString() });
   });
   app.get('/api/time', (_req, res) => res.json({ now: Date.now(), iso: new Date().toISOString() }));
 
+  app.use('/api/platform', platformRoutes);
   app.use('/api/public', publicRoom);
   app.use('/api/public', terminalPublic);
   app.use('/api/public', publicRoutes);
   app.use('/api/auth', authRoutes);
+  app.use('/api', subscriptionRoutes);
   app.use('/api', settingsRoutes);
   app.use('/api', employeeRoutes);
   app.use('/api', shiftRoutes);
@@ -87,7 +98,10 @@ export function createApp() {
 
 export async function start() {
   await migrate();
+  const role = await ensureAppRole();
+  if (role) console.log(`[db] connected as superuser → queries run as restricted role "${role}" so row-level security applies`);
   await seedIfEmpty();
+  await ensureSuperOwner();
   const app = createApp();
   const server = http.createServer(app);
   initRealtime(server, config.corsOrigins);

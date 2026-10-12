@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
-import { pool, tx, many, one } from '../db/index.js';
+import { pool, tx, many, one, runAsPlatform } from '../db/index.js';
 import { requireAuth, can } from '../lib/auth.js';
 import { logActivity } from '../lib/activity.js';
 import { z, parse, zUrl } from '../lib/validate.js';
 import { getSettings, saveSettingsSection, DEFAULT_SETTINGS, invalidateSettings } from '../services/settings.js';
 import { emitSync, displayOnline } from '../lib/realtime.js';
-import { notFound, badRequest } from '../lib/errors.js';
+import { notFound, badRequest, forbidden } from '../lib/errors.js';
+import { getSubscription, hasFeature, assertLimit } from '../services/subscription.js';
 import { runBackup, listBackups } from '../services/backup.js';
 
 const r = Router();
@@ -83,7 +84,7 @@ r.post('/settings/queue/set', can('settings.manage'), async (req, res) => {
   const d = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
   const shift = await one(`SELECT id FROM shifts WHERE status = 'OPEN' ORDER BY id DESC LIMIT 1`);
   const period = s.queue.resetMode === 'DAILY' ? d : s.queue.resetMode === 'SHIFT' ? `shift-${shift?.id || 0}` : 'ALL';
-  await pool.query(`INSERT INTO counters(name, period, value) VALUES ('queue',$1,$2) ON CONFLICT (name, period) DO UPDATE SET value = $2, updated_at = now()`, [period, lastNumber]);
+  await pool.query(`INSERT INTO counters(name, period, value) VALUES ('queue',$1,$2) ON CONFLICT (store_id, name, period) DO UPDATE SET value = $2, updated_at = now()`, [period, lastNumber]);
   await logActivity(null, req, 'QUEUE_SET', 'settings', 'queue', { lastNumber, period });
   res.json({ ok: true, period, lastNumber });
 });
@@ -97,7 +98,11 @@ r.get('/settings/queue/current', async (_req, res) => {
 r.get('/branches', async (_req, res) => res.json(await many('SELECT * FROM branches ORDER BY sort_order, id')));
 r.post('/branches', can('settings.manage'), async (req, res) => {
   const b = parse(z.object({ code: z.string().min(1), name: z.string().min(1), address: z.string().optional(), phone: z.string().optional(), openTime: z.string().default('12:00'), closeTime: z.string().default('02:00') }), req.body);
-  const row = await one(`INSERT INTO branches(store_id, code, name, address, phone, open_time, close_time) VALUES ((SELECT id FROM stores ORDER BY id LIMIT 1),$1,$2,$3,$4,$5,$6) RETURNING *`, [b.code, b.name, b.address, b.phone, b.openTime, b.closeTime]);
+  const sub = await getSubscription();
+  const count = Number((await one('SELECT count(*) AS n FROM branches')).n);
+  if (count >= 1 && !hasFeature(sub, 'multi_branch')) throw forbidden('แพ็กเกจนี้ไม่รวมฟังก์ชันหลายสาขา กรุณาอัปเกรดแพ็กเกจ');
+  await assertLimit(pool, 'branches', 'SELECT count(*) AS n FROM branches');
+  const row = await one(`INSERT INTO branches(store_id, code, name, address, phone, open_time, close_time) VALUES (bb_current_store(),$1,$2,$3,$4,$5,$6) RETURNING *`, [b.code, b.name, b.address, b.phone, b.openTime, b.closeTime]);
   await logActivity(null, req, 'BRANCH_CREATE', 'branch', row.id, b);
   res.json(row);
 });
@@ -115,9 +120,10 @@ r.get('/devices', async (_req, res) => res.json(await many('SELECT d.*, cd.pair_
 r.post('/devices/register', async (req, res) => {
   const b = parse(z.object({ name: z.string().min(1).max(100), deviceKey: z.string().min(8).max(100) }), req.body);
   const branch = await one('SELECT id FROM branches ORDER BY sort_order, id LIMIT 1');
+  if (!(await one('SELECT id FROM pos_devices WHERE device_key = $1', [b.deviceKey]))) await assertLimit(pool, 'devices', 'SELECT count(*) AS n FROM pos_devices');
   const row = await one(
     `INSERT INTO pos_devices(name, device_key, branch_id, last_seen_at) VALUES ($1,$2,$3,now())
-     ON CONFLICT (device_key) DO UPDATE SET last_seen_at = now(), name = COALESCE(NULLIF($1,''), pos_devices.name) RETURNING *`,
+     ON CONFLICT (store_id, device_key) DO UPDATE SET last_seen_at = now(), name = COALESCE(NULLIF($1,''), pos_devices.name) RETURNING *`,
     [b.name, b.deviceKey, branch?.id || null],
   );
   res.json(row);
@@ -127,7 +133,8 @@ r.post('/devices/register', async (req, res) => {
 async function newPairCode(c) {
   for (let i = 0; i < 20; i++) {
     const code = String(crypto.randomInt(1000, 999999)).padStart(4, '0').slice(0, i < 10 ? 4 : 6);
-    const ex = await c.query('SELECT 1 FROM customer_displays WHERE pair_code = $1', [code]);
+    // pair codes are global (a display finds its store by the code) → check across all stores
+    const ex = await runAsPlatform(() => pool.query('SELECT 1 FROM customer_displays WHERE pair_code = $1', [code]));
     if (!ex.rows[0]) return code;
   }
   throw badRequest('ไม่สามารถสร้างรหัสเชื่อมต่อได้');

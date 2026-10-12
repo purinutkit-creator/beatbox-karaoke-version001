@@ -3,7 +3,7 @@ import { Router } from 'express';
 import crypto from 'node:crypto';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
-import { pool, tx, many, one } from '../db/index.js';
+import { pool, tx, many, one, currentStoreId, setContextStore } from '../db/index.js';
 import { optionalMember, requireMember, createMemberSession, signToken, verifyToken } from '../lib/auth.js';
 import { idempotent } from '../lib/idempotency.js';
 import { logActivity } from '../lib/activity.js';
@@ -23,6 +23,7 @@ import { getPaymentProvider } from '../providers/payment.js';
 import { lineLogin } from '../providers/line.js';
 import { sendSms, smsConfig } from '../providers/sms.js';
 import { fillTemplate } from '../services/integrations.js';
+import { useStoreOf } from '../lib/tenant.js';
 import { redeemReward } from './members.js';
 import { calculateCancellationRefund } from '@beatbox/shared/calc.js';
 import { normalizePhone, bkkDateTime, fmtDate, fmtTime } from '@beatbox/shared/format.js';
@@ -30,6 +31,17 @@ import { round2 } from '@beatbox/shared/money.js';
 
 const r = Router();
 const actor = (name) => ({ employee: { id: null, name }, ip: null });
+
+// links / codes created by a store resolve to that store
+r.param('code', async (_req, _res, next, code) => {
+  await useStoreOf('customer_displays', 'pair_code', String(code));
+  next();
+});
+r.param('token', async (req, _res, next, token) => {
+  if (req.path.startsWith('/holds/')) await useStoreOf('reservation_holds', 'hold_token', String(token));
+  else if (req.path.startsWith('/checkin/')) await useStoreOf('reservations', 'check_in_token', String(token));
+  next();
+});
 
 r.get('/settings', async (_req, res) => {
   const s = await getSettings();
@@ -607,7 +619,7 @@ r.get('/auth/line/start', async (req, res) => {
     return res.redirect(`/book/line-demo?redirect=${encodeURIComponent(redirect)}`);
   }
   const nonce = randomToken(12);
-  const state = signToken({ typ: 'line-state', nonce, redirect }, '10m');
+  const state = signToken({ typ: 'line-state', nonce, redirect, st: currentStoreId() }, '10m');
   res.redirect(await lineLogin.authorizeUrl(state, nonce));
 });
 
@@ -621,7 +633,7 @@ async function handleLineProfile(profile, redirect) {
       return `${redirect.startsWith('/') ? redirect : '/book/account'}${redirect.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
     }
     // first LINE login: never auto-merge by name — require phone OTP to link to an existing member or create one
-    const link = signToken({ typ: 'line-link', ...profile }, '20m');
+    const link = signToken({ typ: 'line-link', ...profile, st: currentStoreId() }, '20m');
     return `/book/line-link?link=${encodeURIComponent(link)}&name=${encodeURIComponent(profile.displayName || '')}&redirect=${encodeURIComponent(redirect)}`;
   });
 }
@@ -629,6 +641,7 @@ async function handleLineProfile(profile, redirect) {
 r.get('/auth/line/callback', async (req, res) => {
   const st = verifyToken(String(req.query.state || ''));
   if (!st || st.typ !== 'line-state') return res.redirect('/book/login?error=line_state');
+  if (st.st) setContextStore(st.st);
   if (req.query.error) return res.redirect('/book/login?error=line_denied');
   try {
     const tok = await lineLogin.exchangeCode(String(req.query.code));

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool, tx, many, one } from '../db/index.js';
 import { requireAuth, can } from '../lib/auth.js';
+import { assertLimit } from '../services/subscription.js';
 import { logActivity } from '../lib/activity.js';
 import { z, parse, zUrl, zIdArr } from '../lib/validate.js';
 import { notFound, badRequest, conflict } from '../lib/errors.js';
@@ -94,6 +95,7 @@ r.get('/rooms', async (_req, res) => {
 
 r.post('/rooms', can('room.create'), async (req, res) => {
   const b = parse(roomSchema, req.body);
+  await assertLimit(pool, 'rooms', 'SELECT count(*) AS n FROM rooms WHERE deleted_at IS NULL');
   const half = b.halfPriceManual && b.priceHalf != null ? b.priceHalf : halfHourPrice(b.priceHour);
   const branch = await one('SELECT id FROM branches ORDER BY sort_order, id LIMIT 1');
   const row = await one(

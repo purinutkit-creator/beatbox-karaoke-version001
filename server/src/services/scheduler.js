@@ -1,5 +1,5 @@
 // Server-side scheduler: the server (not the browser) decides room states, alerts, hold expiry and no-shows.
-import { pool } from '../db/index.js';
+import { pool, runWithStore, runAsPlatform } from '../db/index.js';
 import { getSettings } from './settings.js';
 import { refreshRoomStatuses } from './rooms.js';
 import { expireStaleHolds } from './availability.js';
@@ -109,7 +109,7 @@ async function dailyTick() {
   const bkkHour = new Date(Date.now() + 7 * 3600000).getUTCHours();
   const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
   if (settings.backup.enabled && bkkHour === Number(settings.backup.hour || 4)) {
-    const done = await pool.query(`SELECT 1 FROM backups WHERE file_name LIKE 'beatbox-auto-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = $1`, [today]);
+    const done = await pool.query(`SELECT 1 FROM backups WHERE file_name LIKE '%-auto-%' AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = $1`, [today]);
     if (!done.rows[0]) await runBackup('AUTO');
   }
   // expire points (FIFO lots past expiry)
@@ -130,14 +130,30 @@ async function dailyTick() {
       client.release();
     }
   }
-  await pool.query(`DELETE FROM idempotency_keys WHERE created_at < now() - interval '7 days'`);
   await pool.query(`DELETE FROM otp_codes WHERE created_at < now() - interval '1 day'`);
 }
 
-function loop(fn, ms, name) {
+async function platformDaily() {
+  await pool.query(`DELETE FROM idempotency_keys WHERE created_at < now() - interval '7 days'`);
+}
+
+/** Run a job once for every store, each inside that store's context. */
+async function forEachStore(fn, name) {
+  const stores = (await runAsPlatform(() => pool.query('SELECT id FROM stores WHERE is_active ORDER BY id'))).rows;
+  for (const { id } of stores) {
+    try {
+      await runWithStore(id, fn);
+    } catch (e) {
+      console.error(`[scheduler:${name}] store ${id}`, e.message);
+    }
+  }
+}
+
+function loop(fn, ms, name, perStore = true) {
   const run = async () => {
     try {
-      await fn();
+      if (perStore) await forEachStore(fn, name);
+      else await runAsPlatform(fn);
     } catch (e) {
       console.error(`[scheduler:${name}]`, e.message);
     } finally {
@@ -153,6 +169,7 @@ export function startScheduler() {
   loop(roomTick, 5000, 'rooms');
   loop(reservationTick, 15000, 'reservations');
   loop(dailyTick, 10 * 60000, 'daily');
+  loop(platformDaily, 60 * 60000, 'platform', false);
 }
 
 export function stopScheduler() {
