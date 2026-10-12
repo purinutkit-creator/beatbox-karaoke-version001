@@ -125,10 +125,11 @@ Both can be chosen on the booking website, in the staff booking form and when op
 From Check-in, staff can hand over to the Customer Display: the customer scans their booking QR with the display's camera or types their phone
 number on a keypad, and the result appears on both screens.
 
-### Printing (real text, real paper width — never a bitmap)
-See **Printing setup** below. Documents are built from the store's layout (Admin → ออกแบบเอกสาร/ใบเสร็จ) and printed as real text with
-the store's receipt font through the operating-system printer driver, or as ESC/POS text with the printer's own fonts. Nothing is ever
-converted to an image, canvas, screenshot or raster.
+### Printing (store font, real paper width)
+See **Printing setup** below. Documents are built from the store's layout (Admin → ออกแบบเอกสาร/ใบเสร็จ) and printed in the store's
+receipt font, either **straight over the USB cable** (like the previous system: the document is drawn in the store font and sent to the
+printer as ESC/POS image rows — no driver, no print dialog), or as real text through the operating-system printer driver. ESC/POS text with
+the printer's own fonts is available only when the admin picks it.
 
 ### Integrations (ready to plug in)
 * LINE Login (OAuth 2.1/OIDC). The first LINE login is linked by **logging in with the member's phone + password** (or signing up) — never
@@ -158,6 +159,7 @@ Nothing to run by hand: on start the server applies the new migrations in order,
 | `005_platform.sql` | Super Owner accounts, 4 plans (features + limits), store subscriptions + history, renewal requests. Existing stores get the top plan, active, no expiry |
 | `006_payments_members_printing.sql` | Prepay room status (`PENDING_PAYMENT`), prepaid room charge on the bill, member password fields, printer paper/print-area settings, print-job queue fields, and **database triggers that refuse any reference to another store's row** |
 | `007_platform_email.sql` | E-mail sign-in for the Super Owner (Super Admin) account |
+| `008_usb_printing.sql` | Direct-cable printing in the store font (`RASTER` mode; USB/Serial/Bluetooth/Network printers are switched to it), the USB printer's vendor/product/serial, and real printer delete (`deleted_at`; past print jobs keep their history) |
 
 Back up first (Render: Database → Backups, or `pg_dump`). The server connects with a non-superuser role so RLS always applies
 (locally it switches to the restricted role `beatbox_app` automatically).
@@ -213,14 +215,21 @@ Admin → ตั้งค่าร้าน → ห้อง เวลา & แ�
 
 ## Printing setup
 1. Admin → เครื่องพิมพ์ → add the printer:
-   * **ไดรเวอร์ระบบ (recommended):** install the printer's Windows/macOS driver, choose the connection "ไดรเวอร์ระบบ", paper 80 / 58 mm
+   * **USB cable (recommended, like the previous system):** plug in the printer, press **ค้นหาเครื่องพิมพ์ USB**, pick it in the
+     browser's list, then **ใช้เครื่องนี้กับทุกเอกสาร** — it becomes the main printer and the route of every document type (receipts,
+     room tickets, kitchen/bar, shift close …). Every document prints in the store font (e.g. Kanit) at the paper's printable width
+     (80 mm → 576 dots) with the cut / drawer commands. Needs Google Chrome or Microsoft Edge on a computer (WebUSB); the browser asks for
+     permission once. On Windows, if the message says the printer is in use by the Windows driver, switch the printer to the WinUSB driver
+     with Zadig once — or use the "ไดรเวอร์ระบบ" connection instead. Serial, Bluetooth and Network (IP:9100) printers use the same mode.
+   * Any printer row: **ใช้กับทุกเอกสาร** (one printer for everything) and the bin button to **delete** it (it disappears from the list
+     and from document routing).
+   * **ไดรเวอร์ระบบ:** install the printer's Windows/macOS driver, choose the connection "ไดรเวอร์ระบบ", paper 80 / 58 mm
      or custom, printable width (blank = 72 / 48 mm), margins and a font scale (raise to 1.1–1.3 if text looks small).
      In the driver: roll paper 80 (or 58) mm with continuous length, **cut every page**, no "fit to page" scaling.
      For printing without a dialog start Chrome/Edge with `--kiosk-printing` and make the receipt printer the default printer.
-   * **ESC/POS ข้อความ:** USB / Serial / Bluetooth / Network (IP:9100) — prints with the printer's built-in fonts only; you must tick
-     "ยอมรับการใช้ฟอนต์ของเครื่องพิมพ์" and set the Thai code page from the printer manual. The store font cannot be used on this route
-     and the system does not pretend otherwise (no conversion to an image either). Logos are skipped; QR codes use the printer's own
-     QR command (`GS ( k`).
+   * **ESC/POS ข้อความ (optional):** prints with the printer's built-in fonts only; you must pick this mode, tick
+     "ยอมรับการใช้ฟอนต์ของเครื่องพิมพ์" and set the Thai code page from the printer manual. Logos are skipped; QR codes use the printer's
+     own QR command (`GS ( k`).
 2. Press **ทดสอบพิมพ์** — the test page shows Thai/English text, the left/right edges and the print area.
 3. **เอกสาร → เครื่องพิมพ์:** every document type → printer, copies, cut, auto print. By default **one printer prints everything**.
    All documents go through one queue (in order, never interleaved). **คิวและสถานะงานพิมพ์** shows status and errors, **พิมพ์ใหม่** for
@@ -229,7 +238,11 @@ Admin → ตั้งค่าร้าน → ห้อง เวลา & แ�
    member sign-up slip, deposit, void, shift report …) set each element's font, size (pt), bold, alignment, spacing, show/hide and order,
    with a live preview on the real paper width.
 
-How it prints: each document becomes one page exactly as wide as the paper and exactly as long as its content (CSS `@page` per document),
+How it prints over USB: the document is rendered off-screen at the printable width in the store font, drawn at 8 dots/mm and sent as
+`GS v 0` raster bands followed by feed + cut (and the drawer kick after cash). Verified with a simulated USB printer: the bytes sent decode
+back to the receipt / room tickets in Kanit with the QR code, 576 dots wide.
+
+How it prints through the OS driver: each document becomes one page exactly as wide as the paper and exactly as long as its content (CSS `@page` per document),
 in the store's font (Kanit is bundled with the app, so it never depends on a font CDN). If a chosen font cannot be loaded the job stops
 with a message — the font is never swapped silently. Verified: the generated print/PDF contains selectable text with the font embedded
 and **no images** (receipt 80 × 213 mm, room tickets 80 × 121 mm + 80 × 80 mm in the test run).

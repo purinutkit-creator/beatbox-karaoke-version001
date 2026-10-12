@@ -21,7 +21,7 @@ import { PAYMENT_METHODS } from '@beatbox/shared/constants.js';
 const METHOD_ICON = { CASH: Banknote, QR: QrCode, TRANSFER: ArrowRightLeft, CARD: CreditCard, CREDIT: Wallet, OTHER: MoreHorizontal };
 
 /** QR payment panel with simulated (Demo) / provider / manual slip verification. */
-export function QrPayPanel({ amount, orderId, depositRef, onVerified, method = 'QR' }) {
+export function QrPayPanel({ amount, orderId, depositRef, onVerified, method = 'QR', toDisplay = false }) {
   const { t } = useT();
   const { settings } = useAuth();
   const toast = useToast();
@@ -29,6 +29,12 @@ export function QrPayPanel({ amount, orderId, depositRef, onVerified, method = '
   const [file, setFile] = useState(null);
   const p = settings?.payment || {};
   const payload = p.useDynamicPromptPay && p.promptPayId ? promptPayPayload(p.promptPayId, amount) : null;
+  // payments without a bill on screen (deposits): show the same QR on the customer display
+  useEffect(() => {
+    if (!toDisplay || method !== 'QR' || !(amount > 0)) return;
+    pushDisplay({ mode: 'PAY_QR', method: 'QR', items: [], total: amount, net: amount, due: amount, qr: { data: payload, imageUrl: p.qrImageUrl, accountName: p.accountName, accountNumber: p.accountNumber, bankName: p.bankName } });
+    return () => idleDisplay();
+  }, [toDisplay, method, amount, payload]);
   const production = settings?.runtime?.paymentMode === 'PRODUCTION';
   const verify = async (manual = false) => {
     setState('checking');

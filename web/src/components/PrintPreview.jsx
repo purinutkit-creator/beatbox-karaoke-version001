@@ -7,7 +7,7 @@ import { Modal, Button, Select, Field, Input, useToast } from './ui.jsx';
 import { useT } from '../lib/i18n.jsx';
 import { api, uid } from '../lib/api.js';
 import { useAuth } from '../lib/store.jsx';
-import { printJob, paperGeometry, routeProblem, getLocalPrinterId, setLocalPrinterId, DRIVER_FALLBACK, receiptFontFamily } from '../lib/print.jsx';
+import { printJob, paperGeometry, routeProblem, getLocalPrinterId, setLocalPrinterId, DRIVER_FALLBACK, receiptFontFamily, printMode } from '../lib/print.jsx';
 import { buildDoc } from '../lib/docs.js';
 import { textLines } from '../lib/escpos.js';
 import { DocView } from './DocView.jsx';
@@ -194,7 +194,7 @@ export function PrintProvider({ children }) {
                   setJob((j) => ({ ...j, printerId: v, error: null }));
                   if (!['KITCHEN'].includes(job.docs[0].docType) && v) setLocalPrinterId(Number(v));
                 }}
-                options={[{ value: '', label: t(DRIVER_FALLBACK.name) }, ...list.map((p) => ({ value: p.id, label: `${p.name} · ${p.paper_width}mm · ${p.render_mode === 'ESCPOS_TEXT' ? t('ฟอนต์เครื่องพิมพ์') : t('ไดรเวอร์')}` }))]}
+                options={[{ value: '', label: t(DRIVER_FALLBACK.name) }, ...list.map((p) => ({ value: p.id, label: `${p.name} · ${p.paper_width}mm · ${printMode(p) === 'ESCPOS_TEXT' ? t('ฟอนต์เครื่องพิมพ์') : printMode(p) === 'RASTER' ? t('ส่งตรงทางสาย (ฟอนต์ที่ตั้งไว้)') : t('ไดรเวอร์')}` }))]}
               />
             </Field>
             <Field label="จำนวนใบ">

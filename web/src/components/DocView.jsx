@@ -1,5 +1,21 @@
-// Renders a built document as real HTML text (preview and OS-driver printing). QR codes are vector SVG paths.
+// Renders a built document as real HTML text (preview and OS-driver printing). QR codes are vector SVG paths
+// (or a pixel-exact image when the document is drawn for a direct USB / network printer).
 import QRCodeLib from 'qrcode';
+
+/** QR drawn module-by-module on a canvas — synchronous, so it is ready before the page is captured. */
+export function QrImg({ value, sizeMm = 30 }) {
+  const qr = QRCodeLib.create(String(value), { errorCorrectionLevel: 'M' });
+  const n = qr.modules.size + 4;
+  const unit = 8;
+  const c = document.createElement('canvas');
+  c.width = c.height = n * unit;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillStyle = '#000';
+  for (let y = 0; y < n - 4; y++) for (let x = 0; x < n - 4; x++) if (qr.modules.get(x, y)) ctx.fillRect((x + 2) * unit, (y + 2) * unit, unit, unit);
+  return <img className="doc-qr" src={c.toDataURL('image/png')} alt="QR" style={{ width: `${sizeMm}mm`, height: `${sizeMm}mm`, imageRendering: 'pixelated' }} />;
+}
 
 export function QrSvg({ value, sizeMm = 30 }) {
   const qr = QRCodeLib.create(String(value), { errorCorrectionLevel: 'M' });
@@ -14,7 +30,7 @@ export function QrSvg({ value, sizeMm = 30 }) {
   );
 }
 
-function Block({ b, style }) {
+function Block({ b, style, qrAsImage }) {
   const st = { fontSize: b.rel ? `${b.rel}em` : undefined, fontWeight: b.strong ? 700 : undefined, textAlign: b.align || undefined };
   switch (b.t) {
     case 'text':
@@ -47,7 +63,7 @@ function Block({ b, style }) {
     case 'qr':
       return (
         <div className="doc-qr-wrap" style={{ textAlign: style.align || 'center' }}>
-          <QrSvg value={b.value} sizeMm={Number(style.qrSize || 30)} />
+          {qrAsImage ? <QrImg value={b.value} sizeMm={Number(style.qrSize || 30)} /> : <QrSvg value={b.value} sizeMm={Number(style.qrSize || 30)} />}
         </div>
       );
     case 'img':
@@ -62,7 +78,7 @@ function Block({ b, style }) {
 }
 
 /** sections from buildDoc(); geometry from paperGeometry(printer). Width = the real paper width in mm. */
-export function DocView({ sections, geometry }) {
+export function DocView({ sections, geometry, qrAsImage = false }) {
   const g = geometry;
   return (
     <div className="doc" style={{ width: `${g.paperMm}mm`, padding: `${g.mt}mm ${g.mr}mm ${g.mb}mm ${g.ml}mm` }}>
@@ -82,7 +98,7 @@ export function DocView({ sections, geometry }) {
             }}
           >
             {sec.blocks.map((b, j) => (
-              <Block key={j} b={b} style={s} />
+              <Block key={j} b={b} style={s} qrAsImage={qrAsImage} />
             ))}
           </div>
         );

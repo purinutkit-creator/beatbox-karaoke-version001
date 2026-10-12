@@ -175,7 +175,7 @@ export function CrudPage({ title, icon, endpoint, listEndpoint, topics = [], col
               <div className="row end" style={{ padding: '0 12px 12px' }}>
                 {rowActions?.(r, reload)}
                 {allowEdit && <Button size="sm" icon={Pencil} onClick={() => setForm(toForm(r))}>{t('แก้ไข')}</Button>}
-                {allowDelete && <Button size="sm" variant="ghost" icon={Trash2} onClick={() => remove(r)} />}
+                {allowDelete && <Button size="sm" variant="ghost" icon={Trash2} title={t('ลบ')} aria-label={t('ลบ')} onClick={() => remove(r)} />}
               </div>
             </div>
           ))}
@@ -202,7 +202,7 @@ export function CrudPage({ title, icon, endpoint, listEndpoint, topics = [], col
                   <td className="right nowrap">
                     {rowActions?.(r, reload)}
                     {allowEdit && <Button size="sm" variant="ghost" icon={Pencil} onClick={() => setForm(toForm(r))} />}
-                    {allowDelete && <Button size="sm" variant="ghost" icon={Trash2} onClick={() => remove(r)} />}
+                    {allowDelete && <Button size="sm" variant="ghost" icon={Trash2} title={t('ลบ')} aria-label={t('ลบ')} onClick={() => remove(r)} />}
                   </td>
                 </tr>
               ))}

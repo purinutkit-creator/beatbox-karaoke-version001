@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Printer, Search, Bluetooth, Usb, Network, Cable, Activity, FileText, Wallet, RotateCcw, Copy, Route, ListOrdered, Info } from 'lucide-react';
+import { Printer, Search, Bluetooth, Usb, Network, Cable, Activity, FileText, Wallet, RotateCcw, Copy, Route, ListOrdered, Info, CheckCheck } from 'lucide-react';
 import { CrudPage } from '../../components/Crud.jsx';
 import { Button, Modal, Badge, Input, Field, Loading, Switch, Select, Tabs, useToast } from '../../components/ui.jsx';
 import { usePrint, docLabel } from '../../components/PrintPreview.jsx';
@@ -7,25 +7,35 @@ import { useT } from '../../lib/i18n.jsx';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive } from '../../lib/socket.js';
-import { pairDevice, transportStatus, openDrawer, getLocalPrinterId, setLocalPrinterId, paperGeometry, routeProblem } from '../../lib/print.jsx';
+import { pairDevice, transportStatus, openDrawer, getLocalPrinterId, setLocalPrinterId, paperGeometry, routeProblem, printMode, searchUsbPrinter, usbLabel } from '../../lib/print.jsx';
 import { DOC_TYPES, DEFAULT_ROUTING } from '@beatbox/shared/documents.js';
 import { fmtDateTime } from '@beatbox/shared/format.js';
 
 const CONN = [
-  { value: 'BROWSER', label: 'ไดรเวอร์ระบบ (OS) — USB / LAN / Bluetooth ที่ติดตั้งไดรเวอร์แล้ว · พิมพ์ฟอนต์ที่ตั้งไว้ได้' },
-  { value: 'USB', label: 'USB โดยตรง (WebUSB)' },
+  { value: 'USB', label: 'สาย USB (แนะนำ) — พิมพ์ฟอนต์ที่ตั้งไว้ ไม่ต้องเปิดหน้าต่างพิมพ์' },
+  { value: 'BROWSER', label: 'ไดรเวอร์ระบบ (OS) — ผ่านหน้าต่างพิมพ์ของ Windows / macOS' },
   { value: 'SERIAL', label: 'สาย Serial/USB-Serial (Web Serial)' },
   { value: 'BLUETOOTH', label: 'Bluetooth' },
   { value: 'NETWORK', label: 'Network Printer / IP Address' },
 ];
 const ICON = { BROWSER: Cable, USB: Usb, SERIAL: Cable, BLUETOOTH: Bluetooth, NETWORK: Network };
+const MODES = (f) =>
+  f.connection === 'BROWSER'
+    ? [{ value: 'DRIVER', label: 'ไดรเวอร์ระบบ — ฟอนต์ที่ตั้งไว้' }]
+    : [
+        { value: 'RASTER', label: 'ฟอนต์ที่ตั้งไว้ (แบบเดิม) — วาดเอกสารแล้วส่งตรงไปเครื่องพิมพ์ (แนะนำ)' },
+        { value: 'ESCPOS_TEXT', label: 'ESC/POS ข้อความ — ใช้ฟอนต์ในเครื่องพิมพ์เท่านั้น' },
+      ];
+const MODE_BADGE = { RASTER: ['#16a34a', 'ฟอนต์ที่ตั้งไว้ · ส่งตรง'], DRIVER: ['#2563eb', 'ไดรเวอร์ระบบ · ฟอนต์ที่ตั้งไว้'], ESCPOS_TEXT: ['#f97316', 'ฟอนต์ของเครื่องพิมพ์ (ESC/POS)'] };
 
 export default function Printers() {
   const { t } = useT();
   const toast = useToast();
-  const { settings } = useAuth();
+  const { settings, loadSettings } = useAuth();
   const { preview } = usePrint();
   const [discover, setDiscover] = useState(null);
+  const [usbAdded, setUsbAdded] = useState(null);
+  const [searching, setSearching] = useState(false);
   const [local, setLocal] = useState(getLocalPrinterId());
   const [key, setKey] = useState(0);
   const [qrPrint, setQrPrint] = useState(localStorage.getItem('bb_print_qr_orders') !== 'false');
@@ -48,6 +58,38 @@ export default function Printers() {
       toast.success(`${t('เชื่อมต่อแล้ว')}: ${name}`);
     } catch (e) {
       toast.error(e.message);
+    }
+  };
+  // "ค้นหาเครื่องพิมพ์ USB": the browser lists the printers plugged in by cable; the chosen one is added (or found again)
+  const searchUsb = async () => {
+    setSearching(true);
+    try {
+      const dev = await searchUsbPrinter();
+      if (!dev) return;
+      const list = await api.get('/printers');
+      const same = list.find((p) => p.connection === 'USB' && Number(p.usb_vendor_id) === dev.vendorId && Number(p.usb_product_id) === dev.productId && (!p.usb_serial || !dev.serialNumber || p.usb_serial === dev.serialNumber));
+      const printer = same || (await api.post('/printers', { name: usbLabel(dev), connection: 'USB', renderMode: 'RASTER', station: 'MAIN', paperWidth: 80, paperPreset: '80', copies: 1, autoPrint: true, autoCut: true, openDrawer: true, isActive: true, isDefault: !list.length, usbVendorId: dev.vendorId, usbProductId: dev.productId, usbSerial: dev.serialNumber || null }));
+      setLocalPrinterId(printer.id);
+      setLocal(printer.id);
+      setUsbAdded({ printer, existed: !!same, label: usbLabel(dev) });
+      setKey((k) => k + 1);
+    } catch (e) {
+      toast.error(e.message || e);
+    } finally {
+      setSearching(false);
+    }
+  };
+  const useForAll = async (p) => {
+    try {
+      await api.post(`/printers/${p.id}/use-for-all`);
+      setLocalPrinterId(p.id);
+      setLocal(p.id);
+      await loadSettings();
+      toast.success(`${t('ใช้เครื่องนี้กับทุกเอกสารแล้ว')}: ${p.name}`);
+      setKey((k) => k + 1);
+      setUsbAdded(null);
+    } catch (e) {
+      toast.error(e);
     }
   };
   const scan = async () => {
@@ -90,24 +132,28 @@ export default function Printers() {
         createPerm="settings.manage"
         editPerm="settings.manage"
         deletePerm="settings.manage"
-        extraHead={<Button icon={Search} onClick={() => setDiscover({ printers: null, subnet: '' })}>{t('ค้นหาเครื่องพิมพ์')}</Button>}
-        defaults={{ connection: 'BROWSER', port: 9100, station: 'MAIN', paperWidth: 80, paperPreset: '80', printableWidthMm: '', marginLeftMm: 0, marginRightMm: 0, marginTopMm: 0, marginBottomMm: 3, fontScale: 1, renderMode: 'DRIVER', allowPrinterFont: false, escposCodepage: '', charsPerLine: '', model: '', density: 8, speed: 3, marginMm: 2, copies: 1, autoPrint: true, autoCut: true, openDrawer: true, isDefault: false, isActive: true }}
+        extraHead={<>
+          <Button variant="primary" icon={Usb} loading={searching} onClick={searchUsb}>{t('ค้นหาเครื่องพิมพ์ USB')}</Button>
+          <Button icon={Search} onClick={() => setDiscover({ printers: null, subnet: '' })}>{t('ค้นหาเครื่องพิมพ์ในเครือข่าย')}</Button>
+        </>}
+        defaults={{ connection: 'USB', port: 9100, station: 'MAIN', paperWidth: 80, paperPreset: '80', printableWidthMm: '', marginLeftMm: 0, marginRightMm: 0, marginTopMm: 0, marginBottomMm: 3, fontScale: 1, renderMode: 'RASTER', allowPrinterFont: false, escposCodepage: '', charsPerLine: '', model: '', density: 8, speed: 3, marginMm: 2, copies: 1, autoPrint: true, autoCut: true, openDrawer: true, isDefault: false, isActive: true }}
         toForm={(r) => ({ id: r.id, name: r.name, connection: r.connection, address: r.address, port: r.port, station: r.station, paperWidth: r.paper_width, paperPreset: [58, 80].includes(r.paper_width) ? String(r.paper_width) : 'CUSTOM', printableWidthMm: r.printable_width_mm ?? '', marginLeftMm: r.margin_left_mm, marginRightMm: r.margin_right_mm, marginTopMm: r.margin_top_mm, marginBottomMm: r.margin_bottom_mm, fontScale: r.font_scale, renderMode: r.render_mode, allowPrinterFont: r.allow_printer_font, escposCodepage: r.escpos_codepage ?? '', charsPerLine: r.chars_per_line ?? '', model: r.model || '', density: r.density, speed: r.speed, marginMm: r.margin_mm, copies: r.copies, autoPrint: r.auto_print, autoCut: r.auto_cut, openDrawer: r.open_drawer, isDefault: r.is_default, isActive: r.is_active })}
         columns={[
           { label: 'เครื่องพิมพ์', render: (r) => { const I = ICON[r.connection]; return <div className="row nowrap"><I size={18} /><div><b>{r.name}</b>{r.is_default && <Badge color="#8b5cf6">{t('หลัก')}</Badge>}{local === r.id && <Badge color="#2563eb">{t('เครื่องนี้')}</Badge>}<div className="xs muted">{r.connection} {r.address && `· ${r.address}:${r.port}`}</div></div></div>; } },
           { label: 'ใช้สำหรับ', render: (r) => ({ MAIN: t('ใบเสร็จ'), KITCHEN: t('ครัว'), BAR: t('บาร์'), PREP: t('จุดเตรียม') })[r.station] },
           { label: 'กระดาษ / พื้นที่พิมพ์', render: (r) => { const g = paperGeometry(r); return <span className="small">{r.paper_width}mm · {t('พิมพ์ได้')} {g.printableMm}mm · {t('ฟอนต์')} ×{Number(r.font_scale || 1)}</span>; } },
-          { label: 'โหมดการพิมพ์', render: (r) => { const pr = routeProblem(r); return <div className="small">{r.render_mode === 'ESCPOS_TEXT' ? <Badge color="#f97316">{t('ฟอนต์ของเครื่องพิมพ์ (ESC/POS)')}</Badge> : <Badge color="#16a34a">{t('ไดรเวอร์ระบบ · ฟอนต์ที่ตั้งไว้')}</Badge>}{pr && <div className="xs" style={{ color: 'var(--danger)' }}>{pr.message}</div>}</div>; } },
+          { label: 'โหมดการพิมพ์', render: (r) => { const pr = routeProblem(r); const [c, l] = MODE_BADGE[printMode(r)]; return <div className="small"><Badge color={c}>{t(l)}</Badge>{pr && <div className="xs" style={{ color: 'var(--danger)' }}>{pr.message}</div>}</div>; } },
           { label: 'ตัวเลือก', render: (r) => <span className="small">{r.copies} {t('ใบ')} {r.auto_print && `· ${t('พิมพ์อัตโนมัติ')}`} {r.auto_cut && `· ${t('ตัดกระดาษ')}`} {r.open_drawer && `· ${t('เปิดลิ้นชัก')}`}</span> },
           { label: 'สถานะ', render: (r) => <Badge color={r.status === 'ONLINE' ? '#16a34a' : r.status === 'OFFLINE' ? '#dc2626' : '#6b7280'}>{r.status}</Badge> },
         ]}
         rowActions={(r) => (
           <>
-            {['USB', 'SERIAL', 'BLUETOOTH'].includes(r.connection) && <Button size="sm" onClick={() => pair(r)}>{t('เชื่อมต่อ')}</Button>}
+            {['SERIAL', 'BLUETOOTH'].includes(r.connection) && <Button size="sm" onClick={() => pair(r)}>{t('เชื่อมต่อ')}</Button>}
             <Button size="sm" variant="ghost" icon={Activity} title={t('ตรวจสอบสถานะ')} onClick={() => status(r)} />
             <Button size="sm" variant="ghost" icon={FileText} title={t('ทดสอบพิมพ์')} onClick={() => test(r)} />
             <Button size="sm" variant="ghost" icon={Wallet} title={t('เปิดลิ้นชัก')} onClick={async () => { const x = await openDrawer(r); x.ok ? toast.success('เปิดลิ้นชักแล้ว') : toast.warning(x.error); api.post('/drawer/open').catch(() => {}); }} />
             <Button size="sm" variant={local === r.id ? 'primary' : ''} onClick={() => { setLocalPrinterId(r.id); setLocal(r.id); }}>{t('ใช้กับเครื่องนี้')}</Button>
+            <Button size="sm" icon={CheckCheck} onClick={() => useForAll(r)}>{t('ใช้กับทุกเอกสาร')}</Button>
           </>
         )}
         fields={[
@@ -117,7 +163,7 @@ export default function Printers() {
           { key: 'port', label: 'Port', type: 'number', hidden: (f) => f.connection !== 'NETWORK' },
           { key: 'station', label: 'ใช้สำหรับ', type: 'select', options: [{ value: 'MAIN', label: 'ใบเสร็จ (หลัก)' }, { value: 'KITCHEN', label: 'ครัว' }, { value: 'BAR', label: 'บาร์' }, { value: 'PREP', label: 'จุดเตรียมสินค้า' }], required: true },
           { key: 'model', label: 'รุ่นเครื่องพิมพ์ (ไม่บังคับ)', placeholder: 'เช่น Epson TM-T82III, Xprinter XP-Q80' },
-          { key: 'renderMode', label: 'วิธีพิมพ์', type: 'select', options: [{ value: 'DRIVER', label: 'ไดรเวอร์ระบบ — ข้อความจริง + ฟอนต์ที่ตั้งไว้ (แนะนำ)' }, { value: 'ESCPOS_TEXT', label: 'ESC/POS ข้อความ — ใช้ฟอนต์ในเครื่องพิมพ์เท่านั้น' }], hint: 'ระบบไม่แปลงข้อความหรือใบเสร็จเป็นภาพ (Bitmap/Raster) ทุกโหมด' },
+          { key: 'renderMode', label: 'วิธีพิมพ์', type: 'select', options: MODES, hidden: (f) => f.connection === 'BROWSER', hint: 'ฟอนต์ที่ตั้งไว้ (แบบเดิม): ระบบวาดเอกสารด้วยฟอนต์ของร้านแล้วส่งไปเครื่องพิมพ์ทางสายโดยตรง เหมือนระบบเดิม' },
           { key: 'allowPrinterFont', label: 'ยอมรับการใช้ฟอนต์ของเครื่องพิมพ์', type: 'switch', switchLabel: 'ยอมรับว่าเอกสารจะไม่ใช้ฟอนต์ที่ตั้งไว้', hidden: (f) => f.renderMode !== 'ESCPOS_TEXT', full: true },
           { key: 'escposCodepage', label: 'Code page ภาษาไทย (ESC t n)', type: 'number', hidden: (f) => f.renderMode !== 'ESCPOS_TEXT', hint: 'ดูคู่มือเครื่องพิมพ์ เช่น Epson รุ่นไทยมักใช้ 21 หรือ 26 · ทดสอบด้วยปุ่มทดสอบพิมพ์' },
           { key: 'charsPerLine', label: 'จำนวนตัวอักษรต่อบรรทัด', type: 'number', hidden: (f) => f.renderMode !== 'ESCPOS_TEXT', hint: 'ว่าง = 48 (80mm) / 32 (58mm)' },
@@ -138,6 +184,7 @@ export default function Printers() {
         ]}
         toPayload={(f) => ({
           ...f,
+          renderMode: f.connection === 'BROWSER' ? 'DRIVER' : f.renderMode === 'ESCPOS_TEXT' ? 'ESCPOS_TEXT' : 'RASTER',
           paperWidth: f.paperPreset === 'CUSTOM' ? Number(f.paperWidth) : Number(f.paperPreset || f.paperWidth || 80),
           printableWidthMm: f.printableWidthMm === '' || f.printableWidthMm == null ? null : Number(f.printableWidthMm),
           escposCodepage: f.escposCodepage === '' || f.escposCodepage == null ? null : Number(f.escposCodepage),
@@ -146,9 +193,21 @@ export default function Printers() {
         })}
       />
       <div className="card flat mt small muted">
-        <Info size={14} /> {t('แนะนำ: ติดตั้งไดรเวอร์เครื่องพิมพ์ในระบบปฏิบัติการ แล้วเลือก "ไดรเวอร์ระบบ" — เอกสารจะพิมพ์เป็นข้อความจริงด้วยฟอนต์ที่ตั้งไว้ เต็มความกว้างกระดาษ และยาวตามเนื้อหา · การเชื่อมต่อ USB/Serial/Bluetooth/Network ตรง ใช้ได้เฉพาะโหมด ESC/POS ข้อความ (ฟอนต์ในเครื่องพิมพ์) · ดูรุ่นที่รองรับในแท็บ "รุ่นที่รองรับ / วิธีตั้งค่า"')}
+        <Info size={14} /> {t('เสียบสาย USB ของเครื่องพิมพ์ แล้วกด "ค้นหาเครื่องพิมพ์ USB" → เลือกเครื่องพิมพ์ในรายการ → กด "ใช้กับทุกเอกสาร" เอกสารทุกชนิดจะพิมพ์ด้วยฟอนต์ที่ตั้งไว้ทางสาย USB เหมือนระบบเดิม (ใช้ Google Chrome หรือ Microsoft Edge) · ลบเครื่องพิมพ์ที่ไม่ใช้แล้วได้ด้วยปุ่มถังขยะ')}
       </div>
       </>}
+      {usbAdded && (
+        <Modal title={usbAdded.existed ? t('พบเครื่องพิมพ์นี้ในระบบแล้ว') : t('เพิ่มเครื่องพิมพ์ USB แล้ว')} onClose={() => setUsbAdded(null)}>
+          <div className="col">
+            <div className="row nowrap"><Usb size={18} /> <b>{usbAdded.printer.name}</b></div>
+            <div className="small muted">{t('เครื่องนี้ (คอมพิวเตอร์นี้) จะพิมพ์ไปที่เครื่องพิมพ์นี้ ด้วยฟอนต์ที่ตั้งไว้ทางสาย USB')}</div>
+            <div className="row">
+              <Button variant="primary" icon={CheckCheck} onClick={() => useForAll(usbAdded.printer)}>{t('ใช้เครื่องนี้กับทุกเอกสาร')}</Button>
+              <Button icon={FileText} onClick={() => test(usbAdded.printer)}>{t('ทดสอบพิมพ์')}</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {discover && (
         <Modal title={t('ค้นหาเครื่องพิมพ์ในเครือข่าย')} onClose={() => setDiscover(null)}>
           <div className="row nowrap">
@@ -169,7 +228,7 @@ export default function Printers() {
           )}
           <div className="mt row">
             <Button icon={Bluetooth} onClick={() => pairDevice('BLUETOOTH').then((n) => toast.success(n)).catch((e) => toast.error(e.message))}>{t('ค้นหา Bluetooth')}</Button>
-            <Button icon={Usb} onClick={() => pairDevice('USB').then((n) => toast.success(n)).catch((e) => toast.error(e.message))}>{t('ค้นหา USB')}</Button>
+            <Button icon={Usb} onClick={() => { setDiscover(null); searchUsb(); }}>{t('ค้นหา USB')}</Button>
           </div>
         </Modal>
       )}
@@ -225,7 +284,7 @@ function RoutingTab() {
           </tbody>
         </table>
       </div>
-      <div className="xs muted">{t('การตัดกระดาษในโหมดไดรเวอร์ระบบ ให้ตั้งในไดรเวอร์ว่า "ตัดกระดาษทุกหน้า" (แต่ละสำเนาคือ 1 หน้า) · โหมด ESC/POS ระบบส่งคำสั่งตัดให้เอง')}</div>
+      <div className="xs muted">{t('การตัดกระดาษในโหมดไดรเวอร์ระบบ ให้ตั้งในไดรเวอร์ว่า "ตัดกระดาษทุกหน้า" (แต่ละสำเนาคือ 1 หน้า) · สาย USB / ESC/POS ระบบส่งคำสั่งตัดให้เอง')}</div>
       {can('settings.manage') && <Button variant="primary" onClick={save}>{t('บันทึก')}</Button>}
     </div>
   );
@@ -286,9 +345,19 @@ function GuideTab() {
   return (
     <div className="col small" style={{ maxWidth: 900 }}>
       <div className="card flat">
-        <b>{t('1) พิมพ์ด้วยฟอนต์ที่ตั้งไว้ (เช่น Kanit) — ผ่านไดรเวอร์ระบบ (แนะนำ)')}</b>
+        <b>{t('1) สาย USB — ฟอนต์ที่ตั้งไว้ แบบเดิม (แนะนำ)')}</b>
         <ul>
-          <li>{t('ข้อความถูกส่งเป็นข้อความจริงพร้อมฟอนต์ที่ฝังจากเบราว์เซอร์ (Chrome / Edge) ไปยังไดรเวอร์ของระบบปฏิบัติการ ไม่มีการแปลงเป็นภาพในระบบนี้')}</li>
+          <li>{t('เสียบสาย USB → กด "ค้นหาเครื่องพิมพ์ USB" → เลือกเครื่องพิมพ์ → กด "ใช้เครื่องนี้กับทุกเอกสาร" (ใบเสร็จ ใบเปิดห้อง ใบสั่งครัว/บาร์ ปิดกะ ทุกชนิด)')}</li>
+          <li>{t('ระบบวาดเอกสารด้วยฟอนต์ของร้าน (เช่น Kanit) ตามที่ออกแบบไว้ แล้วส่งเป็นภาพขาวดำ (ESC/POS) ไปที่เครื่องพิมพ์ทางสายโดยตรง ไม่ต้องเปิดหน้าต่างพิมพ์ ใช้ได้กับเครื่องพิมพ์ใบเสร็จ ESC/POS ทั่วไป (Xprinter, Epson TM, Gprinter, Rongta ฯลฯ)')}</li>
+          <li>{t('ต้องใช้ Google Chrome หรือ Microsoft Edge บนคอมพิวเตอร์ ครั้งแรกเบราว์เซอร์จะถามสิทธิ์ใช้เครื่องพิมพ์ หลังจากนั้นจำไว้ให้')}</li>
+          <li>{t('Windows: ถ้าขึ้นว่า "เครื่องพิมพ์ถูกไดรเวอร์ของ Windows ใช้งานอยู่" ให้เปลี่ยนไดรเวอร์ของเครื่องพิมพ์เป็น WinUSB ด้วยโปรแกรม Zadig (ครั้งเดียว) หรือใช้การเชื่อมต่อ "ไดรเวอร์ระบบ" แทน')}</li>
+          <li>{t('ลบเครื่องพิมพ์ที่ไม่ใช้แล้วด้วยปุ่มถังขยะ — เครื่องที่ลบจะหายจากรายการและจากการตั้งค่าเอกสาร (ประวัติงานพิมพ์เดิมยังอยู่)')}</li>
+        </ul>
+      </div>
+      <div className="card flat">
+        <b>{t('2) ไดรเวอร์ระบบ (Windows / macOS) — ฟอนต์ที่ตั้งไว้')}</b>
+        <ul>
+          <li>{t('ข้อความถูกส่งเป็นข้อความจริงพร้อมฟอนต์ที่ฝังจากเบราว์เซอร์ (Chrome / Edge) ไปยังไดรเวอร์ของระบบปฏิบัติการ')}</li>
           <li>{t('ต้องติดตั้งไดรเวอร์ Windows / macOS ของเครื่องพิมพ์ และตั้งขนาดกระดาษในไดรเวอร์เป็นม้วน 80 มม. (หรือ 58 มม.) แบบความยาวต่อเนื่อง / "Receipt" เพื่อให้ความยาวกระดาษเป็นไปตามเนื้อหา')}</li>
           <li>{t('ตั้งไดรเวอร์ให้ตัดกระดาษ "ทุกหน้า/ทุกเอกสาร" และปิด "Fit to page / Scale" (ระบบส่งหน้ากระดาษขนาดเท่ากระดาษจริงอยู่แล้ว)')}</li>
           <li>{t('พิมพ์อัตโนมัติโดยไม่ต้องกดยืนยัน: เปิด Chrome/Edge ด้วยตัวเลือก --kiosk-printing และตั้งเครื่องพิมพ์ใบเสร็จเป็นเครื่องเริ่มต้นของระบบ')}</li>
@@ -305,9 +374,9 @@ function GuideTab() {
         <div className="muted">{t('ก่อนใช้งานจริงให้กด "ทดสอบพิมพ์" ทุกเครื่อง: หน้าทดสอบมีข้อความไทย/อังกฤษ เส้นขอบซ้าย-ขวา และแสดงพื้นที่พิมพ์ เพื่อยืนยันว่าเต็มความกว้างและใช้ฟอนต์ที่ตั้งไว้จริง')}</div>
       </div>
       <div className="card flat">
-        <b>{t('2) ESC/POS ข้อความ (USB / Serial / Bluetooth / Network ตรง)')}</b>
+        <b>{t('3) ESC/POS ข้อความ — ฟอนต์ของเครื่องพิมพ์ (เลือกเองเท่านั้น)')}</b>
         <ul>
-          <li>{t('พิมพ์ด้วยฟอนต์ที่อยู่ในเครื่องพิมพ์เท่านั้น ไม่สามารถใช้ Google Fonts หรือฟอนต์ที่นำเข้าได้ ระบบจะไม่อ้างว่ารองรับ และจะไม่แปลงเป็นภาพแทน')}</li>
+          <li>{t('พิมพ์ด้วยฟอนต์ที่อยู่ในเครื่องพิมพ์เท่านั้น (เร็วที่สุด แต่ไม่ใช่ฟอนต์ของร้าน) — ต้องเลือกโหมดนี้เองในการแก้ไขเครื่องพิมพ์')}</li>
           <li>{t('ภาษาไทยต้องเป็นรุ่นที่มีชุดอักษรไทยในเครื่อง (Thai code page) และตั้ง Code page ให้ตรงคู่มือ เช่น Epson TM รุ่นไทย, Xprinter รุ่นที่ระบุว่ารองรับภาษาไทย')}</li>
           <li>{t('QR Code ใช้คำสั่ง QR ของเครื่องพิมพ์เอง (GS ( k) — ต้องเป็นรุ่นที่รองรับคำสั่งนี้')}</li>
           <li>{t('โลโก้เป็นรูปภาพ จึงไม่พิมพ์ในโหมดนี้')}</li>

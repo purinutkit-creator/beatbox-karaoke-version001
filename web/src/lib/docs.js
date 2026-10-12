@@ -393,7 +393,7 @@ function testPage(d, el, ctx) {
       return [
         kv(t('เครื่องพิมพ์'), p.name || '-'),
         kv(t('การเชื่อมต่อ'), p.connection || '-'),
-        kv(t('โหมดการพิมพ์'), p.render_mode === 'ESCPOS_TEXT' ? t('ฟอนต์ของเครื่องพิมพ์ (ESC/POS)') : t('ไดรเวอร์ระบบ (ฟอนต์ที่ตั้งไว้)')),
+        kv(t('โหมดการพิมพ์'), p.render_mode === 'ESCPOS_TEXT' ? t('ฟอนต์ของเครื่องพิมพ์ (ESC/POS)') : !p.connection || p.connection === 'BROWSER' ? t('ไดรเวอร์ระบบ (ฟอนต์ที่ตั้งไว้)') : t('ส่งตรงทางสาย (ฟอนต์ที่ตั้งไว้)')),
         kv(t('ความกว้างกระดาษ'), `${p.paper_width || 80} mm`),
         kv(t('พื้นที่พิมพ์'), `${ctx.geometry?.contentMm?.toFixed(1) || '-'} mm`),
         kv(t('ฟอนต์'), ctx.fontLabel || '-'),

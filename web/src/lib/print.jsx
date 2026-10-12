@@ -1,14 +1,14 @@
 // Printing engine.
 //
-// Two routes, both keep text as text:
-//  1. DRIVER (default) — the operating-system printer driver. The document is real HTML text in the store's receipt font,
-//     laid out on a page exactly as wide as the paper and exactly as long as the content (CSS @page per document),
-//     so nothing is scaled down and nothing is cut off. Chrome hands vector text + the embedded font to the driver.
-//     For printing without a dialog run Chrome/Edge with --kiosk-printing (prints to the default printer).
-//  2. ESCPOS_TEXT — raw ESC/POS text over USB / Serial / Bluetooth / Network. The printer prints with its OWN fonts
-//     (the store's font cannot be used this way); the admin must accept that explicitly for the printer.
-// There is no bitmap / canvas / screenshot route. When the chosen font or route can't be honoured, printing stops with
-// a clear message and a supported alternative — the font is never switched and nothing is rasterized silently.
+// Three routes:
+//  1. RASTER (default for USB / Serial / Bluetooth / Network) — like the previous system: the document is drawn in the
+//     store's receipt font exactly as on screen and sent to the printer as ESC/POS image rows over the cable. No driver
+//     and no print dialog; the font is always the store font.
+//  2. DRIVER (for "BROWSER" printers) — the operating-system printer driver. The document is real HTML text in the
+//     store's receipt font, laid out on a page exactly as wide as the paper and exactly as long as the content
+//     (CSS @page per document). For printing without a dialog run Chrome/Edge with --kiosk-printing.
+//  3. ESCPOS_TEXT — raw ESC/POS text; the printer prints with its OWN fonts. Only when the admin chose it explicitly.
+// When the chosen font or route can't be honoured, printing stops with a clear message — the font is never switched.
 //
 // All documents go through one queue, so they print one after another in order and never interleave.
 import { createRoot } from 'react-dom/client';
@@ -59,16 +59,15 @@ export function routeProblem(printer) {
   if (p.render_mode === 'ESCPOS_TEXT') {
     if (!raw) return new PrintError(t('โหมดฟอนต์ของเครื่องพิมพ์ (ESC/POS) ต้องเชื่อมต่อแบบ USB / Serial / Bluetooth / Network'), 'PRINT_ROUTE_UNSUPPORTED', t('เปลี่ยนการเชื่อมต่อ หรือใช้โหมดไดรเวอร์ระบบ'));
     if (!p.allow_printer_font) return new PrintError(t('เครื่องพิมพ์นี้ยังไม่ได้ยืนยันการใช้ฟอนต์ของเครื่องพิมพ์'), 'PRINTER_FONT_NOT_ACCEPTED', t('เปิด "ยอมรับการใช้ฟอนต์ของเครื่องพิมพ์" ในหน้าเครื่องพิมพ์ หรือใช้โหมดไดรเวอร์ระบบ'));
-    return null;
-  }
-  if (raw) {
-    return new PrintError(
-      t('การเชื่อมต่อ {c} ส่งได้เฉพาะคำสั่ง ESC/POS ซึ่งใช้ฟอนต์ในเครื่องพิมพ์ จึงพิมพ์ฟอนต์ที่ตั้งไว้ไม่ได้หากไม่แปลงเป็นภาพ (ระบบไม่แปลงเป็นภาพ)', { c: p.connection }),
-      'PRINT_ROUTE_UNSUPPORTED',
-      t('ติดตั้งไดรเวอร์เครื่องพิมพ์ในระบบปฏิบัติการแล้วเลือกการเชื่อมต่อ "ไดรเวอร์ระบบ" หรือเลือกโหมด "ฟอนต์ของเครื่องพิมพ์ (ESC/POS ข้อความ)"'),
-    );
   }
   return null;
+}
+
+/** How a printer prints: OS driver (real text), direct connection with the store font (image), or printer fonts. */
+export function printMode(printer) {
+  const p = printer || DRIVER_FALLBACK;
+  if (!p.connection || p.connection === 'BROWSER') return 'DRIVER';
+  return p.render_mode === 'ESCPOS_TEXT' ? 'ESCPOS_TEXT' : 'RASTER';
 }
 
 // ── fonts ──
@@ -157,20 +156,147 @@ async function driverPrint(pages, printer) {
   }
 }
 
-// ── raw (ESC/POS text) transports ──
+// ── direct connection with the store font: the document is drawn exactly as on screen and sent as ESC/POS image rows ──
+const DOTS_PER_MM = 8; // 203 dpi thermal printers
+
+async function rasterBytes(pages, printer, { drawer = false } = {}) {
+  const { default: html2canvas } = await import('html2canvas');
+  const g0 = paperGeometry(printer);
+  // the printer's own left/right edge is already outside the image: draw only the printable width
+  const g = { ...g0, paperMm: g0.printableMm, ml: Number(printer.margin_left_mm || 0) + 1, mr: Number(printer.margin_right_mm || 0) + 1 };
+  const widthDots = Math.floor((g.printableMm * DOTS_PER_MM) / 8) * 8;
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:-20000px;top:0;background:#fff;';
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() =>
+    root.render(
+      <>
+        {pages.map((p, i) => (
+          <div key={i} className="raster-page" style={{ width: `${g.paperMm}mm` }}>
+            <DocView sections={p.sections} geometry={g} qrAsImage />
+          </div>
+        ))}
+      </>,
+    ),
+  );
+  try {
+    const missing = await ensureFonts([receiptFontFamily(), ...pages.flatMap((p) => p.sections.map((s) => s.style.font))]);
+    if (missing.length) throw new PrintError(t('โหลดฟอนต์ {f} ไม่สำเร็จ', { f: missing.join(', ') }), 'FONT_UNAVAILABLE', t('ตรวจสอบอินเทอร์เน็ต / ไฟล์ฟอนต์ที่นำเข้า แล้วลองใหม่'));
+    await Promise.all([...host.querySelectorAll('img')].map((img) => (img.complete ? null : new Promise((r) => ((img.onload = r), (img.onerror = r))))));
+    await new Promise((r) => setTimeout(r, 60));
+    const out = [];
+    const nodes = [...host.querySelectorAll('.raster-page')];
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      const scale = widthDots / node.getBoundingClientRect().width;
+      const canvas = await html2canvas(node, { backgroundColor: '#ffffff', scale, useCORS: true, logging: false });
+      out.push(canvasToEscPos(canvas, widthDots, { density: Number(printer.density || 8), cut: pages[i].cut, drawer: drawer && i === nodes.length - 1 }));
+    }
+    const all = new Uint8Array(out.reduce((a, c) => a + c.length, 0));
+    let o = 0;
+    for (const c of out) {
+      all.set(c, o);
+      o += c.length;
+    }
+    return all;
+  } finally {
+    root.unmount();
+    host.remove();
+  }
+}
+
+function canvasToEscPos(canvas, widthDots, { density = 8, cut = true, drawer = false } = {}) {
+  const ESC = 0x1b;
+  const GS = 0x1d;
+  const w = Math.min(widthDots, canvas.width);
+  const h = canvas.height;
+  const data = canvas.getContext('2d').getImageData(0, 0, w, h).data;
+  const bytesPerRow = Math.ceil(w / 8);
+  const raster = new Uint8Array(bytesPerRow * h);
+  const threshold = 200 - (density - 8) * 6;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      if (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] < threshold) raster[y * bytesPerRow + (x >> 3)] |= 0x80 >> (x & 7);
+    }
+  }
+  const parts = [[ESC, 0x40]];
+  for (let y = 0; y < h; y += 255) {
+    const rows = Math.min(255, h - y);
+    parts.push([GS, 0x76, 0x30, 0x00, bytesPerRow & 0xff, (bytesPerRow >> 8) & 0xff, rows & 0xff, (rows >> 8) & 0xff]);
+    parts.push(raster.slice(y * bytesPerRow, (y + rows) * bytesPerRow));
+  }
+  parts.push([ESC, 0x64, 4]);
+  if (cut) parts.push([GS, 0x56, 0x42, 0x00]);
+  if (drawer) parts.push([ESC, 0x70, 0x00, 0x19, 0xfa]);
+  const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+
+// ── raw transports ──
 const handles = {};
 
-async function sendUsb(bytes) {
-  if (!navigator.usb) throw new PrintError(t('เบราว์เซอร์นี้ไม่รองรับ WebUSB (ใช้ Chrome/Edge)'), 'TRANSPORT');
-  let dev = handles.usb || (await navigator.usb.getDevices())[0];
-  if (!dev) dev = await navigator.usb.requestDevice({ filters: [{ classCode: 7 }] }).catch(() => navigator.usb.requestDevice({ filters: [] }));
-  if (!dev.opened) await dev.open();
-  if (dev.configuration === null) await dev.selectConfiguration(1);
-  const iface = dev.configuration.interfaces.find((i) => i.alternate.endpoints.some((e) => e.direction === 'out'));
-  if (!iface.claimed) await dev.claimInterface(iface.interfaceNumber);
-  const ep = iface.alternate.endpoints.find((e) => e.direction === 'out');
-  for (let i = 0; i < bytes.length; i += 16384) await dev.transferOut(ep.endpointNumber, bytes.slice(i, i + 16384));
-  handles.usb = dev;
+const usbMatches = (dev, p) =>
+  (!p?.usb_vendor_id || dev.vendorId === Number(p.usb_vendor_id)) && (!p?.usb_product_id || dev.productId === Number(p.usb_product_id)) && (!p?.usb_serial || !dev.serialNumber || dev.serialNumber === p.usb_serial);
+
+/** USB printers this browser may already use (no dialog). */
+export async function knownUsbPrinters() {
+  if (!navigator.usb) return [];
+  return navigator.usb.getDevices();
+}
+
+/** "ค้นหาเครื่องพิมพ์": the browser lists the USB printers that are plugged in; the chosen one is remembered. */
+export async function searchUsbPrinter({ all = false } = {}) {
+  if (!navigator.usb) throw new PrintError(t('เบราว์เซอร์นี้ค้นหาเครื่องพิมพ์ USB ไม่ได้ กรุณาใช้ Google Chrome หรือ Microsoft Edge บนคอมพิวเตอร์'), 'TRANSPORT');
+  try {
+    return await navigator.usb.requestDevice({ filters: all ? [] : [{ classCode: 7 }] });
+  } catch (e) {
+    if (e?.name === 'NotFoundError') return null; // closed the list without choosing
+    throw e;
+  }
+}
+
+export function usbLabel(dev) {
+  return [dev.manufacturerName, dev.productName].filter(Boolean).join(' ') || `USB ${dev.vendorId.toString(16).padStart(4, '0')}:${dev.productId.toString(16).padStart(4, '0')}`;
+}
+
+async function sendUsb(bytes, printer) {
+  if (!navigator.usb) throw new PrintError(t('เบราว์เซอร์นี้ไม่รองรับการพิมพ์ผ่าน USB (ใช้ Google Chrome หรือ Microsoft Edge)'), 'TRANSPORT');
+  const devices = await navigator.usb.getDevices();
+  let dev = devices.find((d) => usbMatches(d, printer)) || (!printer?.usb_vendor_id ? devices[0] : null);
+  if (!dev) {
+    // first use on this computer: ask once (afterwards the browser remembers the printer)
+    dev = await navigator.usb
+      .requestDevice({ filters: printer?.usb_vendor_id ? [{ vendorId: Number(printer.usb_vendor_id), productId: Number(printer.usb_product_id) || undefined }] : [{ classCode: 7 }] })
+      .catch(() => null);
+    if (!dev) throw new PrintError(t('ไม่พบเครื่องพิมพ์ USB ที่เสียบอยู่ — ตรวจสายและไฟเครื่องพิมพ์ แล้วกด "ค้นหาเครื่องพิมพ์ USB"'), 'USB_NOT_FOUND');
+  }
+  try {
+    if (!dev.opened) await dev.open();
+    if (dev.configuration === null) await dev.selectConfiguration(1);
+    const iface = dev.configuration.interfaces.find((i) => i.alternate.endpoints.some((e) => e.direction === 'out' && e.type === 'bulk')) || dev.configuration.interfaces.find((i) => i.alternate.endpoints.some((e) => e.direction === 'out'));
+    if (!iface) throw new PrintError(t('อุปกรณ์นี้ไม่ใช่เครื่องพิมพ์ (ไม่มีช่องส่งข้อมูล)'), 'USB_NOT_PRINTER');
+    if (!iface.claimed) await dev.claimInterface(iface.interfaceNumber);
+    const ep = iface.alternate.endpoints.find((e) => e.direction === 'out');
+    for (let i = 0; i < bytes.length; i += 16384) await dev.transferOut(ep.endpointNumber, bytes.slice(i, i + 16384));
+    handles.usb = dev;
+  } catch (e) {
+    if (e instanceof PrintError) throw e;
+    if (/claim|access denied|SecurityError|Unable to claim/i.test(`${e?.name} ${e?.message}`)) {
+      throw new PrintError(
+        t('เครื่องพิมพ์ USB ถูกไดรเวอร์ของ Windows ใช้งานอยู่ เบราว์เซอร์จึงส่งงานพิมพ์ตรงไม่ได้'),
+        'USB_BUSY',
+        t('ทางเลือก: (1) ติดตั้งไดรเวอร์ WinUSB ให้เครื่องพิมพ์ด้วยโปรแกรม Zadig แล้วลองใหม่ หรือ (2) แก้ไขเครื่องพิมพ์นี้ เปลี่ยนการเชื่อมต่อเป็น "ไดรเวอร์ระบบ" (ใช้ไดรเวอร์ Windows ที่ติดตั้งไว้)'),
+      );
+    }
+    throw new PrintError(`${t('ส่งงานไปเครื่องพิมพ์ USB ไม่สำเร็จ')}: ${e?.message || e}`, 'USB_FAILED', t('ถอดสาย USB แล้วเสียบใหม่ จากนั้นกดพิมพ์ใหม่'));
+  }
 }
 
 async function sendSerial(bytes) {
@@ -223,7 +349,7 @@ function toBase64(bytes) {
 
 async function sendRaw(printer, bytes, jobId) {
   if (printer.connection === 'NETWORK') return api.post(`/printers/${printer.id}/raw`, { data: toBase64(bytes), jobId });
-  if (printer.connection === 'USB') return sendUsb(bytes);
+  if (printer.connection === 'USB') return sendUsb(bytes, printer);
   if (printer.connection === 'SERIAL') return sendSerial(bytes);
   if (printer.connection === 'BLUETOOTH') return sendBluetooth(bytes);
   throw new PrintError(t('ไม่รู้จักการเชื่อมต่อเครื่องพิมพ์'), 'TRANSPORT');
@@ -294,7 +420,10 @@ export function printJob(job) {
         const sections = buildDoc(d.docType, d.data, { isCopy: d.isCopy, layouts: job.layouts, geometry: paperGeometry(printer), fontLabel: receiptFontFamily() });
         for (let c = 0; c < (d.copies || 1); c++) pages.push({ sections, cut: d.cut !== false });
       }
-      if (printer.render_mode === 'ESCPOS_TEXT') {
+      const mode = printMode(printer);
+      if (mode === 'RASTER') {
+        await sendRaw(printer, await rasterBytes(pages, printer, { drawer: job.drawer }), jobId);
+      } else if (mode === 'ESCPOS_TEXT') {
         const chunks = pages.map((p, i) => encodeLines(textLines(p.sections, printer).lines, printer, { copies: 1, cut: p.cut, drawer: job.drawer && i === pages.length - 1 }));
         const all = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
         let o = 0;

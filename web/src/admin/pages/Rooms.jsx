@@ -19,6 +19,7 @@ import { pushDisplay, orderToDisplay } from '../../lib/display.js';
 import { ROOM_STATUS_LABEL, ROOM_STATUS_COLOR, RESERVATION_STATUS_LABEL, PAYMENT_METHODS } from '@beatbox/shared/constants.js';
 import { cashQuickAmounts } from '@beatbox/shared/calc.js';
 import { round2 } from '@beatbox/shared/money.js';
+import { promptPayPayload } from '@beatbox/shared/promptpay.js';
 import { sessionTiming, computeSessionCharges, formatMinutesShort, priceForMinutes } from '@beatbox/shared/roomPricing.js';
 import { fmtTime, fmtCountdown, fmtDateTime, bkkDateStr } from '@beatbox/shared/format.js';
 
@@ -515,8 +516,13 @@ function PrepayPanel({ session, room, onPaid, onCancelled }) {
     if (!due) return;
     // customer display: what is being paid before entering the room
     const base = { roomName: room.name, roomType: room.type_name, items: due.lines.map((l) => ({ name: l.name, qty: l.qty, unitPrice: l.unitPrice, total: l.gross, type: l.type })), subtotal: due.totals.grandTotal, total: due.totals.grandTotal, deposit: due.paid.applied, net: due.outstanding, due: due.outstanding };
-    pushDisplay(method === 'CASH' ? { ...base, mode: 'PAY_CASH', method, received: Number(cash || 0), change: Math.max(0, Number(cash || 0) - due.outstanding) } : { ...base, mode: 'PAY_OTHER', method });
-  }, [due, cash, method]);
+    if (method === 'CASH') pushDisplay({ ...base, mode: 'PAY_CASH', method, received: Number(cash || 0), change: Math.max(0, Number(cash || 0) - due.outstanding) });
+    else if (method === 'QR') {
+      // PromptPay QR with the exact amount on the customer screen (same as the checkout screen)
+      const p = settings?.payment || {};
+      pushDisplay({ ...base, mode: 'PAY_QR', method: 'QR', qr: { data: p.useDynamicPromptPay && p.promptPayId ? promptPayPayload(p.promptPayId, due.outstanding) : null, imageUrl: p.qrImageUrl, accountName: p.accountName, accountNumber: p.accountNumber, bankName: p.bankName } });
+    } else pushDisplay({ ...base, mode: 'PAY_OTHER', method });
+  }, [due, cash, method, settings?.payment]);
   if (!due) return <Loading />;
   const amount = due.outstanding;
   const methods = Object.entries(PAYMENT_METHODS).filter(([k]) => k !== 'CREDIT' && settings?.payment?.methods?.[k] !== false);
@@ -530,6 +536,7 @@ function PrepayPanel({ session, room, onPaid, onCancelled }) {
       const tender = { method, amount, ...(method === 'CASH' ? { received } : {}), ...(ref ? { reference: ref } : {}), ...(token ? { verificationToken: token } : {}) };
       const r = await api.post(`/sessions/${session.id}/prepay`, { payments: [tender] }, { idempotencyKey: key.current });
       toast.success(`${t('ชำระค่าห้องแล้ว เริ่มเวลา')} ${room.name}${r.change > 0 ? ` · ${t('เงินทอน')} ฿${money(r.change)}` : ''}`);
+      pushDisplay({ mode: 'SUCCESS', total: amount, paid: method === 'CASH' ? received : amount, change: r.change || 0 });
       onPaid(r);
     } catch (e) {
       if (e.code === 'PREPAY_AMOUNT_MISMATCH') load();
@@ -542,6 +549,7 @@ function PrepayPanel({ session, room, onPaid, onCancelled }) {
     if (!(await confirm({ title: 'ยกเลิกการเปิดห้อง', message: 'ลูกค้ายังไม่ได้ชำระค่าห้อง ต้องการยกเลิกและปล่อยห้องว่างหรือไม่?', danger: true }))) return;
     try {
       await api.post(`/sessions/${session.id}/cancel-pending`, { reason: 'ยกเลิกก่อนชำระค่าห้อง' });
+      pushDisplay({ mode: 'IDLE' });
       onCancelled();
     } catch (e) {
       toast.error(e);
@@ -682,7 +690,7 @@ export function DepositModal({ session, reservation, onClose, onDone }) {
         <Field label="จำนวนเงินมัดจำ"><Input className="lg" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
         <Field label="ช่องทางชำระ"><Select value={method} onChange={(e) => { setMethod(e.target.value); setToken(null); }} options={[{ value: 'CASH', label: 'เงินสด' }, { value: 'QR', label: 'QR Code' }, { value: 'TRANSFER', label: 'โอนเงิน' }, { value: 'CARD', label: 'บัตร' }, { value: 'OTHER', label: 'ช่องทางอื่น' }]} /></Field>
       </div>
-      {needsSlip && Number(amount) > 0 && !token && <div className="mt"><QrPayPanel method={method} amount={Number(amount)} depositRef={reservation?.booking_no || `session-${session?.id}`} onVerified={(r) => setToken(r.verificationToken)} /></div>}
+      {needsSlip && Number(amount) > 0 && !token && <div className="mt"><QrPayPanel toDisplay method={method} amount={Number(amount)} depositRef={reservation?.booking_no || `session-${session?.id}`} onVerified={(r) => setToken(r.verificationToken)} /></div>}
       {token && <div className="mt center"><Badge color="#16a34a">{t('ตรวจสอบเรียบร้อย')}</Badge></div>}
     </Modal>
   );
@@ -832,7 +840,7 @@ export function OpenRoomModal({ room: initialRoom, onClose, onOpened }) {
                 <Select value={f.depositMethod} onChange={(e) => { set('depositMethod', e.target.value); setToken(null); }} options={[{ value: 'CASH', label: 'เงินสด' }, { value: 'QR', label: 'QR Code' }, { value: 'TRANSFER', label: 'โอนเงิน' }, { value: 'CARD', label: 'บัตร' }]} />
               </div>
             </Field>
-            {['QR', 'TRANSFER'].includes(f.depositMethod) && Number(f.depositAmount) > 0 && !token && <QrPayPanel method={f.depositMethod} amount={Number(f.depositAmount)} depositRef={`open-${opKey}`} onVerified={(r) => setToken(r.verificationToken)} />}
+            {['QR', 'TRANSFER'].includes(f.depositMethod) && Number(f.depositAmount) > 0 && !token && <QrPayPanel toDisplay method={f.depositMethod} amount={Number(f.depositAmount)} depositRef={`open-${opKey}`} onVerified={(r) => setToken(r.verificationToken)} />}
             {token && <Badge color="#16a34a">{t('ตรวจสอบเรียบร้อย')}</Badge>}
             <Field label="หมายเหตุ"><Textarea style={{ minHeight: 42 }} value={f.note} onChange={(e) => set('note', e.target.value)} /></Field>
           </div>

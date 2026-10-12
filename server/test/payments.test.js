@@ -224,10 +224,13 @@ test('print jobs: one record per client job id, reprint returns the same documen
   assert.equal(copy.body.reprint_of, a.body.id);
 });
 
-test('printer route check: a raw connection cannot claim to print the store font', async () => {
-  const bad = await api('POST', '/printers', { name: 'USB raw', connection: 'USB', paperWidth: 80, renderMode: 'DRIVER' });
-  assert.equal(bad.status, 400);
-  assert.equal(bad.body.code, 'PRINT_ROUTE_UNSUPPORTED');
+test('printer route check: a direct USB printer prints the store font (raster), printer fonts only when accepted', async () => {
+  const usb = await api('POST', '/printers', { name: 'USB store font', connection: 'USB', paperWidth: 80, renderMode: 'DRIVER', usbVendorId: 0x0483, usbProductId: 0x5743, usbSerial: 'ABC1' });
+  assert.equal(usb.status, 200, JSON.stringify(usb.body));
+  assert.equal(usb.body.render_mode, 'RASTER');
+  assert.equal(usb.body.usb_vendor_id, 0x0483);
+  assert.equal(usb.body.usb_product_id, 0x5743);
+  assert.equal(usb.body.usb_serial, 'ABC1');
   const notAccepted = await api('POST', '/printers', { name: 'USB text', connection: 'USB', paperWidth: 80, renderMode: 'ESCPOS_TEXT', allowPrinterFont: false });
   assert.equal(notAccepted.body.code, 'PRINTER_FONT_NOT_ACCEPTED');
   const ok = await api('POST', '/printers', { name: 'USB text', connection: 'USB', paperWidth: 58, renderMode: 'ESCPOS_TEXT', allowPrinterFont: true, escposCodepage: 26, charsPerLine: 32 });
@@ -236,6 +239,30 @@ test('printer route check: a raw connection cannot claim to print the store font
   assert.equal(drv.status, 200);
   assert.equal(Number(drv.body.printable_width_mm), 72);
   assert.equal(drv.body.render_mode, 'DRIVER');
+});
+
+test('printer: use for every document, then delete (gone from the list and from routing)', async () => {
+  const p = await api('POST', '/printers', { name: 'Xprinter USB', connection: 'USB', paperWidth: 80, renderMode: 'RASTER', usbVendorId: 1155, usbProductId: 22339 });
+  assert.equal(p.status, 200, JSON.stringify(p.body));
+  const all = await api('POST', `/printers/${p.body.id}/use-for-all`);
+  assert.equal(all.status, 200, JSON.stringify(all.body));
+  const docs = await api('GET', '/documents/settings');
+  const routing = docs.body.routing || docs.body.documents?.routing;
+  assert.ok(routing && Object.keys(routing).length > 3);
+  for (const v of Object.values(routing)) assert.equal(Number(v.printerId), p.body.id);
+  let list = await api('GET', '/printers');
+  const me = list.body.find((x) => x.id === p.body.id);
+  assert.equal(me.is_default, true);
+  assert.equal(list.body.filter((x) => x.is_default).length, 1);
+  const del = await api('DELETE', `/printers/${p.body.id}`);
+  assert.equal(del.status, 200);
+  list = await api('GET', '/printers');
+  assert.ok(!list.body.some((x) => x.id === p.body.id));
+  const docs2 = await api('GET', '/documents/settings');
+  const routing2 = docs2.body.routing || docs2.body.documents?.routing;
+  for (const v of Object.values(routing2)) assert.notEqual(Number(v.printerId), p.body.id);
+  const again = await api('DELETE', `/printers/${p.body.id}`);
+  assert.equal(again.status, 404);
 });
 
 test('cross-store guard: an id of another store can never be attached (even though the id exists)', async () => {
