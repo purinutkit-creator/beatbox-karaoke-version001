@@ -217,6 +217,17 @@ export default function SmartDevices() {
       setLoadingDevices(false);
     }
   };
+  const toggle = async (on) => {
+    try {
+      if (on && !data.configured) return toast.error('กรุณากรอก Access ID / Access Secret แล้วกดบันทึกก่อน');
+      const r = await api.put('/integrations/tuya', { enabled: on });
+      setAll(r);
+      reload();
+      toast.success(on ? 'เปิดใช้งานแล้ว' : 'ปิดแล้ว');
+    } catch (e) {
+      toast.error(e);
+    }
+  };
   const remove = async (s) => {
     if (!(await confirm({ title: 'ลบระบบ', message: `${t('ต้องการลบ')} "${s.name}" ?`, danger: true, okText: 'ลบ' }))) return;
     try {
@@ -231,8 +242,15 @@ export default function SmartDevices() {
   return (
     <div className="col">
       <PageHead icon={Cpu} title="อุปกรณ์อัจฉริยะ (Tuya)">
-        <Badge color={data.enabled ? '#16a34a' : '#6b7280'}>{data.enabled ? t('เปิดใช้งาน') : t('ปิดอยู่')}</Badge>
+        {manage ? (
+          <Switch checked={!!data.enabled} onChange={toggle} label={data.enabled ? t('เปิดใช้งานอยู่') : t('ปิดอยู่ — กดเพื่อเปิดใช้งาน')} />
+        ) : (
+          <Badge color={data.enabled ? '#16a34a' : '#6b7280'}>{data.enabled ? t('เปิดใช้งาน') : t('ปิดอยู่')}</Badge>
+        )}
       </PageHead>
+      {!data.enabled && data.systems.length > 0 && (
+        <div className="card flat small" style={{ borderColor: 'var(--warn)' }}>{t('ระบบอุปกรณ์อัจฉริยะยังปิดอยู่ — ปุ่มในหน้าห้องและการทำงานอัตโนมัติจะยังไม่ทำงาน จนกว่าจะเปิดสวิตช์ด้านบน')}</div>
+      )}
       <div className="card flat small">
         {t('ตั้งชื่อ "ระบบ" ได้เอง เช่น ไฟเตือนใกล้หมดเวลา / ตัดไฟห้องเมื่อหมดเวลา / เปิดแอร์ แล้วเลือกว่าจะทำงานเมื่อไร และใช้อุปกรณ์ Tuya ตัวไหนในแต่ละห้อง · ระบบที่ตั้ง "แสดงเป็นปุ่ม" จะมีปุ่มในหน้าห้องให้พนักงานกดสั่งเองได้')}
       </div>
@@ -308,9 +326,27 @@ export function RoomSmartButtons({ roomId }) {
   const { can } = useAuth();
   const { data } = useLive(() => api.get('/smart', { passive: true }), ['smart', 'settings'], []);
   const [busy, setBusy] = useState(null);
-  if (!data?.enabled) return null;
+  if (!data) return null;
   const list = data.systems.filter((s) => s.is_active && s.show_button && data.bindings.some((b) => b.system_id === s.id && b.room_id === roomId));
-  if (!list.length) return null;
+  if (!list.length) {
+    // systems exist but no device was chosen for this room yet → tell the manager where to set it
+    const unbound = data.systems.filter((s) => s.is_active && s.show_button);
+    if (!unbound.length || !can('settings.manage')) return null;
+    return (
+      <div className="card flat small muted" style={{ padding: 10 }}>
+        <Cpu size={14} /> {t('ห้องนี้ยังไม่ได้เลือกอุปกรณ์ Tuya')} ({unbound.map((s) => s.name).join(', ')}) · <a href="/admin/smart">{t('เลือกอุปกรณ์ของห้อง')}</a>
+      </div>
+    );
+  }
+  if (!data.enabled) {
+    // devices are set up for this room but the whole Tuya feature is switched off
+    return (
+      <div className="card flat small" style={{ padding: 10, borderColor: 'var(--warn)' }}>
+        <Cpu size={14} /> {t('ห้องนี้มีอุปกรณ์ Tuya แต่ระบบอุปกรณ์อัจฉริยะยังปิดอยู่')}
+        {can('settings.manage') && <> · <a href="/admin/smart">{t('เปิดใช้งาน')}</a></>}
+      </div>
+    );
+  }
   const run = async (s) => {
     setBusy(s.id);
     try {

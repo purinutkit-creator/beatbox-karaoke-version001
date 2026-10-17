@@ -249,7 +249,10 @@ table.table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; overflow-y: auto; padding-bottom: 16px; align-content: start; }
 .product { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: transform 0.08s; user-select: none; }
 .product:active { transform: scale(0.97); }
-.product .img { aspect-ratio: 4/3; background: var(--surface-2) center/cover no-repeat; display: grid; place-items: center; color: var(--muted); position: relative; }
+.product .img { aspect-ratio: 4/3; min-height: 0; overflow: hidden; background: var(--surface-2) center/cover no-repeat; display: grid; place-items: center; color: var(--muted); position: relative; }
+/* any photo shape (tall, wide) is cropped to the same 4:3 box — the name and price always stay visible */
+.product .img > img, .product .img > div:not(.sold) { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.product .info { margin-top: auto; }
 .product .info { padding: 8px 10px; }
 .product .price { font-weight: 800; color: var(--primary); }
 .product.out { opacity: 0.45; cursor: not-allowed; }

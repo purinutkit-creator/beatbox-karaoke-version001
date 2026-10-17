@@ -276,6 +276,8 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
       title={<span className="row nowrap">{room.name} <Badge color={ROOM_STATUS_COLOR[room.status]}>{t(ROOM_STATUS_LABEL[room.status])}</Badge></span>}
       onClose={onClose}
     >
+      {/* Tuya devices of this room: buttons in every room state (empty, in use, cleaning …) */}
+      <RoomSmartButtons roomId={room.id} />
       {!s ? (
         <div className="col">
           <div className="card flat">
@@ -330,7 +332,6 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
           <div className="row small muted">
             <User size={14} /> {s.customer_name || '-'} {s.phone && `· ${s.phone}`} {s.member_code && <Badge color="#eab308">{s.member_code}</Badge>} · <Users size={14} /> {s.guest_count}/{s.room_capacity} · {s.package_name || t('รายชั่วโมง')} · {t('เปิดโดย')} {s.opened_by_name}
           </div>
-          <RoomSmartButtons roomId={room.id} />
           {['ACTIVE', 'PAUSED', 'SCHEDULED', 'CLOSED'].includes(s.status) && (
             <div className="grid grid-3" style={{ gap: 8 }}>
               <Button size="lg" variant="warn" icon={Plus} onClick={() => setModal('plus5')}>{t('+5 นาที')}</Button>
