@@ -45,6 +45,13 @@ export const INTEGRATION_FIELDS = {
     maxSlipAgeMinutes: { def: 1440 },
     requireSlipQr: { def: true },
   },
+  // smart devices (Tuya Cloud): smart plugs / switches per room, automations on the room clock
+  tuya: {
+    enabled: { def: false },
+    endpoint: { def: 'https://openapi.tuyaus.com' },
+    accessId: { def: '' },
+    accessSecret: { secret: true, def: '' },
+  },
   terminal: {
     provider: { def: 'none' }, // none | beam | http | manual
     useForQr: { def: true },

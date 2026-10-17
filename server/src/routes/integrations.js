@@ -11,6 +11,7 @@ import { emitSync } from '../lib/realtime.js';
 import { useStoreOf } from '../lib/tenant.js';
 import { getSettings, invalidateSettings } from '../services/settings.js';
 import { maskedIntegrations, saveIntegration, INTEGRATION_FIELDS, fillTemplate } from '../services/integrations.js';
+import { tuyaTest } from '../providers/tuya.js';
 import { lineLogin, lineMessaging } from '../providers/line.js';
 import { sendSms, smsConfig } from '../providers/sms.js';
 import { verifySlip, testSlipProvider } from '../providers/slip.js';
@@ -50,6 +51,12 @@ const SCHEMAS = {
     receiverAccounts: z.string().max(500).optional(),
     maxSlipAgeMinutes: z.coerce.number().int().min(0).max(60 * 24 * 30).optional(),
     requireSlipQr: z.boolean().optional(),
+  }),
+  tuya: z.object({
+    enabled: z.boolean().optional(),
+    endpoint: z.string().url().max(200).optional(),
+    accessId: z.string().trim().max(100).optional(),
+    accessSecret: z.string().trim().max(200).nullable().optional(),
   }),
   terminal: z.object({
     provider: z.enum(['none', 'beam', 'http', 'manual']).optional(),
@@ -105,6 +112,9 @@ r.post('/integrations/:section/test', can('settings.manage'), async (req, res) =
     }
   } else if (section === 'slip') {
     const t = await testSlipProvider();
+    out = { ok: t.ok, results: [t] };
+  } else if (section === 'tuya') {
+    const t = await tuyaTest();
     out = { ok: t.ok, results: [t] };
   } else if (section === 'terminal') {
     const { cfg, adapter } = await getTerminal();

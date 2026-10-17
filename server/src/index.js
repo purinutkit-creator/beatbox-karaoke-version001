@@ -35,6 +35,7 @@ import publicRoutes from './routes/public.js';
 import fontRoutes, { serveFont } from './routes/fonts.js';
 import integrationRoutes, { terminalPublic } from './routes/integrations.js';
 import roomServiceRoutes, { publicRoom } from './routes/roomService.js';
+import smartRoutes from './routes/smart.js';
 
 export function createApp() {
   const app = express();
@@ -86,6 +87,7 @@ export function createApp() {
   app.use('/api', fontRoutes);
   app.use('/api', integrationRoutes);
   app.use('/api', roomServiceRoutes);
+  app.use('/api', smartRoutes);
   app.use('/api', (_req, res) => res.status(404).json({ error: 'ไม่พบ API' }));
 
   // Only fonts are public uploads — payment slips stay private (served through an authenticated endpoint)

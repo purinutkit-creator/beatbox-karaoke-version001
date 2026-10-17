@@ -160,6 +160,8 @@ Nothing to run by hand: on start the server applies the new migrations in order,
 | `006_payments_members_printing.sql` | Prepay room status (`PENDING_PAYMENT`), prepaid room charge on the bill, member password fields, printer paper/print-area settings, print-job queue fields, and **database triggers that refuse any reference to another store's row** |
 | `007_platform_email.sql` | E-mail sign-in for the Super Owner (Super Admin) account |
 | `008_usb_printing.sql` | Direct-cable printing in the store font (`RASTER` mode; USB/Serial/Bluetooth/Network printers are switched to it), the USB printer's vendor/product/serial, and real printer delete (`deleted_at`; past print jobs keep their history) |
+| `009_bonus_time_kitchen_beep.sql` | Free extra minutes (`bonus_minutes`, never charged), printer beep on kitchen tickets |
+| `010_smart_devices.sql` | Smart devices (Tuya): named systems, the device of each room, run log, automations already run per session |
 
 Back up first (Render: Database → Backups, or `pg_dump`). The server connects with a non-superuser role so RLS always applies
 (locally it switches to the restricted role `beatbox_app` automatically).
@@ -212,6 +214,30 @@ Admin → ตั้งค่าร้าน → ห้อง เวลา & แ�
   If nothing is due the room closes and the **full receipt prints automatically** (prepaid + paid at close per method, cash and change,
   "ชำระครบแล้ว · ยอดค้างชำระ 0.00 บาท", member info or the sign-up QR). Double clicks / retries never create a second payment,
   receipt or print job; a printer error never touches the payment and offers **พิมพ์ใหม่**.
+
+## Smart devices (Tuya)
+Admin → **อุปกรณ์อัจฉริยะ (Tuya)**:
+1. Create a Cloud Project at iot.tuya.com (same Data Center as the Smart Life / Tuya app account), enable the **IoT Core** and
+   **Authorization** APIs, link the app account (Devices → Link App Account), then paste the **Access ID / Access Secret**, pick the
+   Data Center and press **ทดสอบการเชื่อมต่อ**. The secret is encrypted and never sent back to the browser.
+2. **ระบบ** — name each system yourself and choose when it runs: manual button only · when the room clock starts (and again when
+   time is added after it ran out) · when *N* minutes are left · when time is up (automatic cut) · when the room is closed/cancelled.
+   Command = Tuya data point code (`switch_1`, `switch_2`, `switch_led` …) + on / off / other value. "แสดงเป็นปุ่ม" adds a button
+   on the room screen.
+3. **อุปกรณ์ของแต่ละห้อง** — the Tuya device of every room for every system (type the Device ID or load the list from Tuya;
+   ⚡ sends a test command). Each automation runs once per session and end time (the server claims it atomically); every run is in
+   the log, and a failure notifies the staff. The switch at the top turns the whole feature on or off.
+
+## Room time shortcuts
+* **+5 นาที** asks for a reason (quick reasons provided). Free by default — the end time moves but nothing is charged
+  (`bonus_minutes`) — or switch on "คิดค่าบริการ" to charge it like any extension. Shown in the room history, the time slip and the
+  Activity Log.
+
+## Kitchen / bar tickets
+Every order prints its kitchen/bar ticket by itself: a POS sale immediately, items added to a room (room screen or "เพิ่มเข้าห้อง")
+a few seconds after the last item (default 5 s, so one round is one ticket), customer QR orders as before. Each ticket prints once
+(one POS claims the job). Printers connected directly (USB/LAN/…) **beep** on kitchen tickets (`ESC B n t`, beep count per printer).
+On/off and the batch time: เครื่องพิมพ์ → เอกสาร → เครื่องพิมพ์.
 
 ## Printing setup
 1. Admin → เครื่องพิมพ์ → add the printer:

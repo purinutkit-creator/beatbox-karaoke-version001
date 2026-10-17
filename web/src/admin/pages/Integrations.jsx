@@ -7,7 +7,7 @@ import { useT } from '../../lib/i18n.jsx';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 
-function Secret({ label, value, onChange, hint }) {
+export function Secret({ label, value, onChange, hint }) {
   const { t } = useT();
   const set = value && typeof value === 'object' ? value : null;
   const typed = typeof value === 'string' ? value : '';
@@ -22,7 +22,7 @@ function Secret({ label, value, onChange, hint }) {
   );
 }
 
-function Results({ out }) {
+export function Results({ out }) {
   if (!out) return null;
   return (
     <div className="col mt">
@@ -35,7 +35,7 @@ function Results({ out }) {
   );
 }
 
-function useIntegration(section, all, setAll) {
+export function useIntegration(section, all, setAll) {
   const toast = useToast();
   const { loadSettings } = useAuth();
   const [v, setV] = useState(all[section]);
@@ -68,7 +68,7 @@ function useIntegration(section, all, setAll) {
   return { v, set, save, busy, test, runTest };
 }
 
-function Bar({ s, children }) {
+export function Bar({ s, children }) {
   const { t } = useT();
   return (
     <div className="row end mt">

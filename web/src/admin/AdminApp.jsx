@@ -3,7 +3,7 @@ import { Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'reac
 import {
   LayoutDashboard, ShoppingCart, DoorOpen, CalendarDays, ClipboardList, Users, Package, Tags, Boxes, LayoutGrid, Timer, BadgePercent, Wallet,
   Receipt, Clock, BarChart3, UserCog, MonitorSmartphone, Printer, Settings, History, Bell, Sun, Moon, LogOut, Menu, Wifi, WifiOff, Globe, ScanLine,
-  Gift, AlertTriangle, VolumeX, Plus, CreditCard, X, Mic2, Lock, KeyRound, Mail, Store, Shield, FileText,
+  Gift, AlertTriangle, VolumeX, Plus, CreditCard, X, Mic2, Lock, KeyRound, Mail, Store, Shield, FileText, Cpu,
 } from 'lucide-react';
 import { useAuth, useApp } from '../lib/store.jsx';
 import { useT } from '../lib/i18n.jsx';
@@ -42,6 +42,7 @@ const pages = {
   employees: lazy(() => import('./pages/Employees.jsx')),
   display: lazy(() => import('./pages/DisplaySettings.jsx')),
   printers: lazy(() => import('./pages/Printers.jsx')),
+  smart: lazy(() => import('./pages/SmartDevices.jsx')),
   documents: lazy(() => import('./pages/Documents.jsx')),
   settings: lazy(() => import('./pages/Settings.jsx')),
   activity: lazy(() => import('./pages/ActivityLog.jsx')),
@@ -78,6 +79,7 @@ export const MENU = [
   { to: 'employees', label: 'พนักงาน', icon: UserCog, perm: 'employee.manage', feature: 'staff' },
   { to: 'display', label: 'Customer Display', icon: MonitorSmartphone, feature: 'display' },
   { to: 'printers', label: 'เครื่องพิมพ์', icon: Printer, feature: 'printing' },
+  { to: 'smart', label: 'อุปกรณ์อัจฉริยะ (Tuya)', icon: Cpu, perm: 'settings.manage' },
   { to: 'documents', label: 'ออกแบบเอกสาร/ใบเสร็จ', icon: FileText, perm: 'settings.manage', feature: 'receipt_settings' },
   { to: 'settings', label: 'ตั้งค่าร้าน', icon: Settings, perm: 'settings.manage' },
   { to: 'activity', label: 'Activity Log', icon: History, perm: 'activity.view' },
@@ -583,6 +585,7 @@ function Layout() {
               <Route path="employees" element={gate('employees', can('employee.manage') ? <pages.employees /> : <Forbidden />)} />
               <Route path="display" element={gate('display', <pages.display />)} />
               <Route path="printers" element={gate('printers', <pages.printers />)} />
+              <Route path="smart" element={gate('smart', <pages.smart />)} />
               <Route path="documents" element={gate('documents', can('settings.manage') ? <pages.documents /> : <Forbidden />)} />
               <Route path="settings" element={gate('settings', can('settings.manage') ? <pages.settings /> : <Forbidden />)} />
               <Route path="activity" element={gate('activity', can('activity.view') ? <pages.activity /> : <Forbidden />)} />

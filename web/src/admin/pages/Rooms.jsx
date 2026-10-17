@@ -9,6 +9,7 @@ import { MemberPicker } from '../../components/MemberPicker.jsx';
 import { ProductCatalog } from '../../components/ProductCatalog.jsx';
 import Checkout, { QrPayPanel } from '../../components/Checkout.jsx';
 import { PrepayReview, IssueItem } from '../../components/RoomService.jsx';
+import { RoomSmartButtons } from './SmartDevices.jsx';
 import { usePrintRoomTickets, usePrintTimeAdjust } from '../../lib/roomTickets.jsx';
 import { usePrint } from '../../components/PrintPreview.jsx';
 import { useT } from '../../lib/i18n.jsx';
@@ -329,6 +330,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
           <div className="row small muted">
             <User size={14} /> {s.customer_name || '-'} {s.phone && `· ${s.phone}`} {s.member_code && <Badge color="#eab308">{s.member_code}</Badge>} · <Users size={14} /> {s.guest_count}/{s.room_capacity} · {s.package_name || t('รายชั่วโมง')} · {t('เปิดโดย')} {s.opened_by_name}
           </div>
+          <RoomSmartButtons roomId={room.id} />
           {['ACTIVE', 'PAUSED', 'SCHEDULED', 'CLOSED'].includes(s.status) && (
             <div className="grid grid-3" style={{ gap: 8 }}>
               <Button size="lg" variant="warn" icon={Plus} onClick={() => setModal('plus5')}>{t('+5 นาที')}</Button>

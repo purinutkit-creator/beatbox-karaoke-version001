@@ -10,6 +10,7 @@ import { runBackup } from './backup.js';
 import { addPointTx } from './points.js';
 import { logActivity } from '../lib/activity.js';
 import { autoAcceptRoomOrders, sweepKitchenTickets } from './roomService.js';
+import { smartTick } from './smart.js';
 
 let running = false;
 
@@ -17,6 +18,7 @@ async function roomTick() {
   const settings = await getSettings();
   await autoAcceptRoomOrders(settings).catch((e) => console.error('[scheduler] room orders', e.message));
   await sweepKitchenTickets(settings).catch((e) => console.error('[scheduler] kitchen tickets', e.message));
+  await smartTick().catch((e) => console.error('[scheduler] smart devices', e.message));
   // activate scheduled sessions
   const act = await pool.query(`UPDATE room_sessions SET status = 'ACTIVE', updated_at = now() WHERE status = 'SCHEDULED' AND started_at <= now() RETURNING id`);
   if (act.rows.length) emitSync(['rooms']);
