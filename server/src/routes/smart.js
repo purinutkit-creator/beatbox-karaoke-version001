@@ -6,7 +6,7 @@ import { logActivity } from '../lib/activity.js';
 import { z, parse } from '../lib/validate.js';
 import { notFound, badRequest } from '../lib/errors.js';
 import { emitSync } from '../lib/realtime.js';
-import { tuyaConfig, tuyaDevices, tuyaSend, TUYA_REGIONS } from '../providers/tuya.js';
+import { tuyaConfig, tuyaDevices, tuyaSend, tuyaDeviceInfo, TUYA_REGIONS } from '../providers/tuya.js';
 import { runSystem, SMART_TRIGGERS } from '../services/smart.js';
 
 const r = Router();
@@ -95,6 +95,15 @@ r.put('/smart/bindings', can('settings.manage'), async (req, res) => {
 r.get('/smart/devices', can('settings.manage'), async (_req, res) => {
   try {
     res.json(await tuyaDevices());
+  } catch (e) {
+    throw badRequest(e.message, 'TUYA_ERROR');
+  }
+});
+
+/** What a device accepts (its data points, or the IR remote keys) — for choosing the command. */
+r.get('/smart/devices/:id/info', can('settings.manage'), async (req, res) => {
+  try {
+    res.json(await tuyaDeviceInfo(req.params.id));
   } catch (e) {
     throw badRequest(e.message, 'TUYA_ERROR');
   }

@@ -36,13 +36,29 @@ function startFakeTuya() {
         if (h.client_id !== ID || h.sign !== sign) return send({ success: false, code: 1004, msg: 'sign invalid' });
         if (req.url.startsWith('/v1.0/token')) return send({ success: true, result: { access_token: 'tok-1', expire_time: 7200 } });
         if (tok !== 'tok-1') return send({ success: false, code: 1011, msg: 'token invalid' });
+        // a fan that only has "switch" (no switch_1); IR remotes have no data points at all
+        const fnm = req.url.match(/^\/v1\.0\/iot-03\/devices\/([^/]+)\/functions$/);
+        if (fnm) {
+          if (fnm[1] === 'fan-1') return send({ success: true, result: { category: 'fs', functions: [{ code: 'switch', type: 'Boolean' }, { code: 'fan_speed_enum', type: 'Enum' }] } });
+          return send({ success: true, result: { category: 'infrared_ac', functions: [] } });
+        }
+        if (req.url === '/v2.0/infrareds/hub-1/remotes') return send({ success: true, result: [{ remote_id: 'ir-ac', category_id: 5, remote_index: 11, remote_name: 'แอร์' }, { remote_id: 'ir-fan', category_id: 8, remote_index: 12, remote_name: 'พัดลม IR' }] });
+        if (req.url === '/v2.0/infrareds/hub-1/remotes/ir-fan/keys') return send({ success: true, result: { category_id: 8, key_list: [{ key: 'PowerOn' }, { key: 'PowerOff' }, { key: 'Speed' }] } });
+        const ir = req.url.match(/^\/v2\.0\/infrareds\/hub-1\/(air-conditioners|remotes)\/([^/]+)\/command$/);
+        if (ir && req.method === 'POST') {
+          commands.push({ device: ir[2], ir: JSON.parse(body) });
+          return send({ success: true, result: true });
+        }
         const m = req.url.match(/^\/v1\.0\/iot-03\/devices\/([^/]+)\/commands$/);
         if (m && req.method === 'POST') {
           if (m[1] === 'offline-dev') return send({ success: false, code: 2017, msg: 'device not found' });
+          const cmds = JSON.parse(body).commands;
+          if (m[1] === 'fan-1' && cmds[0].code !== 'switch') return send({ success: false, code: 2008, msg: 'command or value not support' });
+          if (m[1].startsWith('ir-')) return send({ success: false, code: 2008, msg: 'command or value not support' });
           commands.push({ device: m[1], commands: JSON.parse(body).commands });
           return send({ success: true, result: true });
         }
-        if (req.url.startsWith('/v1.0/iot-01/associated-users/devices')) return send({ success: true, result: { devices: [{ id: 'plug-room1', name: 'ปลั๊กห้อง 1', online: true, category: 'cz' }], has_more: false } });
+        if (req.url.startsWith('/v1.0/iot-01/associated-users/devices')) return send({ success: true, result: { devices: [{ id: 'plug-room1', name: 'ปลั๊กห้อง 1', online: true, category: 'cz' }, { id: 'hub-1', name: 'IR Hub', online: true, category: 'wnykq' }], has_more: false } });
         send({ success: false, code: 404, msg: 'not found' });
       });
     });
@@ -133,6 +149,31 @@ test('systems + room devices; the staff button sends the command', async () => {
   const g = await api('GET', '/smart');
   assert.equal(g.body.systems.length, 4);
   assert.ok(!JSON.stringify(g.body).includes(SECRET));
+});
+
+test('a device without switch_1 uses its own switch; IR air conditioner and IR fan go through the IR hub', async () => {
+  const mk = async (b) => (await api('POST', '/smart/systems', b)).body;
+  const on = await mk({ name: 'เปิดพัดลม', trigger: 'MANUAL', commands: [{ code: 'switch_1', value: true }] });
+  const off = await mk({ name: 'ปิดแอร์', trigger: 'MANUAL', commands: [{ code: 'switch_1', value: false }] });
+  await api('PUT', '/smart/bindings', { systemId: on.id, roomId: 7, deviceId: 'fan-1' });
+  await api('PUT', '/smart/bindings', { systemId: on.id, roomId: 8, deviceId: 'ir-fan' });
+  await api('PUT', '/smart/bindings', { systemId: off.id, roomId: 7, deviceId: 'ir-ac' });
+  const r1 = await api('POST', '/smart/run', { systemId: on.id, roomId: 7 });
+  assert.equal(r1.status, 200, JSON.stringify(r1.body));
+  assert.deepEqual(commands.pop(), { device: 'fan-1', commands: [{ code: 'switch', value: true }] });
+  const r2 = await api('POST', '/smart/run', { systemId: off.id, roomId: 7 });
+  assert.equal(r2.status, 200, JSON.stringify(r2.body));
+  assert.deepEqual(commands.pop(), { device: 'ir-ac', ir: { code: 'power', value: 0 } });
+  const r3 = await api('POST', '/smart/run', { systemId: on.id, roomId: 8 });
+  assert.equal(r3.status, 200, JSON.stringify(r3.body));
+  assert.deepEqual(commands.pop(), { device: 'ir-fan', ir: { category_id: 8, remote_index: 12, key: 'PowerOn' } });
+  // the settings page can show what a device accepts
+  const info = await api('GET', '/smart/devices/fan-1/info');
+  assert.equal(info.body.kind, 'dp');
+  assert.ok(info.body.functions.some((f) => f.code === 'switch'));
+  const irInfo = await api('GET', '/smart/devices/ir-fan/info');
+  assert.equal(irInfo.body.kind, 'ir');
+  assert.ok(irInfo.body.keys.includes('PowerOn'));
 });
 
 test('automations: on at start, warning N min before, cut at time up, back on after adding time — each once', async () => {

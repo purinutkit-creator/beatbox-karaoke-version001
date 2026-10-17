@@ -1,6 +1,6 @@
 // Admin → อุปกรณ์อัจฉริยะ (Tuya): connection, named systems (trigger + command), the device of each room, and the log.
 import { useEffect, useMemo, useState } from 'react';
-import { Cpu, PlugZap, Plus, Pencil, Trash2, Power, PowerOff, Zap, CheckCircle2, XCircle, RefreshCw, Search, KeyRound } from 'lucide-react';
+import { Cpu, PlugZap, Plus, Pencil, Trash2, Power, PowerOff, Zap, CheckCircle2, XCircle, RefreshCw, Search, KeyRound, ListTree } from 'lucide-react';
 import { PageHead, Button, Field, Input, Select, Switch, Badge, Modal, Loading, Empty, useToast, useDialog } from '../../components/ui.jsx';
 import { useT } from '../../lib/i18n.jsx';
 import { api } from '../../lib/api.js';
@@ -117,12 +117,48 @@ function SystemModal({ initial, onClose, onSaved }) {
   );
 }
 
+/** What a device accepts: its data points, or the keys of an IR remote (air conditioner, fan, TV …). */
+function DeviceInfo({ deviceId, onClose }) {
+  const { t } = useT();
+  const [info, setInfo] = useState(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    api.get(`/smart/devices/${encodeURIComponent(deviceId)}/info`).then(setInfo).catch((e) => setErr(e.message));
+  }, [deviceId]);
+  return (
+    <Modal title={`${t('คำสั่งที่อุปกรณ์รองรับ')} · ${deviceId}`} onClose={onClose}>
+      {err ? <div style={{ color: 'var(--danger)' }}>{err}</div> : !info ? <Loading /> : (
+        <div className="col small">
+          {info.kind === 'dp' && (
+            <>
+              <div className="muted">{t('อุปกรณ์ Wi-Fi ทั่วไป — ใช้ "คำสั่ง (data point code)" ตามรายการนี้ · ระบบเปิด/ปิดจะใช้สวิตช์ของอุปกรณ์ให้อัตโนมัติ')}</div>
+              <table className="table">
+                <thead><tr><th>Code</th><th>{t('ชนิด')}</th><th>{t('ชื่อ')}</th></tr></thead>
+                <tbody>{info.functions.map((f) => <tr key={f.code}><td><code>{f.code}</code></td><td>{f.type}</td><td>{f.name || '-'}</td></tr>)}</tbody>
+              </table>
+            </>
+          )}
+          {info.kind === 'ir' && (
+            <>
+              <div className="muted">{info.categoryId === 5 ? t('รีโมตแอร์ผ่าน IR Hub — ระบบเปิด/ปิด จะส่งคำสั่ง power ให้อัตโนมัติ') : t('รีโมต IR ผ่าน IR Hub — เปิด/ปิด จะกดปุ่ม PowerOn / PowerOff (ถ้าไม่มีจะกด Power ซึ่งเป็นการสลับเปิด/ปิด)')}</div>
+              <div>{t('ปุ่มของรีโมต')}: {info.keys.map((k) => <code key={k} style={{ marginRight: 6 }}>{k}</code>)}</div>
+              <div className="xs muted">{t('ต้องการกดปุ่มอื่น: ตั้ง "ค่าที่ส่ง" เป็น "ค่าอื่น" แล้วใส่ชื่อปุ่ม เช่น Speed')}</div>
+            </>
+          )}
+          {info.kind === 'unknown' && <div style={{ color: 'var(--danger)' }}>{t('อ่านข้อมูลอุปกรณ์ไม่ได้')} {info.error || ''}</div>}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 /** Device of every room for every system. */
 function Bindings({ data, rooms, devices, reload }) {
   const { t } = useT();
   const toast = useToast();
   const byKey = useMemo(() => Object.fromEntries((data.bindings || []).map((b) => [`${b.system_id}:${b.room_id}`, b])), [data.bindings]);
   const [draft, setDraft] = useState({});
+  const [infoFor, setInfoFor] = useState(null);
   const val = (sys, room) => draft[`${sys}:${room}`] ?? byKey[`${sys}:${room}`]?.device_id ?? '';
   const save = async (sysId, roomId, deviceId) => {
     try {
@@ -182,6 +218,7 @@ function Bindings({ data, rooms, devices, reload }) {
                     <div className="row nowrap">
                       <Input list={list} value={v} placeholder="Device ID" onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))} onBlur={() => v !== (saved?.device_id || '') && save(s.id, r.id, v.trim())} style={{ minWidth: 120 }} />
                       {v && <Button size="sm" variant="ghost" icon={Zap} title={t('ทดสอบสั่งงาน')} onClick={() => test(s, v)} />}
+                      {v && <Button size="sm" variant="ghost" icon={ListTree} title={t('คำสั่งที่อุปกรณ์รองรับ')} onClick={() => setInfoFor(v)} />}
                     </div>
                     {name && <div className="xs muted">{name}</div>}
                   </td>
@@ -191,6 +228,7 @@ function Bindings({ data, rooms, devices, reload }) {
           ))}
         </tbody>
       </table>
+      {infoFor && <DeviceInfo deviceId={infoFor} onClose={() => setInfoFor(null)} />}
     </div>
   );
 }

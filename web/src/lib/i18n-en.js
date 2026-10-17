@@ -2522,4 +2522,13 @@ export const EN = {
   "กรุณากรอก Access ID / Access Secret แล้วกดบันทึกก่อน": "Enter the Access ID / Access Secret and save first",
   "เปิดใช้งานแล้ว": "Enabled",
   "ปิดแล้ว": "Switched off",
+  "คำสั่งที่อุปกรณ์รองรับ": "Commands the device supports",
+  "อุปกรณ์ Wi-Fi ทั่วไป — ใช้ \"คำสั่ง (data point code)\" ตามรายการนี้ · ระบบเปิด/ปิดจะใช้สวิตช์ของอุปกรณ์ให้อัตโนมัติ": "Wi-Fi device — use a \"command (data point code)\" from this list · on/off systems use the device's own switch automatically",
+  "ชนิด": "Type",
+  "ชื่อ": "Name",
+  "รีโมตแอร์ผ่าน IR Hub — ระบบเปิด/ปิด จะส่งคำสั่ง power ให้อัตโนมัติ": "Air-conditioner remote via an IR hub — on/off systems send the power command automatically",
+  "รีโมต IR ผ่าน IR Hub — เปิด/ปิด จะกดปุ่ม PowerOn / PowerOff (ถ้าไม่มีจะกด Power ซึ่งเป็นการสลับเปิด/ปิด)": "IR remote via an IR hub — on/off press PowerOn / PowerOff (or Power, which toggles, when those keys don't exist)",
+  "ปุ่มของรีโมต": "Remote keys",
+  "ต้องการกดปุ่มอื่น: ตั้ง \"ค่าที่ส่ง\" เป็น \"ค่าอื่น\" แล้วใส่ชื่อปุ่ม เช่น Speed": "For another key: set \"Value\" to \"Other value\" and enter the key name, e.g. Speed",
+  "อ่านข้อมูลอุปกรณ์ไม่ได้": "Could not read the device",
 };
