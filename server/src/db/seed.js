@@ -9,11 +9,11 @@ import { halfHourPrice } from '@beatbox/shared/roomPricing.js';
 const img = (id) => `https://images.unsplash.com/${id}?auto=format&fit=crop&w=800&q=70`;
 
 /** Insert a store row (platform context) and its subscription. Returns the store id. */
-export async function insertStore(c, { name, slug, address = null, phone = null, taxId = null, slogan = null, ownerName = null, ownerEmail = null }) {
+export async function insertStore(c, { name, slug, address = null, phone = null, taxId = null, slogan = null, ownerName = null, ownerEmail = null, storeCode = null }) {
   const store = (
     await c.query(
-      `INSERT INTO stores(name, slug, address, phone, tax_id, slogan, owner_name, owner_email) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-      [name, slug, address, phone, taxId, slogan, ownerName, ownerEmail],
+      `INSERT INTO stores(name, slug, address, phone, tax_id, slogan, owner_name, owner_email, store_code) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9, bb_random_store_code())) RETURNING id`,
+      [name, slug, address, phone, taxId, slogan, ownerName, ownerEmail, storeCode],
     )
   ).rows[0];
   return store.id;
@@ -33,14 +33,14 @@ export async function seedStoreData(c, { storeId, branchName = 'สาขาห�
     for (const p of DEFAULT_ROLE_PERMISSIONS[code]) await c.query('INSERT INTO role_permissions(role_id, permission_code) VALUES ($1,$2)', [r.id, p]);
   }
   const emps = [];
-  if (employee) emps.push([employee.name, employee.pin || null, 'ADMIN', employee.position || 'เจ้าของร้าน', 100, employee.email || null, employee.passwordHash || null, !!employee.isOwner]);
+  if (employee) emps.push([employee.name, employee.pin || null, 'ADMIN', employee.position || 'เจ้าของร้าน', 100, employee.email || null, employee.passwordHash || null, !!employee.isOwner, employee.username || null]);
   if (demo && demoStaff) emps.push(['สมชาย ผู้จัดการ', '2222', 'MANAGER', 'ผู้จัดการร้าน', 50], ['มานี แคชเชียร์', '3333', 'CASHIER', 'แคชเชียร์', 10], ['ปิติ พนักงาน', '4444', 'STAFF', 'พนักงานบริการ', 0]);
   let ownerId = null;
-  for (const [name, pin, role, position, limit, email = null, passwordHash = null, isOwner = false] of emps) {
+  for (const [name, pin, role, position, limit, email = null, passwordHash = null, isOwner = false, username = null] of emps) {
     const row = (
       await c.query(
-        `INSERT INTO employees(name, pin_hash, pin_lookup, role_id, position, discount_limit_percent, email, password_hash, is_owner) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-        [name, pin ? await hashPin(pin) : null, pin ? pinLookup(pin) : null, roleIds[role], position, limit, email, passwordHash, isOwner],
+        `INSERT INTO employees(name, pin_hash, pin_lookup, role_id, position, discount_limit_percent, email, password_hash, is_owner, username) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+        [name, pin ? await hashPin(pin) : null, pin ? pinLookup(pin) : null, roleIds[role], position, limit, email, passwordHash, isOwner, username],
       )
     ).rows[0];
     if (!ownerId) ownerId = row.id;
@@ -97,7 +97,7 @@ export async function seedIfEmpty({ demo = process.env.SEED_DEMO !== 'false' } =
     }
     const has = await pool.query('SELECT 1 FROM stores LIMIT 1');
     if (has.rows[0]) return false;
-    const storeId = await tx((c) => insertStore(c, { name: 'BEATBOX Karaoke', slug: 'beatbox', address: '99/9 ถนนสุขุมวิท แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110', phone: '02-123-4567', taxId: '0105566012345', slogan: 'ร้องให้สุด หยุดที่ BEATBOX' }));
+    const storeId = await tx((c) => insertStore(c, { name: 'BEATBOX Karaoke', slug: 'beatbox', storeCode: process.env.SEED_STORE_CODE || null, address: '99/9 ถนนสุขุมวิท แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110', phone: '02-123-4567', taxId: '0105566012345', slogan: 'ร้องให้สุด หยุดที่ BEATBOX' }));
     await pool.query(
       `INSERT INTO store_subscriptions(store_id, plan_id, status, expires_at) VALUES ($1, (SELECT id FROM plans ORDER BY sort_order DESC, id DESC LIMIT 1), 'ACTIVE', NULL) ON CONFLICT (store_id) DO NOTHING`,
       [storeId],
@@ -111,7 +111,8 @@ export async function seedIfEmpty({ demo = process.env.SEED_DEMO !== 'false' } =
           phone: '02-123-4567',
           demo,
           demoStaff: process.env.SEED_DEMO_STAFF !== 'false',
-          employee: { name: 'ผู้ดูแลระบบ', pin: process.env.ADMIN_PIN || '1234' },
+          // the store owner: PIN 1234; username "admin" + starting password are added by ensureStoreAccounts
+          employee: { name: 'ผู้ดูแลระบบ', pin: process.env.ADMIN_PIN || '1234', isOwner: true, username: 'admin', position: 'เจ้าของร้าน' },
         }),
       ),
     );

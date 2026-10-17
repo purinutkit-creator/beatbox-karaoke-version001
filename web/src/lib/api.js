@@ -66,6 +66,24 @@ export function setDeviceStore(store) {
   }
 }
 
+/**
+ * Store sign-in of this device (store code + store account). Staff PIN logins only work with it.
+ * bb_store_session = signed token, bb_store_login = { id, code, slug, name, logoUrl } for the PIN screen.
+ */
+export const storeSession = {
+  get: () => LS.get('bb_store_session'),
+  info: () => LS.get('bb_store_login'),
+  set(token, store) {
+    LS.set('bb_store_session', token);
+    LS.set('bb_store_login', store);
+    setDeviceStore(store);
+  },
+  clear() {
+    LS.set('bb_store_session', null);
+    LS.set('bb_store_login', null);
+  },
+};
+
 export class ApiError extends Error {
   constructor(message, status, data) {
     super(message);
@@ -129,6 +147,7 @@ export async function request(method, url, body, opts = {}) {
   const deviceId = LS.get('bb_device_id');
   if (deviceId && !opts.platform) headers['X-Device-Id'] = String(deviceId);
   if (opts.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
+  if (opts.storeSession && storeSession.get()) headers['X-Store-Session'] = storeSession.get();
   if (opts.passive) headers['X-Passive'] = '1';
   let payload;
   if (body instanceof FormData) payload = body;

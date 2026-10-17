@@ -2,7 +2,7 @@
 // "เข้าจัดการร้าน" and the Super Owner's own password. The rights belong to the account (username + password), not a device.
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Package, LogOut, Plus, Pencil, History, LogIn, KeyRound, RefreshCw, Globe, Search } from 'lucide-react';
+import { Shield, Package, LogOut, Plus, Pencil, History, LogIn, KeyRound, RefreshCw, Globe, Search, Hash, Save } from 'lucide-react';
 import { api, LS } from '../lib/api.js';
 import { useAuth } from '../lib/store.jsx';
 import { useT } from '../lib/i18n.jsx';
@@ -11,6 +11,7 @@ import { remainingParts, formatRemaining } from '@beatbox/shared/time.js';
 import { BILLING_CYCLES } from '@beatbox/shared/plans.js';
 import { Button, Modal, Field, Input, Textarea, Select, Switch, Tabs, Loading, Badge, useToast, useDialog, baht } from '../components/ui.jsx';
 import { StatusBadge, fmtStoreDateTime, EVENT_LABEL, licenseLevel } from '../components/License.jsx';
+import { CopyValue } from '../admin/pages/StoreAccount.jsx';
 
 const papi = {
   get: (u) => api.get(`/platform${u}`, { platform: true }),
@@ -78,10 +79,10 @@ function StoreForm({ plans, onClose, onSaved }) {
     e.preventDefault();
     setBusy(true);
     try {
-      await papi.post('/stores', { ...f, planId: Number(f.planId), trialDays: Number(f.trialDays), expiresAt: f.expiresAt ? new Date(f.expiresAt).toISOString() : null });
+      const r = await papi.post('/stores', { ...f, planId: Number(f.planId), trialDays: Number(f.trialDays), expiresAt: f.expiresAt ? new Date(f.expiresAt).toISOString() : null });
       toast.success(t('เพิ่มร้านแล้ว'));
       onSaved();
-      onClose();
+      onClose({ kind: 'account', store: { id: r.storeId, name: f.storeName }, created: true });
     } catch (er) {
       toast.error(er);
     } finally {
@@ -97,7 +98,7 @@ function StoreForm({ plans, onClose, onSaved }) {
           <Field label="ชื่อเจ้าของ *"><Input value={f.ownerFirstName} onChange={set('ownerFirstName')} required /></Field>
           <Field label="นามสกุลเจ้าของ *"><Input value={f.ownerLastName} onChange={set('ownerLastName')} required /></Field>
           <Field label="อีเมลเจ้าของ (ใช้เข้าสู่ระบบ) *"><Input type="email" value={f.email} onChange={set('email')} required /></Field>
-          <Field label="รหัสผ่านเริ่มต้นของเจ้าของ *" hint="อย่างน้อย 8 ตัวอักษร เจ้าของร้านเปลี่ยนเองได้ภายหลัง"><Input type="password" autoComplete="new-password" minLength={8} value={f.password} onChange={set('password')} required /></Field>
+          <Field label="รหัสผ่านเริ่มต้นของร้าน" hint="เว้นว่าง = ระบบสุ่มให้ · ดูได้ภายหลังที่ปุ่ม 'บัญชีร้าน' จนกว่าเจ้าของร้านจะเปลี่ยน"><Input autoComplete="new-password" minLength={8} value={f.password} onChange={set('password')} /></Field>
           <Field label="แพ็กเกจ"><Select value={f.planId} onChange={set('planId')} options={plans.map((p) => ({ value: p.id, label: p.name }))} /></Field>
           <Field label="สถานะเริ่มต้น"><Select value={f.status} onChange={set('status')} options={[{ value: 'TRIAL', label: 'ทดลองใช้' }, { value: 'ACTIVE', label: 'ใช้งานปกติ (1 รอบบิล)' }]} /></Field>
           {f.status === 'TRIAL' && <Field label="จำนวนวันทดลองใช้"><Input type="number" min={0} value={f.trialDays} onChange={set('trialDays')} /></Field>}
@@ -106,6 +107,80 @@ function StoreForm({ plans, onClose, onSaved }) {
         </div>
         <Button type="submit" variant="primary" loading={busy} icon={Plus}>{t('เพิ่มร้าน')}</Button>
       </form>
+    </Modal>
+  );
+}
+
+/** Store sign-in: store code, username / e-mail, starting password, owner PIN — view, reset and edit. */
+function StoreAccount({ store, created, onClose, onSaved }) {
+  const { t } = useT();
+  const toast = useToast();
+  const { confirm } = useDialog();
+  const [acc, setAcc] = useState(null);
+  const [f, setF] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const apply = (a) => {
+    setAcc(a);
+    setF({ storeCode: a.storeCode || '', username: a.owner?.username || '', email: a.owner?.email || '' });
+  };
+  useEffect(() => {
+    papi.get(`/stores/${store.id}/account`).then(apply).catch((e) => toast.error(e));
+  }, [store.id]);
+  const act = async (key, fn, msg) => {
+    setBusy(key);
+    try {
+      const r = await fn();
+      if (r?.storeCode) apply(r);
+      toast.success(msg);
+      onSaved?.();
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const resetPassword = async () => {
+    if (!(await confirm({ title: 'รีเซ็ตรหัสผ่านของร้าน', message: 'ระบบจะสร้างรหัสผ่านเริ่มต้นใหม่ รหัสผ่านเดิมจะใช้ไม่ได้ (เครื่องที่เข้าร้านไว้แล้วยังใช้ PIN ได้ตามปกติ)', okText: 'รีเซ็ต' }))) return;
+    act('pw', () => papi.post(`/stores/${store.id}/reset-password`, {}), 'สร้างรหัสผ่านเริ่มต้นใหม่แล้ว');
+  };
+  const resetPin = async () => {
+    if (!(await confirm({ title: 'รีเซ็ต PIN เจ้าของร้าน', message: 'PIN เจ้าของร้านจะกลับเป็น 1234', okText: 'รีเซ็ต' }))) return;
+    act('pin', () => papi.post(`/stores/${store.id}/reset-owner-pin`, {}), 'รีเซ็ต PIN แล้ว');
+  };
+  const signOut = async () => {
+    if (!(await confirm({ title: 'ออกจากระบบทุกเครื่อง', message: 'ทุกเครื่องของร้านนี้ต้องกรอกรหัสร้านค้าและบัญชีร้านใหม่', danger: true, okText: 'ออกจากระบบทุกเครื่อง' }))) return;
+    act('out', () => papi.post(`/stores/${store.id}/sign-out-devices`, {}), 'ออกจากระบบทุกเครื่องแล้ว');
+  };
+  const o = acc?.owner || {};
+  return (
+    <Modal onClose={onClose} title={`${t('บัญชีร้าน')} · ${store.name}`} size="wide">
+      {!acc || !f ? <Loading /> : (
+        <div className="col">
+          {created && <div className="card flat small" style={{ borderColor: 'var(--ok)' }}>{t('สร้างร้านแล้ว — ส่งข้อมูลด้านล่างให้เจ้าของร้านเพื่อเข้าใช้งาน')}</div>}
+          <div className="small muted">{t('ขั้นตอนเข้าใช้งาน: รหัสร้านค้า → ชื่อผู้ใช้ / อีเมล + รหัสผ่าน → PIN พนักงาน (เจ้าของร้านเริ่มต้น 1234)')}</div>
+          <div className="grid grid-2">
+            <Field label="รหัสร้านค้า"><CopyValue value={acc.storeCode} /></Field>
+            <Field label="ชื่อผู้ใช้"><CopyValue value={o.username || '-'} /></Field>
+            <Field label="อีเมล"><CopyValue value={o.email || '-'} mono={false} /></Field>
+            <Field label="รหัสผ่านเริ่มต้น">
+              {o.startingPassword ? <CopyValue value={o.startingPassword} /> : <div className="small muted">{t('เจ้าของร้านตั้งรหัสผ่านเองแล้ว (ไม่แสดง) — กดรีเซ็ตเพื่อสร้างรหัสเริ่มต้นใหม่')}</div>}
+            </Field>
+            <Field label="PIN เจ้าของร้าน">{o.pin ? <CopyValue value={o.pin} /> : <div className="small muted">{t('เจ้าของร้านตั้ง PIN เองแล้ว (ไม่แสดง)')}</div>}</Field>
+          </div>
+          <div className="row">
+            <Button icon={KeyRound} loading={busy === 'pw'} onClick={resetPassword}>{t('รีเซ็ตรหัสผ่าน')}</Button>
+            <Button icon={Hash} loading={busy === 'pin'} onClick={resetPin}>{t('รีเซ็ต PIN เจ้าของเป็น 1234')}</Button>
+            <Button variant="danger" icon={LogOut} loading={busy === 'out'} onClick={signOut}>{t('ออกจากระบบทุกเครื่อง')}</Button>
+          </div>
+          <h4>{t('แก้ไข')}</h4>
+          <div className="grid grid-3">
+            <Field label="รหัสร้านค้า (a-z 0-9 รวม 8 ตัว)"><Input value={f.storeCode} onChange={(e) => setF({ ...f, storeCode: e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) })} style={{ fontFamily: 'ui-monospace, monospace', letterSpacing: 2 }} /></Field>
+            <Field label="ชื่อผู้ใช้"><Input value={f.username} autoCapitalize="off" onChange={(e) => setF({ ...f, username: e.target.value })} /></Field>
+            <Field label="อีเมล"><Input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
+          </div>
+          <div className="row end"><Button variant="primary" icon={Save} loading={busy === 'save'} onClick={() => act('save', () => papi.put(`/stores/${store.id}/account`, f), 'บันทึกเรียบร้อย')}>{t('บันทึก')}</Button></div>
+        </div>
+      )}
     </Modal>
   );
 }
@@ -279,7 +354,7 @@ function StoresTab({ plans }) {
     }
   };
   if (!rows) return <Loading />;
-  const list = rows.filter((s) => !q || `${s.name} ${s.slug} ${s.owner_email || ''} ${s.owner_name || ''} ${s.phone || ''}`.toLowerCase().includes(q.toLowerCase()));
+  const list = rows.filter((s) => !q || `${s.name} ${s.slug} ${s.store_code} ${s.owner_email || ''} ${s.owner_name || ''} ${s.phone || ''}`.toLowerCase().includes(q.toLowerCase()));
   return (
     <div className="col">
       <div className="row">
@@ -295,7 +370,7 @@ function StoresTab({ plans }) {
           <tbody>
             {list.map((s) => (
               <tr key={s.id}>
-                <td><b>{s.name}</b><div className="xs muted">#{s.id} · {s.slug}</div></td>
+                <td><b>{s.name}</b><div className="xs muted">#{s.id} · {t('รหัสร้าน')} <code>{s.store_code}</code></div></td>
                 <td className="small">{s.owner_name || '-'}<div className="xs muted">{s.owner_email || ''} {s.phone || ''}</div></td>
                 <td>{s.plan_name || '-'}</td>
                 <td><StatusBadge status={s.subscription?.status} />{Number(s.open_requests) > 0 && <div><Badge color="#f59e0b">{t('ขอต่ออายุ')}</Badge></div>}</td>
@@ -305,6 +380,7 @@ function StoresTab({ plans }) {
                 <td>
                   <div className="row nowrap">
                     <Button size="sm" variant="primary" icon={LogIn} onClick={() => enter(s)}>{t('เข้าจัดการร้าน')}</Button>
+                    <Button size="sm" icon={KeyRound} onClick={() => setModal({ kind: 'account', store: s })}>{t('บัญชีร้าน')}</Button>
                     <Button size="sm" icon={Package} onClick={() => setModal({ kind: 'sub', store: s })}>{t('แพ็กเกจ')}</Button>
                     <Button size="sm" variant="ghost icon" icon={Pencil} title={t('แก้ไข')} onClick={() => setModal({ kind: 'edit', store: s })} />
                     <Button size="sm" variant="ghost icon" icon={History} title={t('ประวัติ')} onClick={() => setModal({ kind: 'events', store: s })} />
@@ -315,7 +391,8 @@ function StoresTab({ plans }) {
           </tbody>
         </table>
       </div>
-      {modal?.kind === 'create' && <StoreForm plans={plans} onClose={() => setModal(null)} onSaved={load} />}
+      {modal?.kind === 'create' && <StoreForm plans={plans} onClose={(next) => setModal(next || null)} onSaved={load} />}
+      {modal?.kind === 'account' && <StoreAccount store={modal.store} created={modal.created} onClose={() => setModal(null)} onSaved={load} />}
       {modal?.kind === 'edit' && <StoreEdit store={modal.store} onClose={() => setModal(null)} onSaved={load} />}
       {modal?.kind === 'sub' && <SubscriptionAction store={modal.store} plans={plans} onClose={() => setModal(null)} onSaved={load} />}
       {modal?.kind === 'events' && <StoreEvents store={modal.store} onClose={() => setModal(null)} />}

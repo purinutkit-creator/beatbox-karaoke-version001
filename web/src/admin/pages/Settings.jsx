@@ -14,6 +14,7 @@ import { PARTIAL_RULES } from '@beatbox/shared/roomPricing.js';
 import { ROUNDING_MODES } from '@beatbox/shared/money.js';
 import { fmtDateTime } from '@beatbox/shared/format.js';
 import { IntegrationsTab, RoomServiceTab } from './Integrations.jsx';
+import StoreAccountTab from './StoreAccount.jsx';
 
 function useSection(key) {
   const { settings, setSettings } = useAuth();
@@ -585,13 +586,14 @@ function BackupTab() {
 export default function Settings() {
   const { t } = useT();
   const { settings } = useAuth();
-  const [tab, setTab] = useState('store');
+  const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'store');
   if (!settings) return <Loading />;
   return (
     <div>
       <PageHead icon={Cog} title="ตั้งค่าร้าน" />
       <Tabs value={tab} onChange={setTab} tabs={[
         { value: 'store', label: 'ข้อมูลร้าน' },
+        { value: 'account', label: 'บัญชีร้าน & PIN' },
         { value: 'appearance', label: 'ภาษา ฟอนต์ และธีม' },
         { value: 'tax', label: 'VAT & Service Charge' },
         { value: 'receipt', label: 'ใบเสร็จ & เลขคิว' },
@@ -607,6 +609,7 @@ export default function Settings() {
         { value: 'backup', label: 'สำรองข้อมูล' },
       ]} />
       {tab === 'store' && <StoreTab />}
+      {tab === 'account' && <StoreAccountTab />}
       {tab === 'appearance' && <AppearanceTab />}
       {tab === 'tax' && <TaxTab />}
       {tab === 'receipt' && <ReceiptQueueTab />}

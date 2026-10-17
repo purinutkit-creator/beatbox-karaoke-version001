@@ -162,6 +162,7 @@ Nothing to run by hand: on start the server applies the new migrations in order,
 | `008_usb_printing.sql` | Direct-cable printing in the store font (`RASTER` mode; USB/Serial/Bluetooth/Network printers are switched to it), the USB printer's vendor/product/serial, and real printer delete (`deleted_at`; past print jobs keep their history) |
 | `009_bonus_time_kitchen_beep.sql` | Free extra minutes (`bonus_minutes`, never charged), printer beep on kitchen tickets |
 | `010_smart_devices.sql` | Smart devices (Tuya): named systems, the device of each room, run log, automations already run per session |
+| `011_store_login.sql` | Store sign-in: random 8-character store code per store, store account username, starting password kept encrypted only until the owner changes it, `login_version` to sign every device out |
 
 Back up first (Render: Database → Backups, or `pg_dump`). The server connects with a non-superuser role so RLS always applies
 (locally it switches to the restricted role `beatbox_app` automatically).
@@ -202,6 +203,23 @@ permission**, enforced by the API (403 `FEATURE_NOT_IN_PLAN` / `PLAN_LIMIT`), no
 ### Store owners
 `/register`: store name, owner first/last name, e-mail, phone, password + confirm, plan → creates the owner account and the store's own
 data space and logs in (trial of the chosen plan). Owners log in at `/login` → เจ้าของร้าน (อีเมล); 5 wrong passwords → 15 minutes lock.
+
+## Signing in (store code → store account → PIN)
+1. **Store code** — every store has a random 8-character code (e.g. `58bksn3j`) that finds the store.
+2. **Store account** — username (default `admin`) or e-mail + password. Done once per device; the device stays signed in to
+   that store (a signed store session; "ออกจากระบบทุกเครื่อง" signs every device out).
+3. **Staff PIN** — 4 digits on the store's own PIN pad. The owner's default PIN is **1234**. A PIN only works on a device
+   that is signed in to that store.
+* The **owner** always has every permission; other staff cannot delete, switch off or re-permission the owner.
+* Starting credentials: stores created by the Super Owner (or existing stores without a password) get a random starting
+  password. It is stored as a bcrypt hash for sign-in plus an encrypted copy that the Super Owner (Super Owner → ร้านค้า →
+  **บัญชีร้าน**) and the owner (ตั้งค่าร้าน → **บัญชีร้าน & PIN**) can see **until the owner changes it** — after that only the
+  hash exists. Self-registered stores use the password the owner typed (never shown). Set `ADMIN_PASSWORD` / `SEED_STORE_CODE`
+  only for a fresh database or tests.
+* Super Owner: reset the store password (new starting password), reset the owner PIN to 1234, change code / username / e-mail,
+  sign every device out. The owner can change the same things plus their password and PIN.
+* Public pages keep working with `?store=<slug or code>` (booking site, member signup QR); the customer display and room QR
+  pages find their store from their own codes.
 
 ## Rooms: pay before entering (default) or pay when closing
 Admin → ตั้งค่าร้าน → ห้อง เวลา & แจ้งเตือน → รูปแบบการชำระค่าห้อง.

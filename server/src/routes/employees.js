@@ -5,7 +5,7 @@ import { requireAuth, can, hashPin, pinLookup, clearPermCache, loadPermissions }
 import { logActivity } from '../lib/activity.js';
 import { z, parse, zUrl } from '../lib/validate.js';
 import { PERMISSIONS } from '@beatbox/shared/constants.js';
-import { notFound, badRequest } from '../lib/errors.js';
+import { notFound, badRequest, forbidden } from '../lib/errors.js';
 
 const r = Router();
 r.use(requireAuth);
@@ -29,7 +29,7 @@ r.put('/roles/:id/permissions', can('employee.manage'), async (req, res) => {
 
 r.get('/employees', can('employee.manage'), async (_req, res) => {
   const rows = await many(
-    `SELECT e.id, e.name, e.photo_url, e.position, e.phone, e.role_id, r.code AS role, r.name AS role_name, e.is_active, e.created_at, e.last_login_at, e.discount_limit_percent
+    `SELECT e.id, e.name, e.photo_url, e.position, e.phone, e.role_id, r.code AS role, r.name AS role_name, e.is_active, e.created_at, e.last_login_at, e.discount_limit_percent, e.is_owner, e.username
      FROM employees e JOIN roles r ON r.id = e.role_id WHERE e.deleted_at IS NULL AND NOT e.is_hidden ORDER BY e.id`,
   );
   const overrides = await many('SELECT * FROM employee_permissions');
@@ -68,11 +68,19 @@ r.post('/employees', can('employee.manage'), async (req, res) => {
   res.json(row);
 });
 
+/** The store owner's account can only be changed by the owner (or the Super Owner) and is never switched off. */
+function guardOwner(req, ex) {
+  if (!ex?.is_owner) return;
+  if (!req.employee.isOwner && !req.employee.platformUserId) throw forbidden('บัญชีเจ้าของร้านแก้ไขได้โดยเจ้าของร้านเท่านั้น');
+}
+
 r.put('/employees/:id', can('employee.manage'), async (req, res) => {
   const b = parse(empSchema, req.body);
   await tx(async (c) => {
     const ex = (await c.query('SELECT * FROM employees WHERE id = $1 AND deleted_at IS NULL', [req.params.id])).rows[0];
     if (!ex) throw notFound();
+    guardOwner(req, ex);
+    if (ex.is_owner) b.isActive = true; // the owner can always sign in
     await c.query(`UPDATE employees SET name=$2, photo_url=$3, position=$4, phone=$5, role_id=$6, is_active=$7, discount_limit_percent=$8, updated_at=now() WHERE id=$1`, [req.params.id, b.name, b.photoUrl, b.position, b.phone, b.roleId, b.isActive, b.discountLimitPercent]);
     if (b.pin) await c.query('UPDATE employees SET pin_hash=$2, pin_lookup=$3 WHERE id=$1', [req.params.id, await hashPin(b.pin), pinLookup(b.pin)]);
     if (!b.isActive) await c.query('UPDATE auth_sessions SET revoked_at = now() WHERE employee_id = $1 AND revoked_at IS NULL', [req.params.id]);
@@ -84,6 +92,7 @@ r.put('/employees/:id', can('employee.manage'), async (req, res) => {
 
 r.delete('/employees/:id', can('employee.manage'), async (req, res) => {
   if (Number(req.params.id) === req.employee.id) throw badRequest('ไม่สามารถลบบัญชีของตนเองได้');
+  if ((await pool.query('SELECT is_owner FROM employees WHERE id = $1', [req.params.id])).rows[0]?.is_owner) throw forbidden('ไม่สามารถลบบัญชีเจ้าของร้านได้');
   await pool.query('UPDATE employees SET deleted_at = now(), is_active = false WHERE id = $1', [req.params.id]);
   await pool.query('UPDATE auth_sessions SET revoked_at = now() WHERE employee_id = $1 AND revoked_at IS NULL', [req.params.id]);
   await logActivity(null, req, 'EMPLOYEE_DELETE', 'employee', req.params.id);
@@ -91,6 +100,7 @@ r.delete('/employees/:id', can('employee.manage'), async (req, res) => {
 });
 
 r.put('/employees/:id/permissions', can('employee.manage'), async (req, res) => {
+  if ((await pool.query('SELECT is_owner FROM employees WHERE id = $1', [req.params.id])).rows[0]?.is_owner) throw badRequest('เจ้าของร้านใช้งานได้ทุกระบบเสมอ ไม่ต้องตั้งสิทธิ์');
   const { overrides } = parse(z.object({ overrides: z.array(z.object({ code: z.string(), granted: z.boolean() })) }), req.body);
   await tx(async (c) => {
     await c.query('DELETE FROM employee_permissions WHERE employee_id = $1', [req.params.id]);

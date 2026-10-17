@@ -1,10 +1,12 @@
 // Resolves which store (tenant) a request belongs to and runs the rest of the request inside that store's context.
 //  1. staff / member tokens carry their store (signed claim `st`) — a token can never be used against another store
-//  2. public pages pass the store slug or id (X-Store header or ?store=)
-//  3. otherwise the original (first) store, so existing links keep working
+//  2. a device signed in to a store (store code + store account) sends its store session (X-Store-Session)
+//  3. public pages pass the store code, slug or id (X-Store header or ?store=)
+//  4. otherwise the original (first) store, so existing links keep working
 import { pool, runWithStore, runAsPlatform, setContextStore } from '../db/index.js';
 import { verifyToken } from './auth.js';
 import { notFound } from './errors.js';
+import { readStoreSession } from '../services/storeAccount.js';
 
 let defaultStore = { id: null, at: 0 };
 const refCache = new Map(); // ref -> { id, at }
@@ -22,7 +24,7 @@ export async function resolveStoreRef(ref) {
   if (!key) return null;
   const hit = refCache.get(key);
   if (hit && Date.now() - hit.at < 60000) return hit.id;
-  const r = await runAsPlatform(() => pool.query(`SELECT id FROM stores WHERE lower(slug) = $1 OR id::text = $1 LIMIT 1`, [key]));
+  const r = await runAsPlatform(() => pool.query(`SELECT id FROM stores WHERE lower(slug) = $1 OR lower(store_code) = $1 OR id::text = $1 LIMIT 1`, [key]));
   const id = r.rows[0]?.id || null;
   refCache.set(key, { id, at: Date.now() });
   return id;
@@ -42,6 +44,14 @@ export async function storeForRequest(req) {
   const token = bearer(req);
   const p = token ? verifyToken(token) : null;
   if (p && (p.typ === 'employee' || p.typ === 'member')) return Number(p.st) || defaultStoreId();
+  const session = req.headers['x-store-session'];
+  if (session) {
+    const sid = await readStoreSession(session);
+    if (sid) {
+      req.storeSession = sid;
+      return sid;
+    }
+  }
   const ref = req.headers['x-store'] || req.query?.store;
   if (ref) {
     const id = await resolveStoreRef(ref);

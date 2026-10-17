@@ -11,6 +11,8 @@ process.env.DATABASE_URL = DB;
 process.env.DISABLE_SCHEDULER = 'true';
 process.env.PAYMENT_MODE = 'DEMO';
 process.env.PORT = '4994';
+process.env.SEED_STORE_CODE = 'beatbox1';
+process.env.ADMIN_PASSWORD = 'Admin12345';
 
 const ID = 'testaccessid123';
 const SECRET = 'testaccesssecret456';
@@ -59,6 +61,13 @@ async function api(method, url, body, { headers = {} } = {}) {
   const res = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(deviceId ? { 'X-Device-Id': String(deviceId) } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
+
+// a device signs in to the store first (store code + store account), then staff use their PIN
+let storeSession;
+async function pinLogin(pin) {
+  storeSession ||= (await api('POST', '/auth/store-login', { storeCode: 'beatbox1', login: 'admin', password: 'Admin12345' })).body.storeSession;
+  return api('POST', '/auth/login', { pin }, { headers: { 'X-Store-Session': storeSession } });
+}
 let tick;
 let runWithStore;
 
@@ -75,7 +84,7 @@ before(async () => {
   const { smartTick } = await import('../src/services/smart.js');
   tick = () => runWithStore(1, smartTick);
   base = 'http://localhost:4994/api';
-  token = (await api('POST', '/auth/login', { pin: '1234' })).body.token;
+  token = (await pinLogin('1234')).body.token;
   deviceId = (await api('POST', '/devices/register', { name: 'POS-SMART', deviceKey: 'test-device-key-smart' })).body.id;
   await api('POST', '/shifts/open', { deviceId, openingCash: 1000 });
 });

@@ -2,11 +2,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Store, Check, X, Globe, Mic2 } from 'lucide-react';
-import { api } from '../lib/api.js';
+import { api, storeSession } from '../lib/api.js';
 import { useAuth } from '../lib/store.jsx';
 import { useT } from '../lib/i18n.jsx';
 import { BILLING_CYCLES } from '@beatbox/shared/plans.js';
-import { Button, Field, Input, Loading, baht } from '../components/ui.jsx';
+import { Button, Field, Input, Loading, Modal, baht } from '../components/ui.jsx';
+import { CopyValue } from '../admin/pages/StoreAccount.jsx';
 
 const EMPTY = { storeName: '', ownerFirstName: '', ownerLastName: '', email: '', phone: '', password: '', confirmPassword: '', planId: null };
 
@@ -25,13 +26,14 @@ export function validateRegister(f, t) {
 
 export default function RegisterStore() {
   const { t, lang, setLang } = useT();
-  const { applyLogin } = useAuth();
+  const { applyLogin, setStoreLogin } = useAuth();
   const nav = useNavigate();
   const [info, setInfo] = useState(null);
   const [f, setF] = useState(EMPTY);
   const [errors, setErrors] = useState({});
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);
   useEffect(() => {
     api
       .get('/platform/public', { auth: false })
@@ -52,8 +54,11 @@ export default function RegisterStore() {
     setErr('');
     try {
       const r = await api.post('/platform/register', { ...f, phone: f.phone.replace(/\D/g, '') }, { auth: false });
+      // this device is signed in to the new store; staff (and the owner, PIN 1234) use the PIN pad from now on
+      storeSession.set(r.storeSession, { ...r.store, code: r.storeCode });
+      setStoreLogin({ ...r.store, code: r.storeCode });
       await applyLogin(r);
-      nav('/admin/rooms', { replace: true });
+      setDone(r);
     } catch (er) {
       setErr(er.message);
       if (er.code === 'EMAIL_TAKEN') setErrors({ email: er.message });
@@ -61,6 +66,21 @@ export default function RegisterStore() {
       setBusy(false);
     }
   };
+  if (done) {
+    return (
+      <div className="login-wrap">
+        <Modal title={t('สมัครใช้งานเรียบร้อย')} onClose={() => nav('/admin/rooms', { replace: true })} footer={<Button variant="primary" onClick={() => nav('/admin/rooms', { replace: true })}>{t('เข้าใช้งานร้าน')}</Button>}>
+          <div className="col">
+            <div className="small">{t('เก็บข้อมูลนี้ไว้ ใช้เข้าใช้งานร้านจากเครื่องอื่น: กรอกรหัสร้านค้า → ชื่อผู้ใช้หรืออีเมล + รหัสผ่านที่ตั้งไว้ → PIN')}</div>
+            <Field label="รหัสร้านค้า"><CopyValue value={done.storeCode} /></Field>
+            <Field label="ชื่อผู้ใช้"><CopyValue value={done.login.username} /></Field>
+            <Field label="อีเมล"><CopyValue value={done.login.email} mono={false} /></Field>
+            <Field label="PIN เจ้าของร้าน (เปลี่ยนได้ในตั้งค่าร้าน → บัญชีร้าน & PIN)"><CopyValue value={done.login.pin} /></Field>
+          </div>
+        </Modal>
+      </div>
+    );
+  }
   if (!info && !err) return <Loading />;
   const plan = info?.plans.find((p) => p.id === f.planId);
   const E = ({ k }) => (errors[k] ? <span className="hint" style={{ color: 'var(--danger)' }}>{errors[k]}</span> : null);

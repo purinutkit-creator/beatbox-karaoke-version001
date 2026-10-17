@@ -8,7 +8,7 @@ export class AppError extends Error {
 }
 
 export const badRequest = (msg, code = 'BAD_REQUEST', extra) => new AppError(400, msg, code, extra);
-export const unauthorized = (msg = 'กรุณาเข้าสู่ระบบ') => new AppError(401, msg, 'UNAUTHORIZED');
+export const unauthorized = (msg = 'กรุณาเข้าสู่ระบบ', code = 'UNAUTHORIZED') => new AppError(401, msg, code);
 export const forbidden = (msg = 'คุณไม่มีสิทธิ์ทำรายการนี้') => new AppError(403, msg, 'FORBIDDEN');
 export const notFound = (msg = 'ไม่พบข้อมูล') => new AppError(404, msg, 'NOT_FOUND');
 export const conflict = (msg, code = 'CONFLICT', extra) => new AppError(409, msg, code, extra);

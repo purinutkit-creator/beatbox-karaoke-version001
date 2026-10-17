@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { api, LS, getDeviceKey, setDeviceStore } from './api.js';
+import { api, LS, getDeviceKey, setDeviceStore, storeSession } from './api.js';
 import { applyAppearance, applyTheme } from './fonts.js';
 import { useT } from './i18n.jsx';
 import { connectSocket, disconnectSocket, useSync, useSocketEvent } from './socket.js';
@@ -137,7 +137,35 @@ export function AuthProvider({ children }) {
     await bootstrap();
     return r;
   };
-  const login = async (pin) => applyLogin(await api.post('/auth/login', { pin, deviceId: LS.get('bb_device_id') }, { auth: false }));
+  // ── store sign-in of this device: store code → store account → (staff) PIN ──
+  const [storeLogin, setStoreLogin] = useState(storeSession.info());
+  const findStore = (code) => api.get(`/auth/store/${encodeURIComponent(String(code).trim())}`, { auth: false });
+  const signInStore = async (code, loginName, password) => {
+    const r = await api.post('/auth/store-login', { storeCode: code, login: loginName, password }, { auth: false });
+    storeSession.set(r.storeSession, r.store);
+    setStoreLogin(r.store);
+    reloadPublic();
+    return r;
+  };
+  /** "ออกจากร้าน": this device forgets the store (and whoever is signed in). */
+  const leaveStore = async () => {
+    if (LS.get('bb_token')) await api.post('/auth/logout').catch(() => {});
+    logoutLocal();
+    storeSession.clear();
+    setStoreLogin(null);
+  };
+  const login = async (pin) => {
+    try {
+      return await applyLogin(await api.post('/auth/login', { pin, deviceId: LS.get('bb_device_id') }, { auth: false, storeSession: true }));
+    } catch (e) {
+      // the store signed every device out (or the session is too old) → back to the store code screen
+      if (e.code === 'STORE_LOGIN_REQUIRED') {
+        storeSession.clear();
+        setStoreLogin(null);
+      }
+      throw e;
+    }
+  };
   const loginOwner = async (email, password) => {
     const r = await api.post('/auth/owner-login', { email, password, deviceId: LS.get('bb_device_id') }, { auth: false });
     if (r.platform) {
@@ -195,7 +223,7 @@ export function AuthProvider({ children }) {
   const can = (p) => permissions.includes(p);
   const hasFeature = (f) => !f || !subscription?.plan || !!subscription.plan.features?.[f];
   return (
-    <AuthCtx.Provider value={{ employee, permissions, can, hasFeature, settings, setSettings, loadSettings, device, shift, loadShift, login, loginOwner, applyLogin, logout, ready, store, subscription, refreshSubscription }}>{children}</AuthCtx.Provider>
+    <AuthCtx.Provider value={{ employee, permissions, can, hasFeature, settings, setSettings, loadSettings, device, shift, loadShift, login, loginOwner, applyLogin, logout, ready, store, subscription, refreshSubscription, storeLogin, setStoreLogin, findStore, signInStore, leaveStore }}>{children}</AuthCtx.Provider>
   );
 }
 

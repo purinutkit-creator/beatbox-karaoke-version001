@@ -3,13 +3,13 @@ import { Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'reac
 import {
   LayoutDashboard, ShoppingCart, DoorOpen, CalendarDays, ClipboardList, Users, Package, Tags, Boxes, LayoutGrid, Timer, BadgePercent, Wallet,
   Receipt, Clock, BarChart3, UserCog, MonitorSmartphone, Printer, Settings, History, Bell, Sun, Moon, LogOut, Menu, Wifi, WifiOff, Globe, ScanLine,
-  Gift, AlertTriangle, VolumeX, Plus, CreditCard, X, Mic2, Lock, KeyRound, Mail, Store, Shield, FileText, Cpu,
+  Gift, AlertTriangle, VolumeX, Plus, CreditCard, X, Mic2, Lock, KeyRound, Store, Shield, FileText, Cpu, Search,
 } from 'lucide-react';
 import { useAuth, useApp } from '../lib/store.jsx';
 import { useT } from '../lib/i18n.jsx';
 import { api, offlineQueue } from '../lib/api.js';
 import { useServerNow, useSocketEvent, useSync, getSocket } from '../lib/socket.js';
-import { Button, Modal, Loading, PinPad, useToast, Badge, Field, Input, Seg } from '../components/ui.jsx';
+import { Button, Modal, Loading, PinPad, useToast, useDialog, Badge, Field, Input } from '../components/ui.jsx';
 import { LicenseWidget, ExpiredScreen, SuperOwnerBanner } from '../components/License.jsx';
 import { PrintProvider, usePrint } from '../components/PrintPreview.jsx';
 import { PrepayReview } from '../components/RoomService.jsx';
@@ -86,44 +86,76 @@ export const MENU = [
   { to: 'notifications', label: 'การแจ้งเตือน', icon: Bell, badge: 'notifications' },
 ];
 
+/**
+ * Sign-in, three steps:
+ *  1. store code (8 random characters, e.g. 58bksn3j) → which store
+ *  2. store account: username or e-mail + password → this device is signed in to the store (remembered)
+ *  3. staff PIN (4 digits) on the store's own screen — owner PIN 1234 by default
+ */
 function Login() {
-  const { login, loginOwner, employee } = useAuth();
-  const { publicSettings } = useApp();
+  const { login, employee, storeLogin, findStore, signInStore, leaveStore } = useAuth();
   const { t, lang, setLang } = useT();
-  const [mode, setMode] = useState(() => localStorage.getItem('bb_login_mode') || 'pin');
+  const { confirm } = useDialog();
+  const [step, setStep] = useState('code'); // code | account (only while the device has no store sign-in)
+  const [code, setCode] = useState('');
+  const [found, setFound] = useState(null);
+  const [account, setAccount] = useState({ login: '', password: '' });
   const [pin, setPin] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [err, setErr] = useState(sessionStorage.getItem('bb_logout_reason') || '');
   const [busy, setBusy] = useState(false);
   const nav = useNavigate();
   useEffect(() => {
     if (employee) nav('/admin/rooms', { replace: true });
   }, [employee]);
-  const switchMode = (m) => {
-    setMode(m);
-    setErr('');
-    try {
-      localStorage.setItem('bb_login_mode', m);
-    } catch {
-      /* ignore */
-    }
-  };
-  const run = async (fn) => {
+  const run = async (fn, { clearPin = false } = {}) => {
     setBusy(true);
     setErr('');
     sessionStorage.removeItem('bb_logout_reason');
     try {
-      const r = await fn();
-      if (!r?.platform) nav('/admin/rooms', { replace: true });
+      return await fn();
     } catch (e) {
       setErr(e.message);
-      setPin('');
+      if (clearPin) setPin('');
+      return null;
     } finally {
       setBusy(false);
     }
   };
-  const store = publicSettings?.store;
+  const lookUp = (e) => {
+    e.preventDefault();
+    run(async () => {
+      const s = await findStore(code.trim().toLowerCase());
+      setFound(s);
+      setStep('account');
+    });
+  };
+  const signIn = (e) => {
+    e.preventDefault();
+    run(async () => {
+      await signInStore(found.code, account.login.trim(), account.password);
+      setAccount({ login: '', password: '' });
+      setPin('');
+    });
+  };
+  const pinLogin = (p) =>
+    run(async () => {
+      await login(p);
+      nav('/admin/rooms', { replace: true });
+    }, { clearPin: true });
+  const leave = async () => {
+    if (!(await confirm({ title: 'ออกจากร้านนี้', message: 'เครื่องนี้จะออกจากระบบของร้าน ต้องกรอกรหัสร้านค้าและบัญชีร้านใหม่เพื่อเข้าใช้งานอีกครั้ง', okText: 'ออกจากร้าน' }))) return;
+    await leaveStore();
+    setStep('code');
+    setFound(null);
+    setCode('');
+    setErr('');
+  };
+  const shown = storeLogin || found;
+  const Logo = ({ s }) => (
+    <div className="brand-logo" style={{ width: 72, height: 72, margin: '0 auto', borderRadius: 20 }}>
+      {s?.logoUrl ? <img src={s.logoUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 20 }} /> : storeLogin || found ? <Store size={34} /> : <Mic2 size={36} />}
+    </div>
+  );
   return (
     <div className="login-wrap">
       <div className="card login-card">
@@ -132,80 +164,62 @@ function Login() {
             {lang === 'th' ? 'EN' : 'TH'}
           </Button>
         </div>
-        <div className="brand-logo" style={{ width: 72, height: 72, margin: '0 auto', borderRadius: 20 }}>
-          {store?.logoUrl ? <img src={store.logoUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 20 }} /> : <Mic2 size={36} />}
-        </div>
-        <h2 style={{ marginTop: 12 }}>{store?.name || 'BEATBOX Karaoke'}</h2>
-        <Seg value={mode} onChange={switchMode} options={[{ value: 'pin', label: 'พนักงาน (PIN)' }, { value: 'owner', label: 'เจ้าของร้าน (อีเมล)' }]} />
-        {mode === 'pin' ? (
+        <Logo s={shown} />
+        <h2 style={{ marginTop: 12 }}>{shown?.name || 'BEATBOX POS'}</h2>
+        {storeLogin ? (
           <>
+            <div className="xs muted">{t('รหัสร้านค้า')} {storeLogin.code}</div>
             <p className="muted">{t('กรอกรหัสพนักงาน 4 หลัก')}</p>
-            <PinPad value={pin} onChange={setPin} onComplete={(p) => run(() => login(p))} busy={busy} />
+            <PinPad value={pin} onChange={setPin} onComplete={pinLogin} busy={busy} />
             {busy && <div className="mt"><span className="spinner" /></div>}
           </>
+        ) : step === 'code' ? (
+          <form className="col mt" style={{ textAlign: 'left' }} onSubmit={lookUp}>
+            <p className="muted center" style={{ margin: 0 }}>{t('เข้าใช้งานร้านค้า')}</p>
+            <Field label="รหัสร้านค้า (8 หลัก)" hint={t('ดูได้จากผู้ดูแลระบบ หรือในหน้าตั้งค่าร้าน → บัญชีร้าน')}>
+              <Input
+                value={code}
+                onChange={(e) => setCode(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8))}
+                placeholder="เช่น 58bksn3j"
+                autoFocus
+                autoCapitalize="off"
+                autoComplete="off"
+                spellCheck={false}
+                style={{ fontSize: '1.4rem', letterSpacing: 4, textAlign: 'center', fontFamily: 'ui-monospace, monospace' }}
+              />
+            </Field>
+            <Button type="submit" variant="primary" icon={Search} loading={busy} disabled={code.length !== 8} block>{t('ค้นหาร้านค้า')}</Button>
+          </form>
         ) : (
-          <form
-            className="col mt"
-            style={{ textAlign: 'left' }}
-            onSubmit={(e) => {
-              e.preventDefault();
-              run(() => loginOwner(email, password));
-            }}
-          >
-            <Field label="อีเมล">
-              <Input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <form className="col mt" style={{ textAlign: 'left' }} onSubmit={signIn}>
+            <div className="xs muted center">{t('รหัสร้านค้า')} {found.code} · <a href="#" onClick={(e) => { e.preventDefault(); setStep('code'); setErr(''); }}>{t('เปลี่ยนร้าน')}</a></div>
+            <Field label="ชื่อผู้ใช้ หรือ อีเมล">
+              <Input autoComplete="username" autoCapitalize="off" value={account.login} onChange={(e) => setAccount((a) => ({ ...a, login: e.target.value }))} autoFocus required />
             </Field>
             <Field label="รหัสผ่าน">
-              <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              <Input type="password" autoComplete="current-password" value={account.password} onChange={(e) => setAccount((a) => ({ ...a, password: e.target.value }))} required />
             </Field>
-            <Button type="submit" variant="primary" icon={Mail} loading={busy} block>{t('เข้าสู่ระบบ')}</Button>
+            <Button type="submit" variant="primary" icon={KeyRound} loading={busy} block>{t('เข้าสู่ระบบร้านค้า')}</Button>
           </form>
         )}
         {err && <p style={{ color: 'var(--danger)' }}>{t(err)}</p>}
-        <div className="row mt" style={{ justifyContent: 'center' }}>
-          <a href="/register" className="small"><Store size={13} /> {t('สมัครใช้งานสำหรับร้านใหม่')}</a>
-        </div>
+        {storeLogin && (
+          <div className="row mt" style={{ justifyContent: 'center' }}>
+            <Button size="sm" variant="ghost" icon={LogOut} onClick={leave}>{t('ออกจากร้านนี้ / เปลี่ยนร้าน')}</Button>
+          </div>
+        )}
+        {!storeLogin && (
+          <div className="row mt" style={{ justifyContent: 'center' }}>
+            <a href="/register" className="small"><Store size={13} /> {t('สมัครใช้งานสำหรับร้านใหม่')}</a>
+          </div>
+        )}
         <div className="row mt" style={{ justifyContent: 'center' }}>
           <a href="/display" className="small">Customer Display</a>
-          <span className="muted">·</span>
-          <a href="/book" className="small">{t('เว็บไซต์จองห้อง')}</a>
           <span className="muted">·</span>
           <a href="/platform" className="small"><Shield size={12} /> Super Owner</a>
         </div>
       </div>
     </div>
-  );
-}
-
-/** Store owner: change own password (owner accounts log in with e-mail + password). */
-function ChangePassword({ onClose }) {
-  const { t } = useT();
-  const toast = useToast();
-  const [f, setF] = useState({ current: '', password: '', confirm: '' });
-  const [busy, setBusy] = useState(false);
-  const save = async (e) => {
-    e.preventDefault();
-    if (f.password !== f.confirm) return toast.error(t('รหัสผ่านใหม่และการยืนยันไม่ตรงกัน'));
-    setBusy(true);
-    try {
-      await api.post('/auth/password', { current: f.current, password: f.password });
-      toast.success(t('เปลี่ยนรหัสผ่านแล้ว'));
-      onClose();
-    } catch (er) {
-      toast.error(er);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Modal onClose={onClose} title={t('เปลี่ยนรหัสผ่าน')}>
-      <form className="col" onSubmit={save}>
-        <Field label="รหัสผ่านปัจจุบัน"><Input type="password" autoComplete="current-password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} required /></Field>
-        <Field label="รหัสผ่านใหม่ (อย่างน้อย 8 ตัวอักษร)"><Input type="password" autoComplete="new-password" minLength={8} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required /></Field>
-        <Field label="ยืนยันรหัสผ่านใหม่"><Input type="password" autoComplete="new-password" minLength={8} value={f.confirm} onChange={(e) => setF({ ...f, confirm: e.target.value })} required /></Field>
-        <Button type="submit" variant="primary" loading={busy}>{t('บันทึก')}</Button>
-      </form>
-    </Modal>
   );
 }
 
@@ -455,7 +469,6 @@ function Clock2() {
 
 function Layout() {
   const { employee, logout, can, hasFeature, shift, settings, device } = useAuth();
-  const [pwOpen, setPwOpen] = useState(false);
   const { theme, setTheme } = useApp();
   const { t, lang, setLang } = useT();
   const [open, setOpen] = useState(false);
@@ -534,7 +547,7 @@ function Layout() {
             <div className="small bold ellipsis">{employee?.name}</div>
             <div className="xs muted">{employee?.role}</div>
           </div>
-          {employee?.isOwner && <Button variant="ghost icon" icon={KeyRound} title={t('เปลี่ยนรหัสผ่าน')} onClick={() => setPwOpen(true)} />}
+          {employee?.isOwner && <Button variant="ghost icon" icon={KeyRound} title={t('บัญชีร้าน & PIN')} onClick={() => nav('/admin/settings?tab=account')} />}
           <Button variant="ghost icon" icon={LogOut} title={t('ออกจากระบบ')} onClick={logout} />
         </div>
       </aside>
@@ -599,7 +612,6 @@ function Layout() {
       <RoomServiceAlerts />
       <QueuedPrintWorker />
       <IdleGuard />
-      {pwOpen && <ChangePassword onClose={() => setPwOpen(false)} />}
     </div>
   );
 }

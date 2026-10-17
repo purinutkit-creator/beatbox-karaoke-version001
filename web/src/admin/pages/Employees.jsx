@@ -93,14 +93,15 @@ export default function Employees() {
         createPerm="employee.manage"
         editPerm="employee.manage"
         deletePerm="employee.manage"
+        canDelete={(r) => !r.is_owner}
         searchKeys={['name', 'position', 'phone', 'role']}
         defaults={{ roleId: roles?.find((r) => r.code === 'CASHIER')?.id, isActive: true, discountLimitPercent: 10 }}
         toForm={(r) => ({ id: r.id, name: r.name, photoUrl: r.photo_url, position: r.position, phone: r.phone, roleId: r.role_id, isActive: r.is_active, discountLimitPercent: r.discount_limit_percent, pin: '' })}
         toPayload={(f) => ({ ...f, roleId: Number(f.roleId), pin: f.pin || undefined })}
         columns={[
           { key: 'photo_url', label: 'รูป', type: 'image' },
-          { label: 'ชื่อพนักงาน', render: (r) => <div><b>{r.name}</b><div className="xs muted">{r.position}</div></div> },
-          { label: 'ตำแหน่ง/สิทธิ์', render: (r) => <Badge color="#8b5cf6">{t(r.role_name)}</Badge> },
+          { label: 'ชื่อพนักงาน', render: (r) => <div><b>{r.name}</b>{r.is_owner && <Badge color="#eab308">{t('เจ้าของร้าน')}</Badge>}<div className="xs muted">{r.position}</div></div> },
+          { label: 'ตำแหน่ง/สิทธิ์', render: (r) => (r.is_owner ? <Badge color="#eab308">{t('ใช้งานได้ทุกระบบ')}</Badge> : <Badge color="#8b5cf6">{t(r.role_name)}</Badge>) },
           { key: 'phone', label: 'เบอร์โทรศัพท์' },
           { label: 'ส่วนลดสูงสุด', right: true, render: (r) => `${Number(r.discount_limit_percent)}%` },
           { label: 'สร้างเมื่อ', render: (r) => <span className="small">{fmtDateTime(r.created_at)}</span> },
@@ -109,7 +110,7 @@ export default function Employees() {
         ]}
         rowActions={(r) => (
           <>
-            <Button size="sm" variant="ghost" icon={ShieldCheck} title={t('กำหนดสิทธิ์')} onClick={() => setPermFor(r)} />
+            {!r.is_owner && <Button size="sm" variant="ghost" icon={ShieldCheck} title={t('กำหนดสิทธิ์')} onClick={() => setPermFor(r)} />}
             <Button size="sm" variant="ghost" icon={History} title={t('ประวัติ')} onClick={() => setHistFor(r)} />
           </>
         )}

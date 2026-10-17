@@ -8,6 +8,8 @@ process.env.DATABASE_URL = DB;
 process.env.DISABLE_SCHEDULER = 'true';
 process.env.PAYMENT_MODE = 'DEMO';
 process.env.PORT = '4995';
+process.env.SEED_STORE_CODE = 'beatbox1';
+process.env.ADMIN_PASSWORD = 'Admin12345';
 
 let server;
 let base;
@@ -21,6 +23,13 @@ async function api(method, url, body, { headers = {} } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+
+// a device signs in to the store first (store code + store account), then staff use their PIN
+let storeSession;
+async function pinLogin(pin) {
+  storeSession ||= (await api('POST', '/auth/store-login', { storeCode: 'beatbox1', login: 'admin', password: 'Admin12345' })).body.storeSession;
+  return api('POST', '/auth/login', { pin }, { headers: { 'X-Store-Session': storeSession } });
 }
 const key = (k) => ({ headers: { 'Idempotency-Key': k } });
 let db;
@@ -39,7 +48,7 @@ before(async () => {
   server = await start();
   db = (await import('../src/db/index.js')).pool;
   base = 'http://localhost:4995/api';
-  token = (await api('POST', '/auth/login', { pin: '1234' })).body.token;
+  token = (await pinLogin('1234')).body.token;
   deviceId = (await api('POST', '/devices/register', { name: 'POS-OPS', deviceKey: 'test-device-key-ops' })).body.id;
   await api('POST', '/shifts/open', { deviceId, openingCash: 1000 });
 });

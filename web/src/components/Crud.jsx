@@ -148,7 +148,8 @@ export function CrudPage({ title, icon, endpoint, listEndpoint, topics = [], col
   };
   const allowCreate = !createPerm || can(createPerm);
   const allowEdit = !editPerm || can(editPerm);
-  const allowDelete = canDelete && (!deletePerm || can(deletePerm));
+  // canDelete may be a function of the row (e.g. the store owner can never be deleted)
+  const allowDelete = (r) => (typeof canDelete === 'function' ? canDelete(r) : canDelete) && (!deletePerm || can(deletePerm));
   return (
     <div>
       <PageHead icon={icon} title={title}>
@@ -175,7 +176,7 @@ export function CrudPage({ title, icon, endpoint, listEndpoint, topics = [], col
               <div className="row end" style={{ padding: '0 12px 12px' }}>
                 {rowActions?.(r, reload)}
                 {allowEdit && <Button size="sm" icon={Pencil} onClick={() => setForm(toForm(r))}>{t('แก้ไข')}</Button>}
-                {allowDelete && <Button size="sm" variant="ghost" icon={Trash2} title={t('ลบ')} aria-label={t('ลบ')} onClick={() => remove(r)} />}
+                {allowDelete(r) && <Button size="sm" variant="ghost" icon={Trash2} title={t('ลบ')} aria-label={t('ลบ')} onClick={() => remove(r)} />}
               </div>
             </div>
           ))}
@@ -202,7 +203,7 @@ export function CrudPage({ title, icon, endpoint, listEndpoint, topics = [], col
                   <td className="right nowrap">
                     {rowActions?.(r, reload)}
                     {allowEdit && <Button size="sm" variant="ghost" icon={Pencil} onClick={() => setForm(toForm(r))} />}
-                    {allowDelete && <Button size="sm" variant="ghost" icon={Trash2} title={t('ลบ')} aria-label={t('ลบ')} onClick={() => remove(r)} />}
+                    {allowDelete(r) && <Button size="sm" variant="ghost" icon={Trash2} title={t('ลบ')} aria-label={t('ลบ')} onClick={() => remove(r)} />}
                   </td>
                 </tr>
               ))}

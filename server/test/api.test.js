@@ -12,6 +12,8 @@ process.env.DATABASE_URL = DB;
 process.env.DISABLE_SCHEDULER = 'true';
 process.env.PAYMENT_MODE = 'DEMO';
 process.env.PORT = '4999';
+process.env.SEED_STORE_CODE = 'beatbox1';
+process.env.ADMIN_PASSWORD = 'Admin12345';
 
 let server;
 let base;
@@ -26,6 +28,13 @@ async function api(method, url, body, { headers = {}, auth = true } = {}) {
   });
   const json = await res.json().catch(() => ({}));
   return { status: res.status, body: json };
+}
+
+// a device signs in to the store first (store code + store account), then staff use their PIN
+let storeSession;
+async function pinLogin(pin) {
+  storeSession ||= (await api('POST', '/auth/store-login', { storeCode: 'beatbox1', login: 'admin', password: 'Admin12345' })).body.storeSession;
+  return api('POST', '/auth/login', { pin }, { headers: { 'X-Store-Session': storeSession } });
 }
 
 before(async () => {
@@ -49,8 +58,8 @@ after(async () => {
 });
 
 test('login with 4-digit PIN, wrong PIN rejected', async () => {
-  assert.equal((await api('POST', '/auth/login', { pin: '9999' })).status, 401);
-  const r = await api('POST', '/auth/login', { pin: '1234' });
+  assert.equal((await pinLogin('9999')).status, 401);
+  const r = await pinLogin('1234');
   assert.equal(r.status, 200);
   token = r.body.token;
   assert.equal(r.body.employee.role, 'ADMIN');
@@ -63,7 +72,7 @@ test('login with 4-digit PIN, wrong PIN rejected', async () => {
 });
 
 test('staff without permission cannot open settings', async () => {
-  const s = await api('POST', '/auth/login', { pin: '4444' });
+  const s = await pinLogin('4444');
   const r = await fetch(base + '/settings/tax', { method: 'PUT', headers: { Authorization: `Bearer ${s.body.token}`, 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(r.status, 403);
 });

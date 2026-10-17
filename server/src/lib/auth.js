@@ -127,7 +127,8 @@ export async function requireAuth(req, _res, next) {
   req.deviceId = await ownDevice(Number(req.headers['x-device-id']) || auth.deviceId || null);
   // effective rights = staff permission AND the store plan's feature (an ADMIN still can't use features outside the plan)
   req.subscription = req.subscription || (await getSubscription());
-  const own = auth.employee.role === 'ADMIN' ? ALL_PERMISSION_CODES : await loadPermissions(auth.employee.id);
+  // ADMIN role and the store owner: every system (owner rights can't be taken away by other staff)
+  const own = auth.employee.role === 'ADMIN' || auth.employee.isOwner ? ALL_PERMISSION_CODES : await loadPermissions(auth.employee.id);
   req.permissions = new Set(own.filter((p) => planAllowsPermission(req.subscription, p)));
   // passive requests (polling) should not extend the session
   if (req.headers['x-passive'] !== '1' && Date.now() - new Date(auth.lastActiveAt).getTime() > 15000) {

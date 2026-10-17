@@ -9,6 +9,7 @@ import rateLimit from 'express-rate-limit';
 import { config } from './config.js';
 import { migrate } from './db/migrate.js';
 import { seedIfEmpty, ensureSuperOwner } from './db/seed.js';
+import { ensureStoreAccounts } from './services/storeAccount.js';
 import { errorHandler } from './lib/errors.js';
 import { initRealtime } from './lib/realtime.js';
 import { startScheduler } from './services/scheduler.js';
@@ -41,7 +42,7 @@ export function createApp() {
   const app = express();
   app.set('trust proxy', 1);
   // secrets never leave the server, whatever query produced the row (member passwords, staff PIN / password hashes)
-  const SECRET_KEYS = new Set(['password_hash', 'pin_hash', 'pin_lookup', 'code_hash']);
+  const SECRET_KEYS = new Set(['password_hash', 'pin_hash', 'pin_lookup', 'code_hash', 'initial_password_enc']);
   app.set('json replacer', (k, v) => (SECRET_KEYS.has(k) ? undefined : v));
   app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(cors({ origin: config.corsOrigins.length ? config.corsOrigins : true, credentials: true }));
@@ -51,6 +52,7 @@ export function createApp() {
   // rate limiting
   app.use('/api/', rateLimit({ windowMs: 60000, limit: 600, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'มีการเรียกใช้งานถี่เกินไป กรุณาลองใหม่ภายหลัง' } }));
   app.use('/api/auth/login', rateLimit({ windowMs: 5 * 60000, limit: 20, message: { error: 'พยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอ 5 นาที' } }));
+  app.use(['/api/auth/store', '/api/auth/store-login'], rateLimit({ windowMs: 5 * 60000, limit: 40, message: { error: 'พยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอ 5 นาที' } }));
   app.use('/api/public/auth', rateLimit({ windowMs: 10 * 60000, limit: 30, message: { error: 'มีการขอรหัสบ่อยเกินไป กรุณาลองใหม่ภายหลัง' } }));
   app.use('/api/public/room', rateLimit({ windowMs: 60000, limit: 120, message: { error: 'มีการเรียกใช้งานถี่เกินไป กรุณาลองใหม่ภายหลัง' } }));
   app.use('/api/public/holds', rateLimit({ windowMs: 60000, limit: 20, message: { error: 'มีการจองถี่เกินไป กรุณาลองใหม่ภายหลัง' } }));
@@ -109,6 +111,8 @@ export async function start() {
   if (role) console.log(`[db] connected as superuser → queries run as restricted role "${role}" so row-level security applies`);
   await seedIfEmpty();
   await ensureSuperOwner();
+  // every store can be signed in to: store code + owner account (username / password) + owner PIN 1234
+  await ensureStoreAccounts({ seedPassword: process.env.ADMIN_PASSWORD || null });
   const app = createApp();
   const server = http.createServer(app);
   initRealtime(server, config.corsOrigins);

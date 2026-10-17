@@ -7,6 +7,7 @@ import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { recordSubscriptionEvent, invalidateSubscription } from './subscription.js';
 import { clearStoreCache } from '../lib/tenant.js';
 import { emitStaff } from '../lib/realtime.js';
+import { generatePassword, setStartingPassword, DEFAULT_USERNAME, DEFAULT_OWNER_PIN } from './storeAccount.js';
 
 export function slugify(name) {
   const base = String(name || '')
@@ -50,7 +51,9 @@ export function addPeriod(fromMs, cycle, interval = 1, periods = 1) {
  */
 export async function createStore({ storeName, ownerFirstName, ownerLastName, email, phone, password, address = null, subscription, actor, demo = false }) {
   if (await emailTaken(email)) throw conflict('อีเมลนี้ถูกใช้ลงทะเบียนแล้ว', 'EMAIL_TAKEN');
-  const passwordHash = await bcrypt.hash(password, 12);
+  // created by the Super Owner → the password is a starting password (shown to the Super Owner and the owner until changed)
+  const starting = actor.type === 'PLATFORM' ? password || generatePassword() : null;
+  const passwordHash = await bcrypt.hash(starting || password, 12);
   const ownerName = `${ownerFirstName} ${ownerLastName || ''}`.trim();
   return runAsPlatform(() =>
     tx(async (c) => {
@@ -62,7 +65,9 @@ export async function createStore({ storeName, ownerFirstName, ownerLastName, em
       await recordSubscriptionEvent(c, { storeId, action: actor.type === 'OWNER' ? 'REGISTER' : 'CREATE_STORE', after: { planId: plan?.id || null, planName: plan?.name || null, status: subscription.status, expiresAt: subscription.expiresAt || null }, actorType: actor.type, actorId: actor.id || null, actorName: actor.name || ownerName });
       // the rest of the transaction runs as the new store (row-level security + default store_id)
       await c.query(`SELECT set_config('app.store_id', $1, true), set_config('app.bypass_rls', 'off', true)`, [String(storeId)]);
-      const seeded = await seedStoreData(c, { storeId, branchName: 'สาขาหลัก', address, phone, demo, employee: { name: ownerName, email, passwordHash, isOwner: true, position: 'เจ้าของร้าน' } });
+      const seeded = await seedStoreData(c, { storeId, branchName: 'สาขาหลัก', address, phone, demo, employee: { name: ownerName, email, passwordHash, isOwner: true, position: 'เจ้าของร้าน', username: DEFAULT_USERNAME, pin: DEFAULT_OWNER_PIN } });
+      if (starting) await setStartingPassword(c, seeded.ownerId, starting);
+      const storeCode = (await c.query('SELECT store_code FROM stores WHERE id = $1', [storeId])).rows[0].store_code;
       await c.query(`INSERT INTO activity_logs(employee_id, employee_name, action, entity, entity_id, details, actor_type, platform_user_id) VALUES ($1,$2,'STORE_CREATED','store',$3,$4,$5,$6)`, [
         actor.type === 'OWNER' ? seeded.ownerId : null,
         actor.name || ownerName,
@@ -72,7 +77,7 @@ export async function createStore({ storeName, ownerFirstName, ownerLastName, em
         actor.type === 'PLATFORM' ? actor.id : null,
       ]);
       clearStoreCache();
-      return { storeId, slug, ownerId: seeded.ownerId, plan };
+      return { storeId, slug, storeCode, ownerId: seeded.ownerId, plan, login: { storeCode, username: DEFAULT_USERNAME, email, password: starting, pin: DEFAULT_OWNER_PIN } };
     }),
   );
 }

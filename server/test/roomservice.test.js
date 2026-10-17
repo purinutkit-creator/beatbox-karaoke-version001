@@ -10,6 +10,8 @@ process.env.DATABASE_URL = DB;
 process.env.DISABLE_SCHEDULER = 'true';
 process.env.PAYMENT_MODE = 'DEMO';
 process.env.PORT = '4998';
+process.env.SEED_STORE_CODE = 'beatbox1';
+process.env.ADMIN_PASSWORD = 'Admin12345';
 
 let server;
 let base;
@@ -24,6 +26,13 @@ async function api(method, url, body, { headers = {}, auth = true, form } = {}) 
   });
   const json = await res.json().catch(() => ({}));
   return { status: res.status, body: json };
+}
+
+// a device signs in to the store first (store code + store account), then staff use their PIN
+let storeSession;
+async function pinLogin(pin) {
+  storeSession ||= (await api('POST', '/auth/store-login', { storeCode: 'beatbox1', login: 'admin', password: 'Admin12345' })).body.storeSession;
+  return api('POST', '/auth/login', { pin }, { headers: { 'X-Store-Session': storeSession } });
 }
 
 function slipPayload(transRef, bank = '004') {
@@ -41,7 +50,7 @@ before(async () => {
   const { start } = await import('../src/index.js');
   server = await start();
   base = 'http://localhost:4998/api';
-  const r = await api('POST', '/auth/login', { pin: '1234' });
+  const r = await pinLogin('1234');
   token = r.body.token;
   deviceId = (await api('POST', '/devices/register', { name: 'POS-RS', deviceKey: 'test-device-key-rs' })).body.id;
   await api('POST', '/shifts/open', { deviceId, openingCash: 500 });
@@ -91,7 +100,7 @@ test('integration secrets are encrypted and masked', async () => {
   await api('PUT', '/integrations/slip', { apiKey: null, provider: 'manual' });
   assert.equal((await api('GET', '/integrations')).body.slip.apiKey.set, false);
   // a cashier can't read integrations
-  const cashier = await api('POST', '/auth/login', { pin: '3333' });
+  const cashier = await pinLogin('3333');
   const res = await fetch(`${base}/integrations`, { headers: { Authorization: `Bearer ${cashier.body.token}` } });
   assert.equal(res.status, 403);
 });

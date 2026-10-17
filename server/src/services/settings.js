@@ -212,6 +212,7 @@ export async function getSettings(client) {
   s.store = {
     id: store.id || null,
     slug: store.slug || null,
+    code: store.store_code || null, // store code for signing in (not part of the public settings)
     timezone: store.timezone || 'Asia/Bangkok',
     name: store.name || 'BEATBOX Karaoke',
     logoUrl: store.logo_url || '',
@@ -266,8 +267,10 @@ export async function saveSettingsSection(client, key, value, employeeId) {
 
 /** Subset safe to expose publicly (Customer Display / Booking website). */
 export function publicSettings(s) {
+  const store = { ...s.store };
+  delete store.code; // the sign-in store code is not public
   return {
-    store: s.store,
+    store,
     general: s.general,
     appearance: s.appearance,
     tax: { vatEnabled: s.tax.vatEnabled, vatRate: s.tax.vatRate, vatMode: s.tax.vatMode, scEnabled: s.tax.scEnabled, scRate: s.tax.scRate, scBase: s.tax.scBase, rounding: s.tax.rounding },

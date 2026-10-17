@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
-import { pool, one, many, storeContext, setContextStore } from '../db/index.js';
+import { pool, tx, one, many, storeContext, setContextStore, runWithStore } from '../db/index.js';
 import { signToken, verifyToken } from '../lib/auth.js';
 import { z, parse } from '../lib/validate.js';
 import { unauthorized, forbidden, notFound, badRequest } from '../lib/errors.js';
@@ -14,6 +14,7 @@ import { platformSignIn } from '../services/platformAuth.js';
 import { PLAN_FEATURES, PLAN_LIMITS } from '@beatbox/shared/plans.js';
 import { emitStaff } from '../lib/realtime.js';
 import { clearStoreCache } from '../lib/tenant.js';
+import { signStoreSession, storeLoginVersion, accountInfo, updateAccount, ownerOf, setStartingPassword, resetOwnerPin, generatePassword, signOutAllDevices } from '../services/storeAccount.js';
 
 const r = Router();
 
@@ -76,7 +77,9 @@ r.post('/register', rateLimit({ windowMs: 60 * 60000, limit: 10, message: { erro
   });
   setContextStore(out.storeId);
   const e = await one(`SELECT e.*, r.code AS role FROM employees e JOIN roles r ON r.id = e.role_id WHERE e.id = $1`, [out.ownerId]);
-  res.json({ ok: true, storeId: out.storeId, slug: out.slug, ...(await issueEmployeeSession(req, e, { deviceId: null, method: 'REGISTER' })) });
+  // this device is signed in to the new store too (store code + account), and the owner is signed in
+  const storeSession = signStoreSession(out.storeId, await storeLoginVersion(out.storeId, { fresh: true }), out.ownerId);
+  res.json({ ok: true, storeId: out.storeId, slug: out.slug, storeCode: out.storeCode, storeSession, login: { storeCode: out.storeCode, username: out.login.username, email: out.login.email, pin: out.login.pin }, ...(await issueEmployeeSession(req, e, { deviceId: null, method: 'REGISTER' })) });
 });
 
 // ───────────── Super Owner auth ─────────────
@@ -120,7 +123,7 @@ r.post('/password', requirePlatform, async (req, res) => {
 // ───────────── stores ─────────────
 r.get('/stores', requirePlatform, async (_req, res) => {
   const rows = await many(
-    `SELECT s.id, s.name, s.slug, s.phone, s.address, s.owner_name, s.owner_email, s.is_active, s.suspend_reason, s.created_at,
+    `SELECT s.id, s.name, s.slug, s.store_code, s.phone, s.address, s.owner_name, s.owner_email, s.is_active, s.suspend_reason, s.created_at,
             ss.plan_id, ss.status AS sub_status, ss.started_at, ss.expires_at, p.name AS plan_name,
             (SELECT count(*) FROM rooms x WHERE x.store_id = s.id AND x.deleted_at IS NULL) AS rooms,
             (SELECT count(*) FROM employees x WHERE x.store_id = s.id AND x.deleted_at IS NULL AND NOT x.is_hidden) AS employees,
@@ -140,7 +143,8 @@ const storeCreateSchema = z.object({
   ownerLastName: z.string().trim().min(1).max(100),
   email: z.string().trim().toLowerCase().email('อีเมลไม่ถูกต้อง').max(200),
   phone: z.string().trim().regex(/^0\d{8,9}$/, 'เบอร์โทรศัพท์ไม่ถูกต้อง'),
-  password: z.string().min(8, 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร').max(200),
+  // empty = the system makes a starting password (shown here and to the owner until changed)
+  password: z.string().min(8, 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร').max(200).optional().or(z.literal('')),
   planId: z.coerce.number().int(),
   status: z.enum(['TRIAL', 'ACTIVE']).default('TRIAL'),
   trialDays: z.coerce.number().int().min(0).max(3650).optional().nullable(),
@@ -191,6 +195,58 @@ r.post('/stores/:id/subscription', requirePlatform, async (req, res) => {
 
 r.get('/stores/:id/events', requirePlatform, async (req, res) => {
   res.json(await many('SELECT * FROM subscription_events WHERE store_id = $1 ORDER BY id DESC LIMIT 200', [req.params.id]));
+});
+
+// ── store account (store code, username / e-mail, starting password, owner PIN) ──
+async function inStore(req, fn) {
+  const store = await one('SELECT id FROM stores WHERE id = $1', [req.params.id]);
+  if (!store) throw notFound('ไม่พบร้านค้า');
+  return runWithStore(store.id, fn);
+}
+const platformEvent = (req, action, after) =>
+  pool.query(`INSERT INTO subscription_events(store_id, action, before, after, actor_type, actor_id, actor_name) VALUES ($1,$2,NULL,$3,'PLATFORM',$4,$5)`, [req.params.id, action, after, req.platformUser.id, actorOf(req).name]);
+
+r.get('/stores/:id/account', requirePlatform, async (req, res) => res.json(await inStore(req, () => accountInfo())));
+
+r.put('/stores/:id/account', requirePlatform, async (req, res) => {
+  const b = parse(z.object({ username: z.string().trim().max(40).optional(), email: z.string().trim().email('อีเมลไม่ถูกต้อง').max(200).optional().nullable().or(z.literal('')), storeCode: z.string().trim().max(20).optional() }), req.body);
+  const out = await inStore(req, async () => {
+    await tx((c) => updateAccount(c, { username: b.username, email: b.email === undefined ? undefined : b.email || null, storeCode: b.storeCode }));
+    return accountInfo();
+  });
+  clearStoreCache();
+  await platformEvent(req, 'EDIT_ACCOUNT', { username: b.username, email: b.email, storeCode: b.storeCode });
+  res.json(out);
+});
+
+/** New starting password for the store account (shown to the Super Owner and the owner until changed). */
+r.post('/stores/:id/reset-password', requirePlatform, async (req, res) => {
+  const b = parse(z.object({ password: z.string().min(8, 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร').max(200).optional().or(z.literal('')) }), req.body || {});
+  const out = await inStore(req, async () => {
+    const o = await ownerOf();
+    if (!o) throw notFound('ไม่พบบัญชีเจ้าของร้าน');
+    await tx((c) => setStartingPassword(c, o.id, b.password || generatePassword()));
+    return accountInfo();
+  });
+  await platformEvent(req, 'RESET_PASSWORD', { username: out.owner?.username });
+  res.json(out);
+});
+
+r.post('/stores/:id/reset-owner-pin', requirePlatform, async (req, res) => {
+  const out = await inStore(req, async () => {
+    const o = await ownerOf();
+    if (!o) throw notFound('ไม่พบบัญชีเจ้าของร้าน');
+    await tx((c) => resetOwnerPin(c, o.id));
+    return accountInfo();
+  });
+  await platformEvent(req, 'RESET_OWNER_PIN', {});
+  res.json(out);
+});
+
+r.post('/stores/:id/sign-out-devices', requirePlatform, async (req, res) => {
+  await inStore(req, () => signOutAllDevices(Number(req.params.id)));
+  await platformEvent(req, 'SIGN_OUT_DEVICES', {});
+  res.json({ ok: true });
 });
 
 /** "เข้าจัดการร้าน": a session inside the store, acting as a hidden admin linked to the real Super Owner identity. */
