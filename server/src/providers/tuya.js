@@ -1,6 +1,7 @@
 // Tuya Cloud (IoT Core OpenAPI) client: smart plugs / switches / lights that the store links to its rooms.
 // Credentials come from the store's integration settings (Access ID + Access Secret of a Tuya cloud project).
-// Request signing follows Tuya's HMAC-SHA256 scheme: client_id [+ access_token] + t + nonce + stringToSign.
+// Request signing follows Tuya's HMAC-SHA256 scheme (as Tuya's own connectors do): client_id [+ access_token] + t + stringToSign,
+// stringToSign = METHOD \n SHA256(body) \n (no signed headers) \n path?sorted-query.
 import crypto from 'node:crypto';
 import { getIntegrations } from '../services/integrations.js';
 import { currentStoreId } from '../db/index.js';
@@ -28,10 +29,9 @@ function signedUrl(path, query) {
 
 function headersFor(cfg, method, url, body, accessToken = '') {
   const t = String(Date.now());
-  const nonce = crypto.randomUUID();
   const stringToSign = [method, sha256(body || ''), '', url].join('\n');
-  const sign = hmac(cfg.accessId + accessToken + t + nonce + stringToSign, cfg.accessSecret);
-  return { client_id: cfg.accessId, sign, t, nonce, sign_method: 'HMAC-SHA256', ...(accessToken ? { access_token: accessToken } : {}), 'Content-Type': 'application/json' };
+  const sign = hmac(cfg.accessId + accessToken + t + stringToSign, cfg.accessSecret);
+  return { client_id: cfg.accessId, sign, t, sign_method: 'HMAC-SHA256', ...(accessToken ? { access_token: accessToken } : {}), 'Content-Type': 'application/json' };
 }
 
 async function call(cfg, method, url, bodyObj, accessToken) {
@@ -98,15 +98,35 @@ async function request(method, path, { query, body, cfg } = {}) {
   }
 }
 
-/** Connection test: gets a token. */
-export async function tuyaTest(cfgOverride) {
-  const cfg = cfgOverride || (await tuyaConfig());
+/**
+ * Connection test: gets a token with the given values (what is typed on the screen, falling back to the saved ones).
+ * "sign invalid" can mean a wrong secret OR a project in another data center → the other data centers are tried too.
+ */
+export async function tuyaTest(override = {}) {
+  const saved = await tuyaConfig();
+  const cfg = {
+    endpoint: override.endpoint || saved.endpoint,
+    accessId: (override.accessId ?? saved.accessId ?? '').trim(),
+    accessSecret: (override.accessSecret || saved.accessSecret || '').trim(),
+  };
   if (!cfg.accessId || !cfg.accessSecret) return { ok: false, message: 'กรุณากรอก Access ID และ Access Secret' };
   try {
     await token(cfg, true);
-    return { ok: true, message: 'เชื่อมต่อ Tuya Cloud สำเร็จ' };
+    return { ok: true, message: 'เชื่อมต่อ Tuya Cloud สำเร็จ', endpoint: cfg.endpoint };
   } catch (e) {
-    return { ok: false, message: e.message };
+    if (![1004, 1005, 2009].includes(e.code)) return { ok: false, message: e.message };
+    for (const r of TUYA_REGIONS.filter((x) => x.value !== cfg.endpoint)) {
+      try {
+        await call({ ...cfg, endpoint: r.value }, 'GET', signedUrl('/v1.0/token', { grant_type: 1 }));
+        return { ok: false, message: `Access ID / Secret ถูกต้อง แต่โปรเจกต์อยู่ Data Center อื่น — เลือก "${r.label}" แล้วกดบันทึก`, suggestEndpoint: r.value };
+      } catch {
+        /* try the next data center */
+      }
+    }
+    return {
+      ok: false,
+      message: `${e.message} — ตรวจสอบว่าคัดลอก Access Secret / Client Secret ครบทั้ง ${cfg.accessSecret.length === 32 ? '32' : `32 ตัว (ตอนนี้ ${cfg.accessSecret.length} ตัว)`} จากหน้า Overview ของ Cloud Project (ไม่ใช่รหัสผ่านบัญชี Tuya) และ Access ID ตรงกับโปรเจกต์เดียวกัน`,
+    };
   }
 }
 

@@ -114,7 +114,9 @@ r.post('/integrations/:section/test', can('settings.manage'), async (req, res) =
     const t = await testSlipProvider();
     out = { ok: t.ok, results: [t] };
   } else if (section === 'tuya') {
-    const t = await tuyaTest();
+    // test what is typed on the screen (saved values fill in what was left empty)
+    const b = parse(z.object({ endpoint: z.string().url().max(200).optional(), accessId: z.string().max(100).optional(), accessSecret: z.string().max(200).optional().nullable() }), req.body || {});
+    const t = await tuyaTest({ endpoint: b.endpoint, accessId: b.accessId, accessSecret: b.accessSecret || undefined });
     out = { ok: t.ok, results: [t] };
   } else if (section === 'terminal') {
     const { cfg, adapter } = await getTerminal();

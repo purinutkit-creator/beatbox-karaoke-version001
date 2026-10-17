@@ -46,7 +46,13 @@ function TuyaCard({ all, setAll }) {
         </ol>
       </details>
       <Results out={s.test} />
-      <Bar s={s}><Button icon={PlugZap} onClick={() => s.runTest()}>{t('ทดสอบการเชื่อมต่อ')}</Button></Bar>
+      {s.test?.results?.[0]?.suggestEndpoint && (
+        <Button className="mt" onClick={() => s.set('endpoint', s.test.results[0].suggestEndpoint)}>{t('ใช้ Data Center นี้')}</Button>
+      )}
+      <Bar s={s}>
+        {/* tests what is typed now (no need to save first) */}
+        <Button icon={PlugZap} onClick={() => s.runTest({ endpoint: v.endpoint, accessId: v.accessId, accessSecret: typeof v.accessSecret === 'string' ? v.accessSecret.trim() : undefined })}>{t('ทดสอบการเชื่อมต่อ')}</Button>
+      </Bar>
     </div>
   );
 }

@@ -31,7 +31,7 @@ function startFakeTuya() {
         const sha = crypto.createHash('sha256').update(body).digest('hex');
         const str = [req.method, sha, '', req.url].join('\n');
         const tok = h.access_token || '';
-        const sign = crypto.createHmac('sha256', SECRET).update(h.client_id + tok + h.t + h.nonce + str).digest('hex').toUpperCase();
+        const sign = crypto.createHmac('sha256', SECRET).update(h.client_id + tok + h.t + str).digest('hex').toUpperCase();
         const send = (o) => res.end(JSON.stringify(o));
         if (h.client_id !== ID || h.sign !== sign) return send({ success: false, code: 1004, msg: 'sign invalid' });
         if (req.url.startsWith('/v1.0/token')) return send({ success: true, result: { access_token: 'tok-1', expire_time: 7200 } });
@@ -106,6 +106,9 @@ test('settings: credentials are saved encrypted, never returned, and the connect
   const bad = await api('PUT', '/integrations/tuya', { enabled: true, endpoint: fakeUrl, accessId: ID, accessSecret: 'wrong-secret' });
   assert.equal(bad.status, 200);
   assert.equal((await api('POST', '/integrations/tuya/test')).body.ok, false);
+  // the test button checks what is typed on the screen, before saving
+  const typed = await api('POST', '/integrations/tuya/test', { endpoint: fakeUrl, accessId: ID, accessSecret: SECRET });
+  assert.equal(typed.body.ok, true, JSON.stringify(typed.body));
   const ok = await api('PUT', '/integrations/tuya', { accessSecret: SECRET });
   assert.ok(!JSON.stringify(ok.body).includes(SECRET), 'secret never sent back');
   const t = await api('POST', '/integrations/tuya/test');
