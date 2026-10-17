@@ -310,7 +310,7 @@ staff.get('/sessions/:id/ticket', async (req, res) => {
   if (!s) throw notFound();
   const settings = await getSettings();
   const t = sessionTiming(s);
-  const minutes = Number(s.package_minutes) + Number(s.booked_minutes) + Number(s.extension_minutes);
+  const minutes = Number(s.package_minutes) + Number(s.booked_minutes) + Number(s.extension_minutes) + Number(s.bonus_minutes || 0);
   const adjustments = await many(
     `SELECT a.id, a.type, a.minutes, a.before, a.after, a.reason, a.created_at, e.name AS employee_name FROM room_time_adjustments a
      LEFT JOIN employees e ON e.id = a.employee_id WHERE a.session_id = $1 AND a.type IN ('EXTEND','ADJUST','PREPAID_START','MOVE') ORDER BY a.id`,

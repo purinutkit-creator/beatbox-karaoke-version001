@@ -10,7 +10,7 @@
 //                 but the prepayment only counts after the cashier verifies it — never because a timer ran out.
 //               · cashier rejects → AWAITING_PAYMENT again (before acceptance) or the prepayment is rejected and
 //                 the items stay on the bill to be paid at the counter (after acceptance).
-import { pool } from '../db/index.js';
+import { pool, tx } from '../db/index.js';
 import { calculateBill } from '@beatbox/shared/calc.js';
 import { round2 } from '@beatbox/shared/money.js';
 import { addProductItem } from './orders.js';
@@ -53,7 +53,7 @@ async function openShiftId(c) {
 }
 
 /** Queue kitchen / bar tickets for new items; one POS device claims and prints each job. */
-export async function queueKitchenTickets(c, orderId, { source = 'ROOM_QR', note = null } = {}) {
+export async function queueKitchenTickets(c, orderId, { source = 'ROOM_QR', note = null, employee = 'ลูกค้าสั่งผ่าน QR' } = {}) {
   const o = (await c.query('SELECT o.*, rm.name AS room_name FROM orders o LEFT JOIN room_sessions rs ON rs.id = o.session_id LEFT JOIN rooms rm ON rm.id = rs.room_id WHERE o.id = $1', [orderId])).rows[0];
   const items = (await c.query(`SELECT * FROM order_items WHERE order_id = $1 AND voided_at IS NULL AND kitchen_status = 'NONE' AND station <> 'NONE' AND item_type = 'PRODUCT'`, [orderId])).rows;
   if (!items.length) return [];
@@ -62,7 +62,7 @@ export async function queueKitchenTickets(c, orderId, { source = 'ROOM_QR', note
   const jobs = [];
   for (const [station, list] of Object.entries(byStation)) {
     const printer = (await c.query(`SELECT id FROM printers WHERE station = $1 AND is_active ORDER BY is_default DESC, id LIMIT 1`, [station])).rows[0];
-    const payload = { station, orderNo: o.order_no, room: o.room_name, time: new Date(), employee: 'ลูกค้าสั่งผ่าน QR', note, items: list.map((i) => ({ name: i.name, qty: Number(i.qty), note: i.note })) };
+    const payload = { station, orderNo: o.order_no, room: o.room_name, time: new Date(), employee, note, items: list.map((i) => ({ name: i.name, qty: Number(i.qty), note: i.note })) };
     jobs.push((await c.query(`INSERT INTO print_jobs(printer_id, job_type, doc_type, reference, payload, status, source) VALUES ($1,'KITCHEN','KITCHEN',$2,$3,'QUEUED',$4) RETURNING id`, [printer?.id || null, o.order_no, payload, source])).rows[0].id);
   }
   await c.query(`UPDATE order_items SET kitchen_status = 'SENT', sent_at = now() WHERE id = ANY($1)`, [items.map((i) => i.id)]);
@@ -105,6 +105,40 @@ export async function placeCustomerOrder(c, rco, { paymentStatus = rco.payment_s
 export function announce(jobs) {
   emitSync(['rooms', 'orders', 'room-service', 'print-jobs']);
   if (jobs?.length) emitStaff('print:queued', { jobIds: jobs });
+}
+
+/**
+ * Scheduler: kitchen / bar tickets for food & drinks added to a bill by staff (room screen, "เพิ่มเข้าห้อง" on the POS).
+ * Waits until no new item was added for `kitchenBatchSeconds`, so one round of ordering prints as one ticket.
+ * Only recent items (last 15 minutes) — items from before this feature, or already sent by hand, are never printed again.
+ */
+export async function sweepKitchenTickets(settings) {
+  if (settings.documents?.kitchenAuto === false) return [];
+  const wait = Math.max(0, Number(settings.documents?.kitchenBatchSeconds ?? 5));
+  const orders = (
+    await pool.query(
+      `SELECT oi.order_id, (array_agg(e.name ORDER BY oi.id DESC))[1] AS employee
+       FROM order_items oi LEFT JOIN employees e ON e.id = oi.created_by
+       WHERE oi.kitchen_status = 'NONE' AND oi.station <> 'NONE' AND oi.voided_at IS NULL AND oi.item_type = 'PRODUCT' AND oi.created_at > now() - interval '15 minutes'
+       GROUP BY oi.order_id HAVING max(oi.created_at) <= now() - ($1 || ' seconds')::interval`,
+      [String(wait)],
+    )
+  ).rows;
+  const all = [];
+  for (const o of orders) {
+    const jobs = await tx(async (c) => {
+      // one server / one tick per order at a time
+      const locked = (await c.query('SELECT id FROM orders WHERE id = $1 FOR UPDATE SKIP LOCKED', [o.order_id])).rows[0];
+      if (!locked) return [];
+      return queueKitchenTickets(c, o.order_id, { source: 'POS', employee: o.employee || '-' });
+    });
+    all.push(...jobs);
+  }
+  if (all.length) {
+    emitSync(['print-jobs', 'orders']);
+    emitStaff('print:queued', { jobIds: all });
+  }
+  return all;
 }
 
 /** Scheduler: customer paid but nobody verified within the configured time → accept the order (payment still pending). */

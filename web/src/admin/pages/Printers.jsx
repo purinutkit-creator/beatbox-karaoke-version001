@@ -120,7 +120,7 @@ export default function Printers() {
       {tab === 'guide' && <GuideTab />}
       {tab === 'printers' && <>
       <div className="card flat mb">
-        <Switch checked={qrPrint} onChange={(x) => { localStorage.setItem('bb_print_qr_orders', String(x)); setQrPrint(x); }} label={t('เครื่องนี้พิมพ์ใบสั่งครัว/บาร์ของลูกค้าที่สั่งผ่าน QR ในห้องอัตโนมัติ')} />
+        <Switch checked={qrPrint} onChange={(x) => { localStorage.setItem('bb_print_qr_orders', String(x)); setQrPrint(x); }} label={t('เครื่องนี้พิมพ์ใบครัว/บาร์อัตโนมัติ (ทุกออเดอร์: หน้าขาย POS, เพิ่มสินค้าเข้าห้อง, ลูกค้าสั่งผ่าน QR)')} />
         <div className="xs muted">{t('ทุกเครื่องที่เปิดไว้ช่วยกันพิมพ์ได้ ระบบรับประกันว่าแต่ละใบพิมพ์เพียงครั้งเดียว')}</div>
       </div>
       <CrudPage
@@ -136,8 +136,8 @@ export default function Printers() {
           <Button variant="primary" icon={Usb} loading={searching} onClick={searchUsb}>{t('ค้นหาเครื่องพิมพ์ USB')}</Button>
           <Button icon={Search} onClick={() => setDiscover({ printers: null, subnet: '' })}>{t('ค้นหาเครื่องพิมพ์ในเครือข่าย')}</Button>
         </>}
-        defaults={{ connection: 'USB', port: 9100, station: 'MAIN', paperWidth: 80, paperPreset: '80', printableWidthMm: '', marginLeftMm: 0, marginRightMm: 0, marginTopMm: 0, marginBottomMm: 3, fontScale: 1, renderMode: 'RASTER', allowPrinterFont: false, escposCodepage: '', charsPerLine: '', model: '', density: 8, speed: 3, marginMm: 2, copies: 1, autoPrint: true, autoCut: true, openDrawer: true, isDefault: false, isActive: true }}
-        toForm={(r) => ({ id: r.id, name: r.name, connection: r.connection, address: r.address, port: r.port, station: r.station, paperWidth: r.paper_width, paperPreset: [58, 80].includes(r.paper_width) ? String(r.paper_width) : 'CUSTOM', printableWidthMm: r.printable_width_mm ?? '', marginLeftMm: r.margin_left_mm, marginRightMm: r.margin_right_mm, marginTopMm: r.margin_top_mm, marginBottomMm: r.margin_bottom_mm, fontScale: r.font_scale, renderMode: r.render_mode, allowPrinterFont: r.allow_printer_font, escposCodepage: r.escpos_codepage ?? '', charsPerLine: r.chars_per_line ?? '', model: r.model || '', density: r.density, speed: r.speed, marginMm: r.margin_mm, copies: r.copies, autoPrint: r.auto_print, autoCut: r.auto_cut, openDrawer: r.open_drawer, isDefault: r.is_default, isActive: r.is_active })}
+        defaults={{ connection: 'USB', port: 9100, station: 'MAIN', paperWidth: 80, paperPreset: '80', printableWidthMm: '', marginLeftMm: 0, marginRightMm: 0, marginTopMm: 0, marginBottomMm: 3, fontScale: 1, renderMode: 'RASTER', allowPrinterFont: false, escposCodepage: '', charsPerLine: '', model: '', density: 8, speed: 3, marginMm: 2, copies: 1, autoPrint: true, autoCut: true, openDrawer: true, isDefault: false, isActive: true, beepKitchen: true, beepTimes: 3 }}
+        toForm={(r) => ({ id: r.id, name: r.name, connection: r.connection, address: r.address, port: r.port, station: r.station, paperWidth: r.paper_width, paperPreset: [58, 80].includes(r.paper_width) ? String(r.paper_width) : 'CUSTOM', printableWidthMm: r.printable_width_mm ?? '', marginLeftMm: r.margin_left_mm, marginRightMm: r.margin_right_mm, marginTopMm: r.margin_top_mm, marginBottomMm: r.margin_bottom_mm, fontScale: r.font_scale, renderMode: r.render_mode, allowPrinterFont: r.allow_printer_font, escposCodepage: r.escpos_codepage ?? '', charsPerLine: r.chars_per_line ?? '', model: r.model || '', density: r.density, speed: r.speed, marginMm: r.margin_mm, copies: r.copies, autoPrint: r.auto_print, autoCut: r.auto_cut, openDrawer: r.open_drawer, isDefault: r.is_default, isActive: r.is_active, beepKitchen: r.beep_kitchen !== false, beepTimes: r.beep_times || 3 })}
         columns={[
           { label: 'เครื่องพิมพ์', render: (r) => { const I = ICON[r.connection]; return <div className="row nowrap"><I size={18} /><div><b>{r.name}</b>{r.is_default && <Badge color="#8b5cf6">{t('หลัก')}</Badge>}{local === r.id && <Badge color="#2563eb">{t('เครื่องนี้')}</Badge>}<div className="xs muted">{r.connection} {r.address && `· ${r.address}:${r.port}`}</div></div></div>; } },
           { label: 'ใช้สำหรับ', render: (r) => ({ MAIN: t('ใบเสร็จ'), KITCHEN: t('ครัว'), BAR: t('บาร์'), PREP: t('จุดเตรียม') })[r.station] },
@@ -179,6 +179,8 @@ export default function Printers() {
           { key: 'autoPrint', label: 'พิมพ์ใบเสร็จอัตโนมัติหลังชำระเงิน', type: 'switch', switchLabel: 'เปิด' },
           { key: 'autoCut', label: 'ตัดกระดาษอัตโนมัติ', type: 'switch', switchLabel: 'เปิด' },
           { key: 'openDrawer', label: 'เปิดลิ้นชักหลังรับเงินสด', type: 'switch', switchLabel: 'เปิด' },
+          { key: 'beepKitchen', label: 'เสียงเตือนเมื่อพิมพ์ใบครัว/บาร์', type: 'switch', switchLabel: 'ปิ๊บๆ เมื่อมีออเดอร์', hidden: (f) => f.connection === 'BROWSER', hint: 'ใช้ได้กับเครื่องพิมพ์ที่มีลำโพง (buzzer) เช่น Xprinter / Gprinter / Rongta' },
+          { key: 'beepTimes', label: 'จำนวนครั้งที่ดัง', type: 'number', hidden: (f) => f.connection === 'BROWSER' || !f.beepKitchen },
           { key: 'isDefault', label: 'เครื่องพิมพ์หลัก', type: 'switch', switchLabel: 'ตั้งเป็นเครื่องหลัก' },
           { key: 'isActive', label: 'สถานะ', type: 'switch', switchLabel: 'เปิดใช้งาน' },
         ]}
@@ -244,15 +246,19 @@ function RoutingTab() {
   const { printers } = usePrint();
   const [r, setR] = useState(null);
   const [auto, setAuto] = useState(true);
+  const [kitchenAuto, setKitchenAuto] = useState(true);
+  const [batch, setBatch] = useState(5);
   useEffect(() => {
     setR({ ...DEFAULT_ROUTING, ...(settings?.documents?.routing || {}) });
     setAuto(settings?.documents?.autoPrintReceipt !== false);
+    setKitchenAuto(settings?.documents?.kitchenAuto !== false);
+    setBatch(settings?.documents?.kitchenBatchSeconds ?? 5);
   }, [settings?.documents]);
   if (!r) return <Loading />;
   const set = (doc, k, v) => setR((x) => ({ ...x, [doc]: { ...x[doc], [k]: v } }));
   const save = async () => {
     try {
-      await api.put('/documents/settings', { routing: Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { printerId: v.printerId ? Number(v.printerId) : null, copies: Number(v.copies) || 1, cut: !!v.cut, auto: !!v.auto }])), autoPrintReceipt: auto });
+      await api.put('/documents/settings', { routing: Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { printerId: v.printerId ? Number(v.printerId) : null, copies: Number(v.copies) || 1, cut: !!v.cut, auto: !!v.auto }])), autoPrintReceipt: auto, kitchenAuto, kitchenBatchSeconds: Number(batch) || 0 });
       await loadSettings();
       toast.success('บันทึกเรียบร้อย');
     } catch (e) {
@@ -268,6 +274,14 @@ function RoutingTab() {
         <Select value="" onChange={(e) => allSame(e.target.value || null)} options={[{ value: '', label: t('เครื่องหลักของเครื่องนี้') }, ...printers.map((p) => ({ value: p.id, label: p.name }))]} style={{ width: 260 }} />
       </div>
       <Switch checked={auto} onChange={setAuto} label="พิมพ์ใบเสร็จฉบับเต็มอัตโนมัติหลังชำระเงินครบ" />
+      <Switch checked={kitchenAuto} onChange={setKitchenAuto} label="พิมพ์ใบครัว/บาร์อัตโนมัติทุกครั้งที่มีการสั่งสินค้า (POS, เพิ่มเข้าห้อง, QR)" />
+      {kitchenAuto && (
+        <div className="row small">
+          {t('รวมรายการที่สั่งติดกันภายใน')}
+          <Input type="number" min={0} max={120} style={{ width: 80 }} value={batch} onChange={(e) => setBatch(e.target.value)} />
+          {t('วินาที เป็นใบเดียว')}
+        </div>
+      )}
       <div className="table-wrap">
         <table className="table">
           <thead><tr><th>{t('เอกสาร')}</th><th>{t('เครื่องพิมพ์')}</th><th>{t('จำนวนสำเนา')}</th><th>{t('ตัดกระดาษ')}</th><th>{t('พิมพ์อัตโนมัติ')}</th></tr></thead>

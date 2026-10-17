@@ -5,6 +5,13 @@ import { useT } from '../lib/i18n.jsx';
 import { api } from '../lib/api.js';
 import { useLive } from '../lib/socket.js';
 
+// first two letters (whole Thai characters with their vowel/tone marks)
+const initials = (name = '') => {
+  const str = String(name).replace(/\s+/g, '');
+  const seg = typeof Intl !== 'undefined' && Intl.Segmenter ? [...new Intl.Segmenter('th', { granularity: 'grapheme' }).segment(str)].map((x) => x.segment) : [...str];
+  return seg.slice(0, 2).join('');
+};
+
 /** Product grid with category filter, name/code search and barcode-scanner support (keyboard wedge). */
 export function ProductCatalog({ onAdd, compact }) {
   const { t } = useT();
@@ -24,6 +31,7 @@ export function ProductCatalog({ onAdd, compact }) {
     }
     return l;
   }, [products, cat, q]);
+  const catColor = (id) => (cats || []).find((c) => c.id === id)?.color || 'var(--primary)';
   const out = (p) => p.is_sold_out || (p.track_stock && Number(p.stock) <= 0);
   const pick = (p) => {
     if (out(p)) return toast.warning(`${p.name} ${t('สินค้าหมด')}`);
@@ -72,13 +80,13 @@ export function ProductCatalog({ onAdd, compact }) {
         <div className="product-grid" style={compact ? { maxHeight: '55vh' } : undefined}>
           {list.map((p) => (
             <div key={p.id} className={`product ${out(p) ? 'out' : ''}`} onClick={() => pick(p)}>
-              <div className="img">
-                <Img src={p.image_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              <div className={`img ${p.image_url ? '' : 'noimg'}`} style={p.image_url ? undefined : { '--cat': catColor(p.category_id) }}>
+                {p.image_url ? <Img src={p.image_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span>{initials(p.name)}</span>}
                 {out(p) && <div className="sold">{t('สินค้าหมด')}</div>}
               </div>
               <div className="info">
                 <div className="ellipsis bold small">{p.name}</div>
-                <div className="row between">
+                <div className="row between nowrap">
                   <span className="price">฿{money(p.price, 0)}</span>
                   {p.track_stock && <span className="xs muted">{t('เหลือ')} {money(p.stock, 0)}</span>}
                 </div>

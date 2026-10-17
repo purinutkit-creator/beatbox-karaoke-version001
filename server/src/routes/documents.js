@@ -22,6 +22,7 @@ const elementSchema = z.object({
   spaceAfter: z.coerce.number().min(0).max(20).optional(),
   text: z.string().max(500).optional(),
   qrSize: z.coerce.number().min(QR_SIZE_LIMITS.min).max(QR_SIZE_LIMITS.max).optional(),
+  logoWidth: z.coerce.number().min(10).max(80).optional(),
 });
 const layoutSchema = z.object({ order: z.array(z.string()).max(30).optional(), elements: z.record(z.string(), elementSchema).optional() });
 const routeSchema = z.object({ printerId: z.coerce.number().int().nullable().optional(), copies: z.coerce.number().int().min(1).max(5), cut: z.boolean(), auto: z.boolean() });
@@ -37,6 +38,8 @@ r.put('/documents/settings', can('settings.manage'), async (req, res) => {
       layouts: z.record(z.string(), layoutSchema).optional(),
       routing: z.record(z.string(), routeSchema).optional(),
       autoPrintReceipt: z.boolean().optional(),
+      kitchenAuto: z.boolean().optional(),
+      kitchenBatchSeconds: z.coerce.number().int().min(0).max(120).optional(),
     }),
     req.body,
   );
@@ -52,7 +55,7 @@ r.put('/documents/settings', can('settings.manage'), async (req, res) => {
   }
   const routing = { ...cur.routing };
   for (const [doc, v] of Object.entries(b.routing || {})) if (docKeys.includes(doc)) routing[doc] = v;
-  const value = { layouts, routing, autoPrintReceipt: b.autoPrintReceipt ?? cur.autoPrintReceipt };
+  const value = { ...cur, layouts, routing, autoPrintReceipt: b.autoPrintReceipt ?? cur.autoPrintReceipt, kitchenAuto: b.kitchenAuto ?? cur.kitchenAuto ?? true, kitchenBatchSeconds: b.kitchenBatchSeconds ?? cur.kitchenBatchSeconds ?? 5 };
   await tx(async (c) => {
     await saveSettingsSection(c, 'documents', value, req.employee.id);
     await logActivity(c, req, 'DOCUMENTS_UPDATE', 'settings', 'documents', { docs: Object.keys(b.layouts || {}), routing: Object.keys(b.routing || {}) });

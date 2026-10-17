@@ -49,11 +49,13 @@ const schema = z.object({
   escposCodepage: z.coerce.number().int().min(0).max(255).optional().nullable(),
   charsPerLine: z.coerce.number().int().min(16).max(80).optional().nullable(),
   model: z.string().max(100).optional().nullable(),
+  beepKitchen: z.boolean().default(true),
+  beepTimes: z.coerce.number().int().min(1).max(9).default(3),
 });
 const cols = (b) => [
   b.name, b.connection, b.address, b.port, b.station, b.paperWidth, b.density, b.speed, b.marginMm, b.copies, b.autoPrint, b.autoCut, b.openDrawer, b.isDefault, b.isActive, b.deviceId ?? null,
   b.printableWidthMm ?? null, b.marginLeftMm, b.marginRightMm, b.marginTopMm, b.marginBottomMm, b.fontScale, b.renderMode, b.allowPrinterFont, b.escposCodepage ?? null, b.charsPerLine ?? null, b.model || null,
-  b.usbVendorId ?? null, b.usbProductId ?? null, b.usbSerial || null,
+  b.usbVendorId ?? null, b.usbProductId ?? null, b.usbSerial || null, b.beepKitchen, b.beepTimes,
 ];
 
 /** Pick a print route that works for the connection (never refuse a USB printer like the previous update did). */
@@ -79,8 +81,8 @@ r.post('/printers', can('settings.manage'), async (req, res) => {
   const row = await one(
     `INSERT INTO printers(name, connection, address, port, station, paper_width, density, speed, margin_mm, copies, auto_print, auto_cut, open_drawer, is_default, is_active, device_id,
        printable_width_mm, margin_left_mm, margin_right_mm, margin_top_mm, margin_bottom_mm, font_scale, render_mode, allow_printer_font, escpos_codepage, chars_per_line, model,
-       usb_vendor_id, usb_product_id, usb_serial)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30) RETURNING *`,
+       usb_vendor_id, usb_product_id, usb_serial, beep_kitchen, beep_times)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32) RETURNING *`,
     cols(b),
   );
   await logActivity(null, req, 'PRINTER_CREATE', 'printer', row.id, b);
@@ -97,7 +99,8 @@ r.put('/printers/:id', can('settings.manage'), async (req, res) => {
        auto_print=$12, auto_cut=$13, open_drawer=$14, is_default=$15, is_active=$16, device_id=$17,
        printable_width_mm=$18, margin_left_mm=$19, margin_right_mm=$20, margin_top_mm=$21, margin_bottom_mm=$22, font_scale=$23, render_mode=$24,
        allow_printer_font=$25, escpos_codepage=$26, chars_per_line=$27, model=$28,
-       usb_vendor_id=COALESCE($29, usb_vendor_id), usb_product_id=COALESCE($30, usb_product_id), usb_serial=COALESCE($31, usb_serial)
+       usb_vendor_id=COALESCE($29, usb_vendor_id), usb_product_id=COALESCE($30, usb_product_id), usb_serial=COALESCE($31, usb_serial),
+       beep_kitchen=$32, beep_times=$33
      WHERE id=$1 AND deleted_at IS NULL RETURNING *`,
     [req.params.id, ...cols(b)],
   );

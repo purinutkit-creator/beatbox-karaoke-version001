@@ -7,7 +7,7 @@ import { idempotent } from '../lib/idempotency.js';
 import { logActivity } from '../lib/activity.js';
 import { z, parse } from '../lib/validate.js';
 import { notFound, badRequest, conflict, forbidden } from '../lib/errors.js';
-import { emitSync } from '../lib/realtime.js';
+import { emitSync, emitStaff } from '../lib/realtime.js';
 import { getSettings } from '../services/settings.js';
 import { saveFile } from '../services/files.js';
 import { createOrder, addProductItem, computeOrder, payOrder, discountNeedsApproval } from '../services/orders.js';
@@ -15,6 +15,7 @@ import { nextRefundNo } from '../services/numbers.js';
 import { moveStock } from '../services/stock.js';
 import { addPointTx, evaluateTier } from '../services/points.js';
 import { refreshRoomStatuses } from '../services/rooms.js';
+import { queueKitchenTickets } from '../services/roomService.js';
 import { verifySlip, paymentMode } from '../providers/slip.js';
 import { notify } from '../services/notifications.js';
 import { config } from '../config.js';
@@ -67,9 +68,13 @@ r.post('/orders', can('pos.access'), attachShift, async (req, res) => {
     const o = await createOrder(c, { memberId: b.memberId, customerName: b.customerName, phone: b.phone, employeeId: req.employee.id, deviceId: req.deviceId, shiftId: req.shiftId, clientOpId: b.clientOpId });
     for (const it of b.items) await addProductItem(c, o, { ...it, clientOpId: it.clientOpId || (b.clientOpId ? `${b.clientOpId}:${it.productId}:${Math.random()}` : null), employeeId: req.employee.id });
     await logActivity(c, req, 'ORDER_CREATE', 'order', o.id, { items: b.items.length });
-    return o;
+    // POS sale: kitchen / bar tickets print right away (one POS claims each job, so it prints once)
+    const s = await getSettings();
+    const jobs = s.documents?.kitchenAuto !== false ? await queueKitchenTickets(c, o.id, { source: 'POS', employee: req.employee.name }) : [];
+    return { ...o, kitchenJobs: jobs };
   });
-  emitSync('orders');
+  emitSync(['orders', 'print-jobs']);
+  if (order.kitchenJobs?.length) emitStaff('print:queued', { jobIds: order.kitchenJobs });
   res.json(order);
 });
 

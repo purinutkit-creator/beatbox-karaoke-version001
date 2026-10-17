@@ -241,6 +241,22 @@ function canvasToEscPos(canvas, widthDots, { density = 8, cut = true, drawer = f
   return out;
 }
 
+/** Buzzer: ESC B n t — n beeps of t × 50 ms. */
+export function beepBytes(times = 3) {
+  const n = Math.min(9, Math.max(1, Number(times) || 3));
+  return new Uint8Array([0x1b, 0x42, n, 3]);
+}
+
+function concatBytes(parts) {
+  const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+
 // ── raw transports ──
 const handles = {};
 
@@ -423,8 +439,11 @@ export function printJob(job) {
         for (let c = 0; c < (d.copies || 1); c++) pages.push({ sections, cut: d.cut !== false });
       }
       const mode = printMode(printer);
+      // kitchen / bar ticket: the receipt printer beeps like "a new order came in" (ESC B n t — Xprinter, Gprinter, Rongta …)
+      const beep = mode !== 'DRIVER' && printer.beep_kitchen !== false && job.docs.some((d) => d.docType === 'KITCHEN') ? beepBytes(printer.beep_times) : null;
       if (mode === 'RASTER') {
-        await sendRaw(printer, await rasterBytes(pages, printer, { drawer: job.drawer }), jobId);
+        const img = await rasterBytes(pages, printer, { drawer: job.drawer });
+        await sendRaw(printer, beep ? concatBytes([img.subarray(0, 2), beep, img.subarray(2)]) : img, jobId);
       } else if (mode === 'ESCPOS_TEXT') {
         const chunks = pages.map((p, i) => encodeLines(textLines(p.sections, printer).lines, printer, { copies: 1, cut: p.cut, drawer: job.drawer && i === pages.length - 1 }));
         const all = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
@@ -433,7 +452,7 @@ export function printJob(job) {
           all.set(c, o);
           o += c.length;
         }
-        await sendRaw(printer, all, jobId);
+        await sendRaw(printer, beep ? concatBytes([beep, all]) : all, jobId);
       } else {
         await driverPrint(pages, printer);
       }

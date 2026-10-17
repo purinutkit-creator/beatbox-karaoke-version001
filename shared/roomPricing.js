@@ -123,7 +123,8 @@ export function computeSessionCharges(session, settings = {}, nowMs = Date.now()
   const pkgMin = Number(session.package_minutes || 0);
   const booked = Number(session.booked_minutes || 0);
   const ext = Number(session.extension_minutes || 0);
-  const scheduled = pkgMin + booked + ext;
+  const bonus = Number(session.bonus_minutes || 0); // free minutes: extend the time, never charged
+  const scheduled = pkgMin + booked + ext + bonus;
   const overtime = Math.max(0, timing.usedMinutes - scheduled);
   const lines = [];
 

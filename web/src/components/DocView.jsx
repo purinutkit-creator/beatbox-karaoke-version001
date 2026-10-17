@@ -3,6 +3,9 @@
 import QRCodeLib from 'qrcode';
 import { loadFont } from '../lib/fonts.js';
 
+/** Logo width on paper when the layout does not set one (mm). */
+export const DEFAULT_LOGO_MM = 40;
+
 /** QR drawn module-by-module on a canvas — synchronous, so it is ready before the page is captured. */
 export function QrImg({ value, sizeMm = 30 }) {
   const qr = QRCodeLib.create(String(value), { errorCorrectionLevel: 'M' });
@@ -70,7 +73,7 @@ function Block({ b, style, qrAsImage }) {
     case 'img':
       return (
         <div style={{ textAlign: style.align || 'center' }}>
-          <img className="doc-logo" src={b.url} alt="" crossOrigin="anonymous" />
+          <img className="doc-logo" src={b.url} alt="" crossOrigin="anonymous" style={{ width: `${Number(style.logoWidth) || DEFAULT_LOGO_MM}mm` }} />
         </div>
       );
     default:

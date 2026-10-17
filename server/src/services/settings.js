@@ -147,6 +147,10 @@ export const DEFAULT_SETTINGS = {
     layouts: {}, // { [docType]: { order: [elementKey], elements: { [elementKey]: { show, size, bold, align, font, spaceBefore, spaceAfter, text, qrSize } } } }
     routing: DEFAULT_ROUTING, // { [docType]: { printerId, copies, cut, auto } }
     autoPrintReceipt: true,
+    // kitchen / bar tickets print by themselves for every order (POS sale, items added to a room, QR orders);
+    // items added within a few seconds of each other go on one ticket
+    kitchenAuto: true,
+    kitchenBatchSeconds: 5,
   },
   // member self sign-up (QR at the end of receipts without a member)
   memberSignup: {

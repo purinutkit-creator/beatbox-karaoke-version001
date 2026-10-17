@@ -177,7 +177,13 @@ export function TerminalPayPanel({ amount, orderId, method, provider, onVerified
   );
 }
 
-export default function Checkout({ orderId, onClose, onPaid }) {
+/**
+ * Checkout screen. `prepaySession` = pay the room charge before entering (same screen, same customer display):
+ * confirming records the prepayment and starts the room clock instead of closing the bill.
+ */
+export default function Checkout({ orderId: billId, prepaySession = null, onClose, onPaid }) {
+  const orderId = prepaySession ? prepaySession.order_id : billId;
+  const isPrepay = !!prepaySession;
   const { t, tp } = useT();
   const toast = useToast();
   const { prompt } = useDialog();
@@ -249,6 +255,18 @@ export default function Checkout({ orderId, onClose, onPaid }) {
     if (busy) return;
     setBusy(true);
     try {
+      if (isPrepay) {
+        // pay before entering: the payment is recorded and the room clock starts (the bill stays open until "ปิดห้อง")
+        const r = await api.post(`/sessions/${prepaySession.id}/prepay`, { payments: finalTenders }, { idempotencyKey: idemKey.current });
+        setDone({ prepay: true, amount: net, change: r.change || 0 });
+        pushDisplay({ mode: 'SUCCESS', total: net, paid: round2(finalTenders.reduce((a, x) => a + Number(x.received ?? x.amount), 0)), change: r.change || 0 });
+        setTimeout(() => idleDisplay(), 12000);
+        toast.success(`${t('ชำระค่าห้องแล้ว เริ่มเวลา')} ${data.session?.room_name || ''}${r.change > 0 ? ` · ${t('เงินทอน')} ฿${money(r.change)}` : ''}`);
+        const printer = printerFor('RECEIPT');
+        if (finalTenders.some((x) => x.method === 'CASH') && printer?.open_drawer) openDrawer(printer);
+        onPaid?.(r);
+        return;
+      }
       const r = await runApproval(
         (tok) => {
           if (tok) approvalRef.current = tok;
@@ -275,7 +293,7 @@ export default function Checkout({ orderId, onClose, onPaid }) {
       onPaid?.(receipt);
     } catch (e) {
       if (!e.cancelled) toast.error(e);
-      if (e.code === 'ALREADY_PAID') load();
+      if (['ALREADY_PAID', 'PREPAY_AMOUNT_MISMATCH'].includes(e.code)) load();
     } finally {
       setBusy(false);
     }
@@ -328,6 +346,21 @@ export default function Checkout({ orderId, onClose, onPaid }) {
 
   if (!data) return <Modal title={t('ชำระเงิน')} onClose={onClose}><Loading /></Modal>;
 
+  if (done?.prepay) {
+    return (
+      <Modal title={t('ชำระค่าห้องเรียบร้อย')} onClose={onClose}>
+        <div className="center">
+          <CheckCircle2 size={110} color="var(--ok)" />
+          <h1>{t('ชำระค่าห้องแล้ว เริ่มเวลา')}</h1>
+          <div className="sum-line total"><span>{t('ยอดที่ชำระ')}</span><span>฿{money(done.amount)}</span></div>
+          {done.change > 0 && <div className="sum-line total" style={{ color: 'var(--ok)' }}><span>{t('เงินทอน')}</span><span className="big-money">฿{money(done.change)}</span></div>}
+          <div className="small muted">{t('ใบเปิดห้องพิมพ์อัตโนมัติ · ใบเสร็จฉบับเต็มพิมพ์ตอนปิดห้อง')}</div>
+          <Button className="mt" size="lg" variant="primary" onClick={onClose}>{t('เสร็จสิ้น')}</Button>
+        </div>
+      </Modal>
+    );
+  }
+
   if (done || data.order.status !== 'OPEN') {
     const rc = done?.receipt || data.receipt;
     return (
@@ -372,10 +405,11 @@ export default function Checkout({ orderId, onClose, onPaid }) {
   const s = data.session;
   const roomLines = calc.lines.filter((l) => ['ROOM', 'PACKAGE', 'EXTENSION', 'OVERTIME'].includes(l.type));
   return (
-    <Modal title={`${t('ชำระเงิน')} ${s ? `· ${s.room_name}` : ''}`} onClose={onClose} size="xwide" closeOnBack={false}>
+    <Modal title={`${isPrepay ? t('ชำระค่าห้องก่อนเข้าห้อง') : t('ชำระเงิน')} ${s ? `· ${s.room_name}` : ''}`} onClose={onClose} size="xwide" closeOnBack={false}>
       <div className="grid" style={{ gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.1fr)' }}>
         {/* ── summary ── */}
         <div className="card flat" style={{ background: 'var(--surface-2)' }}>
+          {isPrepay && <div className="card flat small mb" style={{ borderColor: 'var(--warn)' }}>{t('เวลายังไม่เริ่มนับ จะเริ่มเมื่อชำระค่าห้องครบ')}</div>}
           {s && (
             <div className="small muted mb">
               {s.type_name} · {t('ลูกค้า')} {s.guest_count} {t('คน')} · {formatMinutesShort(roomLines.reduce((a, l) => a + Number(l.minutes || 0), 0))}
@@ -491,7 +525,7 @@ export default function Checkout({ orderId, onClose, onPaid }) {
             </div>
           )}
           <Button variant="success" size="xl" block loading={busy} disabled={busy || data.pendingPrepayments?.length > 0 || (remaining > 0 && (['QR', 'TRANSFER'].includes(method) || useTerminal))} onClick={pay} icon={CheckCircle2}>
-            {t('ยืนยันชำระเงิน')} ฿{money(net)}
+            {isPrepay ? t('ยืนยันชำระค่าห้องและเริ่มเวลา') : t('ยืนยันชำระเงิน')} ฿{money(net)}
           </Button>
         </div>
       </div>

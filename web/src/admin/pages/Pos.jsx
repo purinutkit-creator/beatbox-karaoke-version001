@@ -103,7 +103,13 @@ export default function Pos() {
   return (
     <div className="pos">
       <ProductCatalog onAdd={add} />
-      <div className="cart">
+      {cart.length > 0 && (
+        <button type="button" className="pos-cartbar" onClick={() => document.getElementById('pos-cart')?.scrollIntoView({ behavior: 'smooth' })}>
+          <span className="row nowrap"><ShoppingCart size={18} /> {t('ตะกร้า')} ({cart.reduce((s, x) => s + x.qty, 0)})</span>
+          <span>฿{money(calc.netTotal)}</span>
+        </button>
+      )}
+      <div className="cart" id="pos-cart">
         <div className="row between" style={{ padding: 12, borderBottom: '1px solid var(--border)' }}>
           <b className="row nowrap"><ShoppingCart size={18} /> {t('ตะกร้า')} ({cart.reduce((s, x) => s + x.qty, 0)})</b>
           <div className="row nowrap">

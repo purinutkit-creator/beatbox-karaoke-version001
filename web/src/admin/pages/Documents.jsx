@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { FileText, ArrowUp, ArrowDown, Eye, EyeOff, RotateCcw, Save, Printer } from 'lucide-react';
 import { PageHead, Button, Field, Input, Select, Switch, Seg, Textarea, Loading, useToast } from '../../components/ui.jsx';
 import { DocsPreview, usePrint } from '../../components/PrintPreview.jsx';
+import { DEFAULT_LOGO_MM } from '../../components/DocView.jsx';
 import { useT } from '../../lib/i18n.jsx';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
@@ -163,6 +164,11 @@ export default function Documents() {
                     <Field label="ตัวหนา"><Switch checked={!!el.bold} onChange={(v) => update(el.key, { bold: v })} label="ตัวหนาทั้งส่วน" /></Field>
                     <Field label="ระยะห่างด้านบน (mm)"><Input type="number" step="0.5" min={0} max={20} value={el.spaceBefore || 0} onChange={(e) => update(el.key, { spaceBefore: Number(e.target.value) })} /></Field>
                     <Field label="ระยะห่างด้านล่าง (mm)"><Input type="number" step="0.5" min={0} max={20} value={el.spaceAfter || 0} onChange={(e) => update(el.key, { spaceAfter: Number(e.target.value) })} /></Field>
+                    {el.key === 'logo' && (
+                      <Field label="ขนาดโลโก้ — ความกว้าง (mm)" hint={t('กระดาษ 80 มม. พิมพ์ได้กว้างสุดประมาณ 72 มม. · 58 มม. ประมาณ 48 มม.')}>
+                        <Input type="number" min={10} max={80} step="1" value={el.logoWidth || DEFAULT_LOGO_MM} onChange={(e) => update(el.key, { logoWidth: Number(e.target.value) })} />
+                      </Field>
+                    )}
                     {['qr', 'memberSignup'].includes(el.key) && (
                       <Field label="ขนาด QR (mm)"><Input type="number" min={QR_SIZE_LIMITS.min} max={QR_SIZE_LIMITS.max} value={el.qrSize || 30} onChange={(e) => update(el.key, { qrSize: Number(e.target.value) })} /></Field>
                     )}

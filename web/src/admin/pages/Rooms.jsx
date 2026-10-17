@@ -16,10 +16,8 @@ import { api, uid } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive, useServerNow, serverNow } from '../../lib/socket.js';
 import { pushDisplay, orderToDisplay } from '../../lib/display.js';
-import { ROOM_STATUS_LABEL, ROOM_STATUS_COLOR, RESERVATION_STATUS_LABEL, PAYMENT_METHODS } from '@beatbox/shared/constants.js';
-import { cashQuickAmounts } from '@beatbox/shared/calc.js';
+import { ROOM_STATUS_LABEL, ROOM_STATUS_COLOR, RESERVATION_STATUS_LABEL } from '@beatbox/shared/constants.js';
 import { round2 } from '@beatbox/shared/money.js';
-import { promptPayPayload } from '@beatbox/shared/promptpay.js';
 import { sessionTiming, computeSessionCharges, formatMinutesShort, priceForMinutes } from '@beatbox/shared/roomPricing.js';
 import { fmtTime, fmtCountdown, fmtDateTime, bkkDateStr } from '@beatbox/shared/format.js';
 
@@ -159,6 +157,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
   const closeKey = useRef(uid());
   const now = useServerNow(1000);
   const [modal, setModal] = useState(openCheckout && s?.order_id ? 'checkout' : null);
+  const [prepayPay, setPrepayPay] = useState(null);
   const [checkoutOrderId, setCheckoutOrderId] = useState(openCheckout ? s?.order_id : null);
   const openCheckoutFor = () => {
     setCheckoutOrderId(s.order_id);
@@ -309,7 +308,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
           )}
         </div>
       ) : s.status === 'PENDING_PAYMENT' ? (
-        <PrepayPanel session={s} room={room} onPaid={() => { reload(); printTickets(s.id, { auto: true }); }} onCancelled={() => { reload(); onClose(); }} />
+        <PrepayPanel session={s} room={room} onPay={() => setPrepayPay(s)} onCancelled={() => { reload(); onClose(); }} />
       ) : (
         <div className="col">
           <div className="card flat center" style={{ borderColor: ROOM_STATUS_COLOR[room.status] }}>
@@ -332,6 +331,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
           </div>
           {['ACTIVE', 'PAUSED', 'SCHEDULED', 'CLOSED'].includes(s.status) && (
             <div className="grid grid-3" style={{ gap: 8 }}>
+              <Button size="lg" variant="warn" icon={Plus} onClick={() => setModal('plus5')}>{t('+5 นาที')}</Button>
               <Button size="lg" variant="warn" icon={Plus} onClick={() => extend(30)}>{t('เพิ่ม 30 นาที')}</Button>
               <Button size="lg" variant="warn" icon={Plus} onClick={() => extend(60)}>{t('เพิ่ม 1 ชั่วโมง')}</Button>
               <Button size="lg" icon={Timer} onClick={customExtend}>{t('กำหนดเวลาเอง')}</Button>
@@ -422,7 +422,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
             <div className="col">
               {(detail?.adjustments || []).map((a) => (
                 <div key={a.id} className="card flat small" style={{ padding: 10 }}>
-                  <div className="row between"><b>{t(ADJ_LABEL[a.type] || a.type)}{a.minutes ? ` ${a.minutes} ${t('นาที')}` : ''}</b><span className="muted">{fmtDateTime(a.created_at)}</span></div>
+                  <div className="row between"><b>{t(ADJ_LABEL[a.type] || a.type)}{a.minutes ? ` ${a.minutes} ${t('นาที')}` : ''}{a.after?.free && <Badge color="#16a34a">{t('ไม่คิดค่าบริการ')}</Badge>}</b><span className="muted">{fmtDateTime(a.created_at)}</span></div>
                   <div className="row between">
                     <span className="muted">{a.employee_name} {a.reason && `· ${a.reason}`}</span>
                     {['EXTEND', 'ADJUST'].includes(a.type) && <Button size="sm" variant="ghost" icon={Printer} onClick={() => printAdjust(s.id, { adjustmentId: a.id })}>{t('ใบปรับเวลา')}</Button>}
@@ -453,6 +453,9 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
         </Modal>
       )}
       {modal === 'deposit' && <DepositModal session={s} onClose={() => setModal(null)} onDone={() => { setModal(null); reload(); loadDetail(); }} />}
+      {/* prepay on the normal checkout screen; kept here so the "paid / change" screen stays after the room starts */}
+      {prepayPay && <Checkout prepaySession={prepayPay} onClose={() => setPrepayPay(null)} onPaid={() => { reload(); printTickets(prepayPay.id, { auto: true }); }} />}
+      {modal === 'plus5' && <QuickExtend session={s} roomName={room.name} minutes={5} onClose={() => setModal(null)} onDone={() => { setModal(null); printAdjust(s.id, { auto: true }); reload(); loadDetail(); }} />}
       {modal === 'adjust' && <AdjustTime session={s} onClose={() => setModal(null)} onDone={() => { setModal(null); reload(); loadDetail(); }} />}
     </Drawer>
   );
@@ -495,55 +498,30 @@ export function OutstandingModal({ data, onPay, onBack }) {
   );
 }
 
-/** Prepay mode: collect the whole room charge; the clock starts only after the payment is confirmed. */
-function PrepayPanel({ session, room, onPaid, onCancelled }) {
+/** Prepay mode: the room charge is paid on the normal checkout screen (same customer display); the clock starts after payment. */
+function PrepayPanel({ session, room, onPay, onCancelled }) {
   const { t, tp } = useT();
   const toast = useToast();
   const { confirm } = useDialog();
-  const { settings, shift } = useAuth();
+  const { shift } = useAuth();
   const [due, setDue] = useState(null);
-  const [method, setMethod] = useState('CASH');
-  const [cash, setCash] = useState('');
-  const [ref, setRef] = useState('');
-  const [token, setToken] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const key = useRef(uid());
+  const opened = useRef(false);
   const load = () => api.get(`/sessions/${session.id}/outstanding`).then(setDue).catch((e) => toast.error(e));
   useEffect(() => {
     load();
   }, [session.id, session.version]);
+  // right after opening the room, go straight to the payment screen
   useEffect(() => {
-    if (!due) return;
-    // customer display: what is being paid before entering the room
-    const base = { roomName: room.name, roomType: room.type_name, items: due.lines.map((l) => ({ name: l.name, qty: l.qty, unitPrice: l.unitPrice, total: l.gross, type: l.type })), subtotal: due.totals.grandTotal, total: due.totals.grandTotal, deposit: due.paid.applied, net: due.outstanding, due: due.outstanding };
-    if (method === 'CASH') pushDisplay({ ...base, mode: 'PAY_CASH', method, received: Number(cash || 0), change: Math.max(0, Number(cash || 0) - due.outstanding) });
-    else if (method === 'QR') {
-      // PromptPay QR with the exact amount on the customer screen (same as the checkout screen)
-      const p = settings?.payment || {};
-      pushDisplay({ ...base, mode: 'PAY_QR', method: 'QR', qr: { data: p.useDynamicPromptPay && p.promptPayId ? promptPayPayload(p.promptPayId, due.outstanding) : null, imageUrl: p.qrImageUrl, accountName: p.accountName, accountNumber: p.accountNumber, bankName: p.bankName } });
-    } else pushDisplay({ ...base, mode: 'PAY_OTHER', method });
-  }, [due, cash, method, settings?.payment]);
+    if (due && !opened.current && shift) {
+      opened.current = true;
+      onPay();
+    }
+  }, [due, shift]);
   if (!due) return <Loading />;
   const amount = due.outstanding;
-  const methods = Object.entries(PAYMENT_METHODS).filter(([k]) => k !== 'CREDIT' && settings?.payment?.methods?.[k] !== false);
-  const received = Number(cash || 0);
-  const ready = method === 'CASH' ? received + 0.001 >= amount : ['QR', 'TRANSFER'].includes(method) ? !!token : true;
-  const pay = async () => {
+  const pay = () => {
     if (!shift) return toast.error('กรุณาเปิดรอบการขายก่อนรับเงิน');
-    if (!ready || busy) return;
-    setBusy(true);
-    try {
-      const tender = { method, amount, ...(method === 'CASH' ? { received } : {}), ...(ref ? { reference: ref } : {}), ...(token ? { verificationToken: token } : {}) };
-      const r = await api.post(`/sessions/${session.id}/prepay`, { payments: [tender] }, { idempotencyKey: key.current });
-      toast.success(`${t('ชำระค่าห้องแล้ว เริ่มเวลา')} ${room.name}${r.change > 0 ? ` · ${t('เงินทอน')} ฿${money(r.change)}` : ''}`);
-      pushDisplay({ mode: 'SUCCESS', total: amount, paid: method === 'CASH' ? received : amount, change: r.change || 0 });
-      onPaid(r);
-    } catch (e) {
-      if (e.code === 'PREPAY_AMOUNT_MISMATCH') load();
-      toast.error(e);
-    } finally {
-      setBusy(false);
-    }
+    onPay();
   };
   const cancel = async () => {
     if (!(await confirm({ title: 'ยกเลิกการเปิดห้อง', message: 'ลูกค้ายังไม่ได้ชำระค่าห้อง ต้องการยกเลิกและปล่อยห้องว่างหรือไม่?', danger: true }))) return;
@@ -568,20 +546,7 @@ function PrepayPanel({ session, room, onPaid, onCancelled }) {
         {due.paid.applied > 0 && <div className="sum-line"><span>{t('หักเงินมัดจำ')}</span><span className="num">-{money(due.paid.applied)}</span></div>}
         <div className="sum-line total"><span>{t('ยอดที่ต้องชำระก่อนเข้าห้อง')}</span><b className="num">฿{money(amount)}</b></div>
       </div>
-      <Seg value={method} onChange={(v) => { setMethod(v); setToken(null); }} options={methods.map(([k, l]) => ({ value: k, label: l }))} />
-      {method === 'CASH' && (
-        <>
-          <Field label="รับเงินสด"><Input className="lg" type="number" value={cash} onChange={(e) => setCash(e.target.value)} autoFocus /></Field>
-          <div className="row" style={{ gap: 6 }}>
-            {cashQuickAmounts(amount).map((v) => <Button key={v} size="sm" onClick={() => setCash(String(v))}>{money(v, 0)}</Button>)}
-          </div>
-          {received > 0 && <div className="sum-line total"><span>{t('เงินทอน')}</span><b className="num" style={{ color: received >= amount ? 'var(--ok)' : 'var(--danger)' }}>{received >= amount ? `฿${money(received - amount)}` : `${t('ขาดอีก')} ${money(amount - received)}`}</b></div>}
-        </>
-      )}
-      {['QR', 'TRANSFER'].includes(method) && !token && <QrPayPanel method={method} amount={amount} orderId={session.order_id} onVerified={(r) => setToken(r.verificationToken)} />}
-      {token && <Badge color="#16a34a">{t('ตรวจสอบเรียบร้อย')}</Badge>}
-      {['CARD', 'OTHER'].includes(method) && <Field label="เลขอ้างอิง / Approval code"><Input value={ref} onChange={(e) => setRef(e.target.value)} /></Field>}
-      <Button size="xl" variant="primary" icon={CheckCircle2} loading={busy} disabled={!ready} onClick={pay}>{t('ยืนยันชำระค่าห้องและเริ่มเวลา')}</Button>
+      <Button size="xl" variant="primary" icon={CreditCard} onClick={pay}>{t('ชำระเงิน')} ฿{money(amount)}</Button>
       <Button variant="ghost" icon={XCircle} onClick={cancel}>{t('ยกเลิก (ปล่อยห้องว่าง)')}</Button>
     </div>
   );
@@ -659,6 +624,44 @@ function AdjustTime({ session, onClose, onDone }) {
         <Field label="เวลาสิ้นสุด"><Input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} /></Field>
       </div>
       <Field label="เหตุผล (บันทึกในประวัติ) *" style={{ marginTop: 12 }}><Input value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+    </Modal>
+  );
+}
+
+const QUICK_REASONS = ['ชดเชยปัญหาอุปกรณ์ / ไมค์ / เครื่องเสียง', 'ชดเชยรอห้อง / รอพนักงาน', 'ลูกค้าประจำ / บริการพิเศษ', 'ร้องเพลงเพลงสุดท้ายให้จบ'];
+
+/** "+5 นาที": a short extension with a reason — free by default (no charge), or charged like any extension. */
+function QuickExtend({ session, roomName, minutes, onClose, onDone }) {
+  const { t } = useT();
+  const toast = useToast();
+  const [reason, setReason] = useState('');
+  const [charge, setCharge] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (!reason.trim()) return toast.error('กรุณาระบุเหตุผล');
+    setBusy(true);
+    try {
+      await api.post(`/sessions/${session.id}/extend`, { minutes, reason: reason.trim(), free: !charge });
+      toast.success(`${t('เพิ่มเวลา')} ${minutes} ${t('นาที')}${charge ? '' : ` (${t('ไม่คิดค่าบริการ')})`}`);
+      onDone();
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={`${t('เพิ่มเวลา')} ${minutes} ${t('นาที')} · ${roomName || ''}`} onClose={onClose} footer={<Button variant="primary" icon={Plus} loading={busy} disabled={!reason.trim()} onClick={save}>{t('ยืนยันเพิ่มเวลา')} +{minutes} {t('นาที')}</Button>}>
+      <div className="col">
+        <Field label="เหตุผล (บังคับ)">
+          <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t('เช่น ไมค์มีปัญหา ชดเชยเวลาให้ลูกค้า')} autoFocus />
+        </Field>
+        <div className="row">
+          {QUICK_REASONS.map((r) => <Button key={r} size="sm" variant={reason === t(r) ? 'primary' : ''} onClick={() => setReason(t(r))}>{t(r)}</Button>)}
+        </div>
+        <Switch checked={charge} onChange={setCharge} label={t('คิดค่าบริการเวลาที่เพิ่ม (ปิด = ไม่คิดเงิน)')} />
+        <div className="xs muted">{t('บันทึกในประวัติห้องและ Activity Log พร้อมชื่อพนักงานและเหตุผล')}</div>
+      </div>
     </Modal>
   );
 }

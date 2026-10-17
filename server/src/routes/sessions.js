@@ -185,7 +185,7 @@ export async function prepayDue(c, session, settings) {
 async function startPrepaidSession(c, req, s, settings, { amount, key }) {
   const now = new Date();
   const booked = new Date(s.started_at);
-  const total = Number(s.package_minutes) + Number(s.booked_minutes) + Number(s.extension_minutes);
+  const total = Number(s.package_minutes) + Number(s.booked_minutes) + Number(s.extension_minutes) + Number(s.bonus_minutes || 0);
   const start = booked.getTime() > now.getTime() + 60000 ? booked : now;
   const end = new Date(start.getTime() + total * 60000);
   const status = start === booked ? 'SCHEDULED' : 'ACTIVE';
@@ -364,7 +364,9 @@ function alertsAfter(session, settings) {
 }
 
 r.post('/sessions/:id/extend', can('room.operate'), async (req, res) => {
-  const { minutes, reason } = parse(z.object({ minutes: z.coerce.number().int().min(1).max(24 * 60), reason: z.string().max(300).optional() }), req.body);
+  const { minutes, reason, free } = parse(z.object({ minutes: z.coerce.number().int().min(1).max(24 * 60), reason: z.string().trim().max(300).optional(), free: z.boolean().optional() }), req.body);
+  // free minutes (no charge) always need a reason — they are recorded in the history and the Activity Log
+  if (free && !reason) throw badRequest('กรุณาระบุเหตุผลของการเพิ่มเวลาโดยไม่คิดค่าบริการ');
   const settings = await getSettings();
   const out = await tx(async (c) => {
     const s = await loadSession(c, req.params.id, true);
@@ -377,15 +379,15 @@ r.post('/sessions/:id/extend', can('room.operate'), async (req, res) => {
     const reopened = s.status === 'CLOSED';
     const updated = (
       await c.query(
-        `UPDATE room_sessions SET extension_minutes = extension_minutes + $2, scheduled_end_at = $3, status = CASE WHEN status = 'CLOSED' THEN 'ACTIVE' ELSE status END,
+        `UPDATE room_sessions SET ${free ? 'bonus_minutes = bonus_minutes' : 'extension_minutes = extension_minutes'} + $2, scheduled_end_at = $3, status = CASE WHEN status = 'CLOSED' THEN 'ACTIVE' ELSE status END,
            ended_at = CASE WHEN status = 'CLOSED' THEN NULL ELSE ended_at END, version = version + 1, updated_at = now() WHERE id = $1 RETURNING *`,
         [s.id, minutes, newEnd],
       )
     ).rows[0];
     await c.query('UPDATE room_sessions SET alerts_sent = $2 WHERE id = $1', [s.id, JSON.stringify(alertsAfter(updated, settings))]);
     if (s.reservation_id) await c.query('UPDATE reservations SET end_at = GREATEST(end_at, $2), updated_at = now() WHERE id = $1', [s.reservation_id, newEnd]);
-    await c.query(`INSERT INTO room_time_adjustments(session_id, type, minutes, before, after, reason, employee_id) VALUES ($1,'EXTEND',$2,$3,$4,$5,$6)`, [s.id, minutes, { scheduled_end_at: oldEnd }, { scheduled_end_at: newEnd, reopened }, reason, req.employee.id]);
-    await logActivity(c, req, 'ROOM_EXTEND', 'room_session', s.id, { minutes, from: oldEnd, to: newEnd });
+    await c.query(`INSERT INTO room_time_adjustments(session_id, type, minutes, before, after, reason, employee_id) VALUES ($1,'EXTEND',$2,$3,$4,$5,$6)`, [s.id, minutes, { scheduled_end_at: oldEnd }, { scheduled_end_at: newEnd, reopened, free: !!free }, reason || null, req.employee.id]);
+    await logActivity(c, req, free ? 'ROOM_EXTEND_FREE' : 'ROOM_EXTEND', 'room_session', s.id, { minutes, from: oldEnd, to: newEnd, free: !!free, reason: reason || null });
     return updated;
   });
   await afterChange(settings);

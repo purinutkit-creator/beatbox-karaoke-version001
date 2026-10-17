@@ -116,7 +116,7 @@ function timeAdjust(d, el, ctx) {
       const oldEnd = a.before?.scheduled_end_at;
       const newEnd = a.after?.scheduled_end_at || d.endAt;
       const out = [];
-      if (a.minutes) out.push(kv(a.type === 'EXTEND' ? t('เพิ่มเวลา') : t('ปรับเวลา'), `${a.minutes > 0 ? '+' : ''}${tp(formatMinutesShort(Math.abs(a.minutes)))}`, { strong: true }));
+      if (a.minutes) out.push(kv(a.type === 'EXTEND' ? t('เพิ่มเวลา') : t('ปรับเวลา'), `${a.minutes > 0 ? '+' : ''}${tp(formatMinutesShort(Math.abs(a.minutes)))}${a.after?.free ? ` (${t('ไม่คิดค่าบริการ')})` : ''}`, { strong: true }));
       if (oldEnd) out.push(kv(t('เวลาสิ้นสุดเดิม'), dmy(oldEnd, tz) !== dmy(newEnd, tz) || dmy(d.startAt, tz) !== dmy(oldEnd, tz) ? `${dmy(oldEnd, tz)} ${hm(oldEnd, tz)}` : hm(oldEnd, tz)));
       out.push(hr());
       out.push(...timeLines(d.startAt, newEnd, d.minutes, tz));
