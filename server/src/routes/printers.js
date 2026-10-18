@@ -202,26 +202,10 @@ function tcpProbe(host, port, timeout = 1200) {
   });
 }
 
-/**
- * Send raw bytes to a network printer. steps = the send plan for the printer's print speed ([[byteEnd, atMs]]: the bytes
- * up to byteEnd go atMs after the start; null = all at once). Steps end only between whole commands (made by the app).
- */
-function tcpSend(host, port, data, timeout = 5000, steps = null) {
+function tcpSend(host, port, data, timeout = 5000) {
   return new Promise((resolve, reject) => {
-    const s = net.createConnection({ host, port }, async () => {
-      if (!steps) return s.end(data, () => resolve(true));
-      s.setNoDelay(true); // send each small piece at once (no Nagle batching) so the paper moves steadily
-      const t0 = Date.now();
-      let from = 0;
-      for (const [end, at] of steps) {
-        if (s.destroyed) return;
-        const w = t0 + at - Date.now();
-        if (w > 0) await new Promise((r) => setTimeout(r, w));
-        s.write(data.subarray(from, Math.min(end, data.length)));
-        from = end;
-      }
-      if (from < data.length) s.write(data.subarray(from));
-      s.end(() => resolve(true));
+    const s = net.createConnection({ host, port }, () => {
+      s.end(data, () => resolve(true));
     });
     s.setTimeout(timeout, () => {
       s.destroy();
@@ -267,20 +251,13 @@ r.post('/printers/discover', can('settings.manage'), async (req, res) => {
  * to a network printer. Nothing is rasterized here; the job row is the one the browser queue created.
  */
 r.post('/printers/:id/raw', async (req, res) => {
-  const { data, jobId, steps } = parse(
-    z.object({
-      data: z.string().min(1),
-      jobId: z.coerce.number().int().optional().nullable(),
-      steps: z.array(z.tuple([z.number().int().min(0), z.number().int().min(0).max(600_000)])).max(20_000).optional().nullable(),
-    }),
-    req.body,
-  );
+  const { data, jobId } = parse(z.object({ data: z.string().min(1), jobId: z.coerce.number().int().optional().nullable() }), req.body);
   const p = await one('SELECT * FROM printers WHERE id = $1', [req.params.id]);
   if (!p) throw notFound();
   if (p.connection !== 'NETWORK') throw badRequest('เครื่องพิมพ์นี้ไม่ใช่ Network Printer');
   if (p.render_mode === 'DRIVER') throw badRequest('เครื่องพิมพ์นี้ตั้งเป็นไดรเวอร์ระบบ', 'PRINT_ROUTE_UNSUPPORTED');
   try {
-    await tcpSend(p.address, p.port, Buffer.from(data, 'base64'), 5000, steps || null);
+    await tcpSend(p.address, p.port, Buffer.from(data, 'base64'));
     await pool.query(`UPDATE printers SET status = 'ONLINE', last_seen_at = now() WHERE id = $1`, [p.id]);
     res.json({ ok: true, jobId: jobId || null });
   } catch (e) {

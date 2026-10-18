@@ -149,11 +149,9 @@ function qrCommand(value, sizeMm) {
   ];
 }
 
-// Print speed of a printer: 0 = leave it as it is · 1 (slowest, sharpest) … 9 (the printer's own top speed).
-// The data is fed so the paper moves at SPEED_MM_S[level] (9 = no limit) — this works on every printer, sending only
-// whole commands at a time. The ESC/POS speed command (GS ( K fn 50) is sent only to Epson printers: other printers
-// (e.g. generic USB "POS-80" models) don't know it and print the following data as text.
-export const SPEED_MM_S = [0, 40, 55, 70, 90, 110, 140, 170, 210, 0];
+// Print speed: only Epson printers take a speed command (GS ( K fn 50, levels 1 slowest … 9). Generic printers
+// (POS-80 / Xprinter-type) keep their speed inside the printer — set with the maker's setup tool, the Windows driver
+// or DIP switches. They print an unknown command as text, and feeding them data slowly only makes the paper stop and go.
 export const isEpson = (printer) => /epson|\btm[-_ ]?[a-z]?\d/i.test(printer?.model || '');
 export function speedCommand(printer) {
   const n = Math.round(Number(printer?.speed) || 0);

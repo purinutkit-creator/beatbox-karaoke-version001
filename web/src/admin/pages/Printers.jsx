@@ -9,6 +9,7 @@ import { useAuth } from '../../lib/store.jsx';
 import { useLive } from '../../lib/socket.js';
 import { pairDevice, transportStatus, openDrawer, getLocalPrinterId, setLocalPrinterId, paperGeometry, routeProblem, printMode, searchUsbPrinter, usbLabel, printJob } from '../../lib/print.jsx';
 import { ALERT_SOUNDS, isSoundFile, playAlert } from '../../lib/sounds.js';
+import { isEpson } from '../../lib/escpos.js';
 import { sampleData } from './Documents.jsx';
 import { DOC_TYPES, DEFAULT_ROUTING } from '@beatbox/shared/documents.js';
 import { fmtDateTime } from '@beatbox/shared/format.js';
@@ -30,18 +31,18 @@ const MODES = (f) =>
       ];
 const MODE_BADGE = { RASTER: ['#16a34a', 'ฟอนต์ที่ตั้งไว้ · ส่งตรง'], DRIVER: ['#2563eb', 'ไดรเวอร์ระบบ · ฟอนต์ที่ตั้งไว้'], ESCPOS_TEXT: ['#f97316', 'ฟอนต์ของเครื่องพิมพ์ (ESC/POS)'] };
 
-// print speed levels (mm/s match SPEED_MM_S in lib/escpos.js)
+// print speed levels of the Epson speed command (GS ( K fn 50, see lib/escpos.js)
 const SPEEDS = [
-  { value: 0, label: 'ตามเครื่องพิมพ์ (ไม่ปรับ)' },
-  { value: 1, label: '1 — ช้าที่สุด · คมชัดที่สุด (~40 มม./วินาที)' },
-  { value: 2, label: '2 — ช้า (~55 มม./วินาที)' },
-  { value: 3, label: '3 — ช้า (~70 มม./วินาที)' },
-  { value: 4, label: '4 — ค่อนข้างช้า (~90 มม./วินาที)' },
-  { value: 5, label: '5 — ปานกลาง (~110 มม./วินาที)' },
-  { value: 6, label: '6 — ค่อนข้างเร็ว (~140 มม./วินาที)' },
-  { value: 7, label: '7 — เร็ว (~170 มม./วินาที)' },
-  { value: 8, label: '8 — เร็ว (~210 มม./วินาที)' },
-  { value: 9, label: '9 — เร็วที่สุดของเครื่อง (ไม่หน่วง)' },
+  { value: 0, label: 'ตามที่ตั้งไว้ในเครื่องพิมพ์ (ไม่ส่งคำสั่ง)' },
+  { value: 1, label: '1 — ช้าที่สุด · คมชัดที่สุด' },
+  { value: 2, label: '2 — ช้า' },
+  { value: 3, label: '3 — ช้า' },
+  { value: 4, label: '4 — ค่อนข้างช้า' },
+  { value: 5, label: '5 — ปานกลาง' },
+  { value: 6, label: '6 — ค่อนข้างเร็ว' },
+  { value: 7, label: '7 — เร็ว' },
+  { value: 8, label: '8 — เร็ว' },
+  { value: 9, label: '9 — เร็วที่สุด' },
 ];
 const ALERT_KINDS = [
   { value: 'PRINTER', label: 'ลำโพงในเครื่องพิมพ์ (ปิ๊บๆ)' },
@@ -306,7 +307,8 @@ export default function Printers() {
           { key: 'marginRightMm', label: 'ขอบขวา (mm)', type: 'number', step: '0.5' },
           { key: 'marginTopMm', label: 'ขอบบน (mm)', type: 'number', step: '0.5' },
           { key: 'marginBottomMm', label: 'ขอบล่าง / เผื่อตัดกระดาษ (mm)', type: 'number', step: '0.5' },
-          { key: 'speed', label: 'ความเร็วการพิมพ์', type: 'select', options: SPEEDS, hidden: (f) => f.connection === 'BROWSER', hint: 'ใช้ได้กับทุกรุ่น: ระบบป้อนงานพิมพ์ให้เครื่องเดินกระดาษตามความเร็วที่เลือก (ทีละช่วงที่สมบูรณ์ ไม่มีตัวอักษรแปลกปน) · ทำให้ช้าลงได้ แต่เร็วเกินความเร็วสูงสุดของเครื่องไม่ได้ · ช้าลง = ตัวหนังสือคมและเข้มขึ้น · เครื่อง Epson (ใส่รุ่นในช่อง "รุ่นเครื่องพิมพ์") จะได้รับคำสั่งตั้งความเร็วของ Epson ด้วย' },
+          { key: 'speed', label: 'ความเร็วการพิมพ์', type: 'select', options: SPEEDS, hidden: (f) => f.connection === 'BROWSER' || !isEpson(f), hint: 'ส่งคำสั่งตั้งความเร็วของ Epson ให้เครื่องเดินกระดาษช้า/เร็วต่อเนื่องจริง · ช้าลง = ตัวหนังสือคมและเข้มขึ้น' },
+          { key: 'speedInfo', label: 'ความเร็วการพิมพ์', type: 'custom', full: true, hidden: (f) => f.connection === 'BROWSER' || isEpson(f), render: () => <div className="small muted">{t('เครื่องพิมพ์รุ่นทั่วไป (เช่น POS-80, Xprinter) เก็บความเร็วไว้ในตัวเครื่อง และไม่รับคำสั่งปรับความเร็วจากโปรแกรม — ตั้งได้ที่ตัวเครื่องครั้งเดียวแล้วมีผลถาวร: ใช้โปรแกรมตั้งค่าของผู้ผลิต (เช่น "Printer Tool" / "POS Printer Setting" เมนู Print Speed หรือ Density) หรือ DIP switch ใต้เครื่อง (ดูคู่มือรุ่นนั้น) · ถ้าเป็นเครื่อง Epson ให้ใส่ชื่อรุ่นในช่อง "รุ่นเครื่องพิมพ์" แล้วจะเลือกระดับความเร็วได้')}</div> },
           { key: 'copies', label: 'จำนวนใบที่ต้องการพิมพ์', type: 'number' },
           { key: 'autoPrint', label: 'พิมพ์ใบเสร็จอัตโนมัติหลังชำระเงิน', type: 'switch', switchLabel: 'เปิด' },
           { key: 'autoCut', label: 'ตัดกระดาษอัตโนมัติ', type: 'switch', switchLabel: 'เปิด' },
@@ -321,6 +323,8 @@ export default function Printers() {
         ]}
         toPayload={(f) => ({
           ...f,
+          speedInfo: undefined, // display-only field
+          speed: isEpson(f) ? Number(f.speed) || 0 : 0,
           renderMode: f.connection === 'BROWSER' ? 'DRIVER' : f.renderMode === 'ESCPOS_TEXT' ? 'ESCPOS_TEXT' : 'RASTER',
           paperWidth: f.paperPreset === 'CUSTOM' ? Number(f.paperWidth) : Number(f.paperPreset || f.paperWidth || 80),
           printableWidthMm: f.printableWidthMm === '' || f.printableWidthMm == null ? null : Number(f.printableWidthMm),

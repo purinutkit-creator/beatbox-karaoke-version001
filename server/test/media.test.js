@@ -1,8 +1,7 @@
 // Promotion slides: upload a picture / video, play it back in pieces (byte ranges), and remove files no slide uses.
-// Printers: print speed (paced network sending) and kitchen alert sounds (built-in, uploaded / recorded).
+// Printers: print speed and kitchen alert sounds (built-in, uploaded / recorded).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'node:net';
 import pg from 'pg';
 
 const DB = (process.env.TEST_DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/beatbox_test').replace(/\/[^/]+$/, '/beatbox_test_media');
@@ -167,28 +166,4 @@ test('printer: an uploaded / recorded sound is used, served publicly, and remove
   assert.equal(await sounds(), 1, 'still used → kept');
   await api('PUT', `/printers/${p.body.id}`, printerBody({ name: 'ครัว 2', kitchenAlert: 'DEVICE', alertSound: 'ding' }));
   assert.equal(await sounds(), 0, 'no printer uses it → removed');
-});
-
-test('printer: network printing follows the send plan of the print speed (and goes at once when not set)', async () => {
-  const got = [];
-  const fake = net.createServer((sock) => {
-    const t0 = Date.now();
-    let n = 0;
-    sock.on('data', (d) => (n += d.length));
-    sock.on('end', () => got.push({ n, ms: Date.now() - t0 }));
-  });
-  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
-  const p = await api('POST', '/printers', printerBody({ name: 'เครือข่าย', port: fake.address().port }));
-  const data = Buffer.alloc(20000, 0x55).toString('base64');
-  const fast = await api('POST', `/printers/${p.body.id}/raw`, { data });
-  assert.equal(fast.status, 200, JSON.stringify(fast.body));
-  // the app's send plan: 4 whole commands of 5 000 bytes, the last one 0.5 s after the start
-  const slow = await api('POST', `/printers/${p.body.id}/raw`, { data, steps: [[5000, 0], [10000, 170], [15000, 340], [20000, 500]] });
-  assert.equal(slow.status, 200);
-  await new Promise((r) => setTimeout(r, 100));
-  fake.close();
-  assert.equal(got[0].n, 20000);
-  assert.equal(got[1].n, 20000);
-  assert.ok(got[0].ms < 300, `full speed took ${got[0].ms} ms`);
-  assert.ok(got[1].ms >= 400, `paced send took only ${got[1].ms} ms`);
 });
