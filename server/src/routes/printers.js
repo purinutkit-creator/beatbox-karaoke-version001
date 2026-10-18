@@ -210,6 +210,7 @@ function tcpSend(host, port, data, timeout = 5000, steps = null) {
   return new Promise((resolve, reject) => {
     const s = net.createConnection({ host, port }, async () => {
       if (!steps) return s.end(data, () => resolve(true));
+      s.setNoDelay(true); // send each small piece at once (no Nagle batching) so the paper moves steadily
       const t0 = Date.now();
       let from = 0;
       for (const [end, at] of steps) {
