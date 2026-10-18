@@ -36,6 +36,31 @@ export const DOC_ELEMENTS = {
   footer: { label: 'ข้อความท้ายเอกสาร', text: true },
 };
 
+/**
+ * Lines inside an element that can be switched off one by one (el.hide = [keys]).
+ * Used by the receipt checklist in ตั้งค่าร้าน → ใบเสร็จ and by the document builder.
+ */
+export const ELEMENT_LINES = {
+  RECEIPT: {
+    info: [
+      { key: 'orderNo', label: 'เลขที่บิล' },
+      { key: 'issuedAt', label: 'วันที่และเวลาออกใบเสร็จ' },
+      { key: 'employee', label: 'ชื่อพนักงาน' },
+      { key: 'queue', label: 'เลขคิว' },
+      { key: 'customer', label: 'ชื่อลูกค้า' },
+    ],
+    items: [{ key: 'detail', label: 'จำนวน × ราคาต่อหน่วย และหมายเหตุของแต่ละรายการ' }],
+    totals: [
+      { key: 'subtotal', label: 'ยอดรวมก่อนส่วนลด' },
+      { key: 'discounts', label: 'ส่วนลด' },
+      { key: 'serviceCharge', label: 'ค่าบริการ (Service Charge)' },
+      { key: 'vat', label: 'VAT' },
+    ],
+    payments: [{ key: 'cashDetail', label: 'รับเงินสด / เงินทอน' }],
+    member: [{ key: 'points', label: 'คะแนนที่ใช้ / ได้รับ / คงเหลือ' }],
+  },
+};
+
 const el = (show, size, extra = {}) => ({ show, size, bold: false, align: 'left', font: '', spaceBefore: 0, spaceAfter: 0, ...extra });
 
 /** Default element settings per document type (order = array order). Sizes are in pt. */

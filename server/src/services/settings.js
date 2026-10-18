@@ -18,6 +18,7 @@ export const DEFAULT_SETTINGS = {
     accentColor: '#ec4899',
     backgroundUrl: '',
     defaultTheme: 'dark',
+    uiStyle: 'neon', // neon (Neon Night) | ocean (Ocean Glass) | luxe (Black Gold)
     currency: 'THB',
     currencySymbol: '฿',
   },

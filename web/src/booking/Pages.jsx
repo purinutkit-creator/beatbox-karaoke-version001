@@ -5,6 +5,7 @@ import { useT } from '../lib/i18n.jsx';
 import { useApp } from '../lib/store.jsx';
 import { api } from '../lib/api.js';
 import { Img, Badge, Loading, money } from '../components/ui.jsx';
+import { slideKind, youtubeId, youtubeEmbed } from '../lib/media.js';
 
 export function useCatalog() {
   const [data, setData] = useState(null);
@@ -21,7 +22,13 @@ function Banner({ banners }) {
     const id = setTimeout(() => setI((x) => (x + 1) % banners.length), (banners[i]?.duration_seconds || 6) * 1000);
     return () => clearTimeout(id);
   }, [i, banners]);
-  return banners.map((b, k) => <img key={b.id} src={b.image_url} alt="" style={{ opacity: k === i ? 0.6 : 0, transition: 'opacity 1s' }} />);
+  return banners.map((b, k) => {
+    const style = { opacity: k === i ? 0.6 : 0, transition: 'opacity 1s' };
+    const kind = slideKind(b);
+    if (kind === 'YOUTUBE') return k === i ? <iframe key={b.id} src={youtubeEmbed(youtubeId(b.image_url))} title="" allow="autoplay; encrypted-media" style={style} /> : null;
+    if (kind === 'VIDEO') return <video key={b.id} src={b.image_url} autoPlay muted loop playsInline style={style} />;
+    return <img key={b.id} src={b.image_url} alt="" style={style} />;
+  });
 }
 
 export function HomePage() {

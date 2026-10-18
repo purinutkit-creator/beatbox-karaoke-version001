@@ -96,6 +96,15 @@ export function textLines(sections, printer = {}) {
       } else if (b.t === 'item') {
         for (const l of twoCol(b.name, b.amount, width)) lines.push({ text: l, align: 'left', bold, mag });
         for (const s of b.subs || []) for (const l of wrap(`  ${s}`, width)) lines.push({ text: l, align: 'left', mag: 1 });
+      } else if (b.t === 'timebox') {
+        // printer fonts: framed block, times in double size
+        lines.push({ text: '='.repeat(cols), align: 'left', mag: 1 });
+        if (b.date) lines.push({ text: b.date, align: 'center', bold: true, mag: 1 });
+        lines.push({ text: `${b.startLabel} - ${b.endLabel}`, align: 'center', bold: true, mag: 1 });
+        lines.push({ text: `${b.start} - ${b.end}`, align: 'center', bold: true, mag: 2 });
+        if (b.startDate) lines.push({ text: `${b.startDate} - ${b.endDate}`, align: 'center', mag: 1 });
+        if (b.duration) lines.push({ text: b.duration, align: 'center', bold: true, mag: 'h' });
+        lines.push({ text: '='.repeat(cols), align: 'left', mag: 1 });
       } else if (b.t === 'hr') {
         lines.push({ text: (b.double ? '=' : '-').repeat(cols), align: 'left', mag: 1 });
       } else if (b.t === 'qr') {

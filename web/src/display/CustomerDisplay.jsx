@@ -11,26 +11,48 @@ import { getLang } from '../lib/i18n.jsx';
 import { QRCode, PinPad, money } from '../components/ui.jsx';
 import { formatMinutesShort } from '@beatbox/shared/roomPricing.js';
 import { PAYMENT_METHODS } from '@beatbox/shared/constants.js';
+import { slideKind, youtubeId, youtubeEmbed } from '../lib/media.js';
+
+/** One slide. A video plays only while it is on screen, and tells the slideshow when it has finished. */
+function Slide({ item, active, single, onEnded }) {
+  const ref = useRef(null);
+  const kind = slideKind(item);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    if (active) {
+      v.currentTime = 0;
+      v.play().catch(() => {});
+    } else v.pause();
+  }, [active]);
+  const style = { opacity: active ? 1 : 0 };
+  let media;
+  if (kind === 'YOUTUBE') media = active ? <iframe src={youtubeEmbed(youtubeId(item.image_url))} title={item.title || 'video'} allow="autoplay; encrypted-media" style={style} /> : null;
+  else if (kind === 'VIDEO')
+    media = <video ref={ref} src={item.image_url} muted playsInline autoPlay={active} loop={single} preload={active ? 'auto' : 'metadata'} onEnded={onEnded} onError={() => active && setTimeout(onEnded, 3000)} style={style} />;
+  else media = <img src={item.image_url} alt={item.title || ''} style={style} />;
+  return item.link_url && kind === 'IMAGE' ? <a href={item.link_url} target="_blank" rel="noreferrer">{media}</a> : media;
+}
 
 function Promo({ images, autoplay }) {
   const [i, setI] = useState(0);
+  const cur = images.length ? i % images.length : 0;
+  const next = () => setI((x) => (x + 1) % Math.max(1, images.length));
   useEffect(() => {
-    if (!images.length || autoplay === false) return;
-    const d = (images[i % images.length]?.duration_seconds || 8) * 1000;
-    const id = setTimeout(() => setI((x) => (x + 1) % images.length), d);
+    if (images.length < 2 || autoplay === false) return;
+    if (slideKind(images[cur]) === 'VIDEO') return; // a video file moves on when it ends
+    const d = (images[cur]?.duration_seconds || 8) * 1000;
+    const id = setTimeout(next, d);
     return () => clearTimeout(id);
-  }, [i, images, autoplay]);
+  }, [cur, images, autoplay]);
   if (!images.length)
     return (
       <div className="overlay">
         <Mic2 size={120} />
       </div>
     );
-  return images.map((img, k) => (
-    <a key={img.id} href={img.link_url || undefined} target="_blank" rel="noreferrer">
-      <img src={img.image_url} alt={img.title || ''} style={{ opacity: k === i % images.length ? 1 : 0 }} />
-    </a>
-  ));
+  const single = images.length < 2 || autoplay === false;
+  return images.map((img, k) => <Slide key={img.id} item={img} active={k === cur} single={single} onEnded={() => !single && next()} />);
 }
 
 export default function CustomerDisplay() {
@@ -278,10 +300,10 @@ function CheckInScreen({ state, socket, store }) {
               )}
               {how === 'PHONE' && (
                 <>
-                  <div className="cd-total" style={{ letterSpacing: 4, minHeight: '1.2em' }}>{phone.replace(/(\d{3})(\d{3})(\d{0,4})/, '$1-$2-$3') || '0__-___-____'}</div>
-                  <div className="numpad" style={{ width: 'min(80vw, 420px)' }}>
+                  <div className={`cd-phone ${phone ? '' : 'empty'}`}>{phone.replace(/(\d{3})(\d{3})(\d{0,4})/, '$1-$2-$3') || '0__-___-____'}</div>
+                  <div className="numpad cd-numpad">
                     {['1', '2', '3', '4', '5', '6', '7', '8', '9', 'C', '0', '⌫'].map((k) => (
-                      <button key={k} type="button" style={{ fontSize: 'clamp(22px,3vw,40px)' }} onClick={() => setPhone(k === 'C' ? '' : k === '⌫' ? phone.slice(0, -1) : (phone + k).slice(0, 10))}>{k === '⌫' ? <Delete size={26} /> : k}</button>
+                      <button key={k} type="button" className={k === 'C' || k === '⌫' ? 'fn' : ''} onClick={() => setPhone(k === 'C' ? '' : k === '⌫' ? phone.slice(0, -1) : (phone + k).slice(0, 10))}>{k === '⌫' ? <Delete size={30} strokeWidth={2.5} /> : k}</button>
                     ))}
                   </div>
                   <div className="row" style={{ justifyContent: 'center' }}>

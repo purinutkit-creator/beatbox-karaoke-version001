@@ -28,6 +28,28 @@ const hr = (double = false) => ({ t: 'hr', double });
 const qr = (value) => ({ t: 'qr', value: String(value) });
 
 /** Start / end lines: same day → date once; across midnight → the date on both sides. */
+/**
+ * The time of a room, made to be read at a glance: a framed box with START → END in big digits, the date
+ * (under each time when the session crosses midnight) and the duration on a solid bar.
+ */
+function timeBox(start, end, minutes, tz, durationLabel = 'ระยะเวลา') {
+  if (!start) return [];
+  const cross = end && dmy(start, tz) !== dmy(end, tz);
+  return [
+    {
+      t: 'timebox',
+      date: cross ? null : dmy(start, tz),
+      start: hm(start, tz),
+      end: end ? hm(end, tz) : '--:--',
+      startDate: cross ? dmy(start, tz) : null,
+      endDate: cross ? dmy(end, tz) : null,
+      startLabel: t('เริ่ม'),
+      endLabel: t('สิ้นสุด'),
+      duration: minutes != null ? `${t(durationLabel)} ${tp(formatMinutesShort(minutes))}` : null,
+    },
+  ];
+}
+
 function timeLines(start, end, minutes, tz, durationLabel = 'ระยะเวลา') {
   if (!start) return [];
   const cross = end && dmy(start, tz) !== dmy(end, tz);
@@ -79,7 +101,7 @@ function roomTicket(d, el, ctx, customer) {
     case 'room':
       return roomBlocks(d.room, d.type, d.roomNumber);
     case 'times':
-      return timeLines(d.startAt, d.endAt, d.minutes, tz);
+      return timeBox(d.startAt, d.endAt, d.minutes, tz);
     case 'info': {
       const out = [kv(t('เลขที่อ้างอิง'), d.refNo || d.sessionNo), kv(t('พนักงานเปิดห้อง'), d.employee || '-')];
       if (!customer) {
@@ -119,7 +141,7 @@ function timeAdjust(d, el, ctx) {
       if (a.minutes) out.push(kv(a.type === 'EXTEND' ? t('เพิ่มเวลา') : t('ปรับเวลา'), `${a.minutes > 0 ? '+' : ''}${tp(formatMinutesShort(Math.abs(a.minutes)))}${a.after?.free ? ` (${t('ไม่คิดค่าบริการ')})` : ''}`, { strong: true }));
       if (oldEnd) out.push(kv(t('เวลาสิ้นสุดเดิม'), dmy(oldEnd, tz) !== dmy(newEnd, tz) || dmy(d.startAt, tz) !== dmy(oldEnd, tz) ? `${dmy(oldEnd, tz)} ${hm(oldEnd, tz)}` : hm(oldEnd, tz)));
       out.push(hr());
-      out.push(...timeLines(d.startAt, newEnd, d.minutes, tz));
+      out.push(...timeBox(d.startAt, newEnd, d.minutes, tz));
       return out;
     }
     case 'info':
@@ -135,6 +157,7 @@ function receipt(s, el, ctx) {
   const tz = s.timezone;
   const tot = s.totals || {};
   const tax = s.tax || {};
+  const on = (k) => !(el.hide || []).includes(k); // lines the store switched off (ตั้งค่าร้าน → ใบเสร็จ)
   switch (el.key) {
     case 'title':
       return [text(el.text || t('ใบเสร็จรับเงิน / ใบกำกับภาษีอย่างย่อ'))];
@@ -145,12 +168,12 @@ function receipt(s, el, ctx) {
     case 'info':
       return [
         kv(t('เลขที่ใบเสร็จ'), s.receiptNo, { strong: true }),
-        s.orderNo && kv(t('เลขที่บิล'), s.orderNo),
-        kv(t('วันที่ออก'), dmyhm(s.issuedAt, tz)),
-        kv(t('พนักงาน'), s.employee || '-'),
-        s.room?.openedBy && s.room.openedBy !== s.employee && kv(t('พนักงานเปิดห้อง'), s.room.openedBy),
-        s.queueNo && kv(t('คิว'), s.queueNo),
-        s.customer?.name && kv(t('ลูกค้า'), s.customer.name),
+        on('orderNo') && s.orderNo && kv(t('เลขที่บิล'), s.orderNo),
+        on('issuedAt') && kv(t('วันที่ออก'), dmyhm(s.issuedAt, tz)),
+        on('employee') && kv(t('พนักงาน'), s.employee || '-'),
+        on('employee') && s.room?.openedBy && s.room.openedBy !== s.employee && kv(t('พนักงานเปิดห้อง'), s.room.openedBy),
+        on('queue') && s.queueNo && kv(t('คิว'), s.queueNo),
+        on('customer') && s.customer?.name && kv(t('ลูกค้า'), s.customer.name),
       ].filter(Boolean);
     case 'items':
       return (s.lines || []).map((l) => ({
@@ -158,26 +181,26 @@ function receipt(s, el, ctx) {
         name: l.type === 'PRODUCT' || !l.type ? l.name : tp(l.name),
         qty: l.qty,
         amount: money(l.gross),
-        subs: [l.qty !== 1 ? `${l.qty} × ${money(l.unitPrice)}` : null, l.discount > 0 ? `${t('ส่วนลด')} -${money(l.discount)}` : null, l.note ? `* ${l.note}` : null].filter(Boolean),
+        subs: on('detail') ? [l.qty !== 1 ? `${l.qty} × ${money(l.unitPrice)}` : null, l.discount > 0 ? `${t('ส่วนลด')} -${money(l.discount)}` : null, l.note ? `* ${l.note}` : null].filter(Boolean) : [],
       }));
     case 'totals':
       return [
-        kv(t('รวม'), money(tot.grossTotal)),
-        ...(s.discounts || []).map((x) => kv(tp(x.name), `-${money(x.amount)}`)),
-        tot.lineDiscountTotal > 0 && kv(t('ส่วนลดรายการ'), `-${money(tot.lineDiscountTotal)}`),
-        tax.scEnabled && kv(`${t('ค่าบริการ')} ${tax.scRate}%`, money(tot.serviceCharge)),
-        tax.vatEnabled && kv(`VAT ${tax.vatRate}%${tax.vatInclusive || tax.vatMode === 'INCLUSIVE' ? ` (${t('รวมใน')})` : ''}`, money(tot.vat)),
+        on('subtotal') && kv(t('รวม'), money(tot.grossTotal)),
+        ...(on('discounts') ? (s.discounts || []).map((x) => kv(tp(x.name), `-${money(x.amount)}`)) : []),
+        on('discounts') && tot.lineDiscountTotal > 0 && kv(t('ส่วนลดรายการ'), `-${money(tot.lineDiscountTotal)}`),
+        on('serviceCharge') && tax.scEnabled && kv(`${t('ค่าบริการ')} ${tax.scRate}%`, money(tot.serviceCharge)),
+        on('vat') && tax.vatEnabled && kv(`VAT ${tax.vatRate}%${tax.vatInclusive || tax.vatMode === 'INCLUSIVE' ? ` (${t('รวมใน')})` : ''}`, money(tot.vat)),
         tot.rounding ? kv(t('ปัดเศษ'), money(tot.rounding)) : null,
         hr(true),
         kv(t('ยอดรวมทั้งสิ้น'), money(tot.grandTotal), { strong: true, rel: 1.25 }),
       ].filter(Boolean);
     case 'payments':
-      return receiptPayments(s);
+      return receiptPayments(s, { cashDetail: on('cashDetail') });
     case 'member': {
       const m = s.member || (s.customer?.memberCode ? { code: s.customer.memberCode, name: s.customer.name, tier: s.customer.tier } : null);
       if (!m) return [];
       const out = [kv(t('สมาชิก'), `${m.name || ''} (${m.code})`), m.tier && kv(t('ระดับ'), m.tier)];
-      if (s.points && s.showPoints !== false) {
+      if (s.points && s.showPoints !== false && on('points')) {
         if (s.points.used > 0) out.push(kv(t('คะแนนที่ใช้'), s.points.used));
         out.push(kv(t('คะแนนที่ได้รับ'), `+${s.points.earned}`), kv(t('คะแนนคงเหลือ'), s.points.balance));
       }
@@ -197,14 +220,14 @@ function receipt(s, el, ctx) {
   }
 }
 
-function receiptPayments(s) {
+function receiptPayments(s, { cashDetail = true } = {}) {
   const tot = s.totals || {};
   const st = s.settlement;
   const out = [];
   const tender = (p) => [
     kv(`${method(p.method)}${p.reference ? ` (${p.reference})` : ''}`, money(p.amount)),
-    p.method === 'CASH' && p.received != null ? kv(`  ${t('รับเงินสด')}`, money(p.received)) : null,
-    p.method === 'CASH' && Number(p.change) > 0 ? kv(`  ${t('เงินทอน')}`, money(p.change)) : null,
+    cashDetail && p.method === 'CASH' && p.received != null ? kv(`  ${t('รับเงินสด')}`, money(p.received)) : null,
+    cashDetail && p.method === 'CASH' && Number(p.change) > 0 ? kv(`  ${t('เงินทอน')}`, money(p.change)) : null,
   ];
   if (!st) {
     // receipts issued before the settlement breakdown existed

@@ -170,7 +170,8 @@ r.post('/displays/pair', async (req, res) => {
 // ── Promotion images (Customer Display / website banners) ──
 const imgSchema = z.object({
   title: z.string().max(200).optional().nullable(),
-  imageUrl: z.string().url('ต้องเป็น URL รูปภาพ'),
+  imageUrl: z.string().trim().min(1, 'กรุณาใส่ URL รูปภาพหรือวิดีโอ').max(2000).refine((v) => /^https?:\/\//i.test(v) || v.startsWith('/'), 'ต้องเป็น URL รูปภาพหรือวิดีโอ (http/https)'),
+  mediaType: z.enum(['IMAGE', 'VIDEO']).default('IMAGE'),
   linkUrl: z.string().max(1000).optional().nullable(),
   durationSeconds: z.coerce.number().int().min(2).max(300).default(8),
   sortOrder: z.coerce.number().int().default(0),
@@ -181,14 +182,14 @@ const imgSchema = z.object({
 r.get('/promotion-images', async (_req, res) => res.json(await many('SELECT * FROM promotion_images ORDER BY sort_order, id')));
 r.post('/promotion-images', can('settings.manage'), async (req, res) => {
   const b = parse(imgSchema, req.body);
-  const row = await one(`INSERT INTO promotion_images(title, image_url, link_url, duration_seconds, sort_order, show_on_display, show_on_website, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`, [b.title, b.imageUrl, b.linkUrl, b.durationSeconds, b.sortOrder, b.showOnDisplay, b.showOnWebsite, b.isActive]);
+  const row = await one(`INSERT INTO promotion_images(title, image_url, link_url, duration_seconds, sort_order, show_on_display, show_on_website, is_active, media_type) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [b.title, b.imageUrl, b.linkUrl, b.durationSeconds, b.sortOrder, b.showOnDisplay, b.showOnWebsite, b.isActive, b.mediaType]);
   await logActivity(null, req, 'PROMO_IMAGE_CREATE', 'promotion_image', row.id, b);
   emitSync('promotion-images');
   res.json(row);
 });
 r.put('/promotion-images/:id', can('settings.manage'), async (req, res) => {
   const b = parse(imgSchema, req.body);
-  const row = await one(`UPDATE promotion_images SET title=$2, image_url=$3, link_url=$4, duration_seconds=$5, sort_order=$6, show_on_display=$7, show_on_website=$8, is_active=$9 WHERE id=$1 RETURNING *`, [req.params.id, b.title, b.imageUrl, b.linkUrl, b.durationSeconds, b.sortOrder, b.showOnDisplay, b.showOnWebsite, b.isActive]);
+  const row = await one(`UPDATE promotion_images SET title=$2, image_url=$3, link_url=$4, duration_seconds=$5, sort_order=$6, show_on_display=$7, show_on_website=$8, is_active=$9, media_type=$10 WHERE id=$1 RETURNING *`, [req.params.id, b.title, b.imageUrl, b.linkUrl, b.durationSeconds, b.sortOrder, b.showOnDisplay, b.showOnWebsite, b.isActive, b.mediaType]);
   await logActivity(null, req, 'PROMO_IMAGE_UPDATE', 'promotion_image', req.params.id, b);
   emitSync('promotion-images');
   res.json(row);

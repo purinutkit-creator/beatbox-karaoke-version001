@@ -57,7 +57,7 @@ r.get('/catalog', async (_req, res) => {
     many('SELECT id, name, room_type_ids, hours, minutes, price, included_guests, image_url, description, available_days, available_from, available_to, deposit, member_only FROM room_packages WHERE is_active AND is_online AND deleted_at IS NULL ORDER BY sort_order, id'),
     many(`SELECT id, name, type, value_type, value, image_url, description, start_date, end_date, conditions, (code IS NOT NULL) AS needs_code FROM promotions
           WHERE is_active AND is_online AND deleted_at IS NULL AND (end_date IS NULL OR end_date >= (now() AT TIME ZONE 'Asia/Bangkok')::date) ORDER BY id DESC`),
-    many('SELECT id, title, image_url, link_url, duration_seconds FROM promotion_images WHERE is_active AND show_on_website ORDER BY sort_order, id'),
+    many('SELECT id, title, image_url, link_url, duration_seconds, media_type FROM promotion_images WHERE is_active AND show_on_website ORDER BY sort_order, id'),
     many('SELECT id, name, image_url, description, points_cost, reward_type, value FROM rewards WHERE is_active AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at >= CURRENT_DATE) ORDER BY points_cost'),
   ]);
   res.json({ types, rooms, packages, promotions, banners, rewards });
@@ -67,7 +67,7 @@ r.get('/catalog', async (_req, res) => {
 r.get('/display/:code', async (req, res) => {
   const d = await one('SELECT id, pair_code, last_state FROM customer_displays WHERE pair_code = $1', [req.params.code]);
   if (!d) throw notFound('ไม่พบรหัสเชื่อมต่อ');
-  const images = await many('SELECT id, title, image_url, link_url, duration_seconds FROM promotion_images WHERE is_active AND show_on_display ORDER BY sort_order, id');
+  const images = await many('SELECT id, title, image_url, link_url, duration_seconds, media_type FROM promotion_images WHERE is_active AND show_on_display ORDER BY sort_order, id');
   const s = await getSettings();
   res.json({ code: d.pair_code, state: d.last_state, images, settings: publicSettings(s) });
 });

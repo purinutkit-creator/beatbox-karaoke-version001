@@ -100,7 +100,19 @@ export function applyAppearance(appearance = {}, lang = 'th') {
   root.setProperty('--font-receipt', `${q(receiptMain)}, ${q(receiptAlt)}, sans-serif`);
 }
 
-export function applyTheme({ primaryColor, accentColor, backgroundUrl } = {}) {
+/** App look: neon (Neon Night) · ocean (Ocean Glass) · luxe (Black Gold). */
+export const UI_STYLES = [
+  { value: 'neon', label: 'Neon Night', desc: 'ม่วง–ชมพูนีออน สไตล์คาราโอเกะ (ค่าเริ่มต้น)', primary: '#8b5cf6', accent: '#ec4899', preview: { bg: '#0d0a1a', side: '#161227', card: '#1f1936' } },
+  { value: 'ocean', label: 'Ocean Glass', desc: 'ฟ้าน้ำทะเล กระจกโปร่งแสง โค้งมน สบายตา', primary: '#06b6d4', accent: '#3b82f6', preview: { bg: '#04121c', side: '#0c2234', card: '#12304a' } },
+  { value: 'luxe', label: 'Black Gold', desc: 'ดำ–ทอง หรูหรา ขอบคม สไตล์ VIP Lounge', primary: '#d4af37', accent: '#b8860b', preview: { bg: '#09090a', side: '#131315', card: '#1a1a1d' } },
+];
+
+export function applyStyle(style) {
+  document.documentElement.dataset.style = UI_STYLES.some((s) => s.value === style) ? style : 'neon';
+}
+
+export function applyTheme({ primaryColor, accentColor, backgroundUrl, uiStyle } = {}) {
+  applyStyle(uiStyle);
   const root = document.documentElement.style;
   if (primaryColor) root.setProperty('--primary', primaryColor);
   if (accentColor) root.setProperty('--accent', accentColor);

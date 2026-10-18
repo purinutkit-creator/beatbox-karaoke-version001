@@ -23,6 +23,8 @@ const elementSchema = z.object({
   text: z.string().max(500).optional(),
   qrSize: z.coerce.number().min(QR_SIZE_LIMITS.min).max(QR_SIZE_LIMITS.max).optional(),
   logoWidth: z.coerce.number().min(10).max(80).optional(),
+  // lines inside the element the store does not want (e.g. info: ['employee', 'queue'])
+  hide: z.array(z.string().max(30)).max(20).optional(),
 });
 const layoutSchema = z.object({ order: z.array(z.string()).max(30).optional(), elements: z.record(z.string(), elementSchema).optional() });
 const routeSchema = z.object({ printerId: z.coerce.number().int().nullable().optional(), copies: z.coerce.number().int().min(1).max(5), cut: z.boolean(), auto: z.boolean() });

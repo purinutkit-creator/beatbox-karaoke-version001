@@ -7,7 +7,7 @@ import { useT } from '../../lib/i18n.jsx';
 import { api } from '../../lib/api.js';
 import { useAuth, useApp } from '../../lib/store.jsx';
 import { useLive } from '../../lib/socket.js';
-import { PRESET_FONTS, loadFont } from '../../lib/fonts.js';
+import { PRESET_FONTS, loadFont, UI_STYLES, applyStyle } from '../../lib/fonts.js';
 import { calculateBill } from '@beatbox/shared/calc.js';
 import { renderNumber, renderQueue } from '@beatbox/shared/numbering.js';
 import { PARTIAL_RULES } from '@beatbox/shared/roomPricing.js';
@@ -15,6 +15,7 @@ import { ROUNDING_MODES } from '@beatbox/shared/money.js';
 import { fmtDateTime } from '@beatbox/shared/format.js';
 import { IntegrationsTab, RoomServiceTab } from './Integrations.jsx';
 import StoreAccountTab from './StoreAccount.jsx';
+import ReceiptContent from './ReceiptContent.jsx';
 
 function useSection(key) {
   const { settings, setSettings } = useAuth();
@@ -205,6 +206,38 @@ function AppearanceTab() {
           </div>
         ))}
       </div>
+      <div className="card">
+        <h3>{t('รูปแบบหน้าตาแอป')}</h3>
+        <div className="small muted mb">{t('เลือกได้ 3 แบบ ใช้กับทุกหน้า (POS · หน้าจอลูกค้า · เว็บจอง) ทั้งโหมดมืดและโหมดสว่าง · เลือกแล้วสีหลัก/สีรองจะเปลี่ยนตามแบบ (ปรับเองต่อได้ด้านล่าง)')}</div>
+        <div className="style-pick">
+          {UI_STYLES.map((st) => (
+            <button
+              key={st.value}
+              type="button"
+              className={(gen.v.uiStyle || 'neon') === st.value ? 'on' : ''}
+              onClick={() => {
+                gen.set('uiStyle', st.value);
+                gen.set('primaryColor', st.primary);
+                gen.set('accentColor', st.accent);
+                applyStyle(st.value); // preview right away; saved with the button below
+                document.documentElement.style.setProperty('--primary', st.primary);
+                document.documentElement.style.setProperty('--accent', st.accent);
+              }}
+            >
+              <div className="sp-preview" style={{ background: st.preview.bg }}>
+                <div className="sp-side" style={{ background: st.preview.side, borderRadius: st.value === 'luxe' ? 3 : st.value === 'ocean' ? 10 : 6 }} />
+                <div className="sp-main">
+                  <div className="sp-card" style={{ background: st.preview.card, borderRadius: st.value === 'luxe' ? 3 : st.value === 'ocean' ? 10 : 6, border: st.value === 'luxe' ? `1px solid ${st.primary}55` : 'none' }} />
+                  <div className="sp-btn" style={{ background: `linear-gradient(135deg, ${st.primary}, ${st.accent})` }} />
+                </div>
+              </div>
+              <div className="sp-name">{st.label}</div>
+              <div className="sp-desc">{t(st.desc)}</div>
+            </button>
+          ))}
+        </div>
+        <SaveBar onSave={gen.save} busy={gen.busy} />
+      </div>
       <div className="grid grid-2">
         <div className="card">
           <h3>{t('สีและพื้นหลัง')}</h3>
@@ -296,6 +329,8 @@ function ReceiptQueueTab() {
     }
   };
   return (
+    <div className="col">
+    <ReceiptContent />
     <div className="grid grid-2">
       <div className="card">
         <h3>{t('ใบเสร็จ')}</h3>
@@ -328,6 +363,7 @@ function ReceiptQueueTab() {
           <Button variant="danger" onClick={() => setQueue(Math.max(0, Number(q.v.start ?? 1) - 1))}>{t('รีเซ็ตเลขคิว')}</Button>
         </div>
       </div>
+    </div>
     </div>
   );
 }

@@ -1,12 +1,49 @@
 import { useEffect, useState } from 'react';
-import { MonitorSmartphone, RefreshCw, ArrowUp, ArrowDown, ExternalLink, Copy } from 'lucide-react';
+import { MonitorSmartphone, RefreshCw, ArrowUp, ArrowDown, ExternalLink, Copy, Image as ImageIcon, Film } from 'lucide-react';
 import { CrudPage } from '../../components/Crud.jsx';
-import { PageHead, Button, Badge, Img, Switch, QRCode, useToast } from '../../components/ui.jsx';
+import { PageHead, Button, Badge, Img, Switch, QRCode, Input, useToast } from '../../components/ui.jsx';
 import { useT } from '../../lib/i18n.jsx';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive, useSocketEvent, getSocket } from '../../lib/socket.js';
 import { ensurePairCode, pushDisplay, idleDisplay } from '../../lib/display.js';
+import { slideKind, youtubeId } from '../../lib/media.js';
+
+/** Small preview of a slide (picture, video file or YouTube thumbnail). */
+function SlideThumb({ item, style }) {
+  const kind = slideKind(item);
+  if (kind === 'YOUTUBE') return <Img src={`https://img.youtube.com/vi/${youtubeId(item.image_url)}/hqdefault.jpg`} style={style} />;
+  if (kind === 'VIDEO') return <video src={item.image_url} muted playsInline preload="metadata" style={{ ...style, background: '#000' }} />;
+  return <Img src={item.image_url} style={style} />;
+}
+
+/** Picture or video for a promotion slide — added by URL (a video file link .mp4/.webm, or a YouTube link). */
+function MediaInput({ form, set }) {
+  const { t } = useT();
+  const video = form.mediaType === 'VIDEO';
+  const onUrl = (url) => {
+    set('imageUrl', url);
+    const k = slideKind({ image_url: url });
+    if (k !== 'IMAGE') set('mediaType', 'VIDEO');
+  };
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      <div className="seg">
+        <button type="button" className={!video ? 'on' : ''} onClick={() => set('mediaType', 'IMAGE')}><ImageIcon size={16} /> {t('รูปภาพ')}</button>
+        <button type="button" className={video ? 'on' : ''} onClick={() => set('mediaType', 'VIDEO')}><Film size={16} /> {t('วิดีโอ')}</button>
+      </div>
+      <div className="row nowrap">
+        <SlideThumb item={{ image_url: form.imageUrl, media_type: form.mediaType }} style={{ width: 120, height: 68, borderRadius: 8, objectFit: 'cover', flex: 'none' }} />
+        <Input value={form.imageUrl || ''} onChange={(e) => onUrl(e.target.value.trim())} placeholder={video ? 'https://.../promo.mp4  ·  https://youtu.be/...' : 'https://.../promo.jpg'} />
+      </div>
+      <div className="small muted">
+        {video
+          ? t('ใส่ลิงก์ไฟล์วิดีโอ (.mp4 / .webm) หรือลิงก์ YouTube · วิดีโอเล่นแบบปิดเสียงจนจบแล้วจึงไปสไลด์ถัดไป (YouTube ใช้ "เวลาแสดง")')
+          : t('ใส่ URL รูปภาพ (แนะนำแนวนอน 16:9)')}
+      </div>
+    </div>
+  );
+}
 
 export default function DisplaySettings() {
   const { t } = useT();
@@ -72,28 +109,28 @@ export default function DisplaySettings() {
       </div>
       <div className="mt">
         <CrudPage
-          title="รูปโปรโมชั่นบนหน้าจอลูกค้า"
+          title="รูป / วิดีโอโปรโมชั่นบนหน้าจอลูกค้า"
           endpoint="/promotion-images"
           topics={['promotion-images']}
           createPerm="settings.manage"
           editPerm="settings.manage"
           deletePerm="settings.manage"
           searchKeys={['title']}
-          defaults={{ durationSeconds: 8, sortOrder: (images?.length || 0) + 1, showOnDisplay: true, showOnWebsite: true, isActive: true }}
-          toForm={(r) => ({ id: r.id, title: r.title, imageUrl: r.image_url, linkUrl: r.link_url, durationSeconds: r.duration_seconds, sortOrder: r.sort_order, showOnDisplay: r.show_on_display, showOnWebsite: r.show_on_website, isActive: r.is_active })}
+          defaults={{ mediaType: 'IMAGE', durationSeconds: 8, sortOrder: (images?.length || 0) + 1, showOnDisplay: true, showOnWebsite: true, isActive: true }}
+          toForm={(r) => ({ id: r.id, title: r.title, imageUrl: r.image_url, mediaType: slideKind(r) === 'IMAGE' ? 'IMAGE' : 'VIDEO', linkUrl: r.link_url, durationSeconds: r.duration_seconds, sortOrder: r.sort_order, showOnDisplay: r.show_on_display, showOnWebsite: r.show_on_website, isActive: r.is_active })}
           columns={[
             { label: 'ลำดับ', render: (r) => { const i = images?.findIndex((x) => x.id === r.id); return <div className="row nowrap"><Button size="sm" variant="ghost" icon={ArrowUp} onClick={() => move(i, -1)} /><Button size="sm" variant="ghost" icon={ArrowDown} onClick={() => move(i, 1)} /></div>; } },
-            { label: 'รูป', render: (r) => <Img src={r.image_url} style={{ width: 120, height: 68, objectFit: 'cover', borderRadius: 8 }} /> },
+            { label: 'รูป / วิดีโอ', render: (r) => <div style={{ position: 'relative', width: 120 }}><SlideThumb item={r} style={{ width: 120, height: 68, objectFit: 'cover', borderRadius: 8, display: 'block' }} />{slideKind(r) !== 'IMAGE' && <span className="slide-tag"><Film size={12} /> {slideKind(r) === 'YOUTUBE' ? 'YouTube' : t('วิดีโอ')}</span>}</div> },
             { key: 'title', label: 'ชื่อ' },
-            { label: 'เวลาแสดง', render: (r) => `${r.duration_seconds} ${t('วินาที')}` },
+            { label: 'เวลาแสดง', render: (r) => (slideKind(r) === 'VIDEO' ? t('จนวิดีโอจบ') : `${r.duration_seconds} ${t('วินาที')}`) },
             { key: 'link_url', label: 'ลิงก์' },
             { label: 'แสดงที่', render: (r) => <>{r.show_on_display && <Badge>Display</Badge>} {r.show_on_website && <Badge>Website</Badge>}</> },
             { label: 'สถานะ', render: (r) => (r.is_active ? <Badge color="#16a34a">{t('เปิด')}</Badge> : <Badge color="#6b7280">{t('ปิด')}</Badge>) },
           ]}
           fields={[
             { key: 'title', label: 'ชื่อรูป' },
-            { key: 'durationSeconds', label: 'เวลาแสดงต่อรูป (วินาที)', type: 'number' },
-            { key: 'imageUrl', label: 'URL รูปภาพ', type: 'image', full: true, required: true },
+            { key: 'durationSeconds', label: 'เวลาแสดงต่อสไลด์ (วินาที)', type: 'number', hint: 'วิดีโอไฟล์จะเล่นจนจบเอง' },
+            { key: 'imageUrl', label: 'รูปภาพ / วิดีโอ', type: 'custom', full: true, required: true, render: (form, set) => <MediaInput form={form} set={set} /> },
             { key: 'linkUrl', label: 'ลิงก์ของรูป', full: true },
             { key: 'sortOrder', label: 'ลำดับ', type: 'number' },
             { key: 'isActive', label: 'สถานะ', type: 'switch', switchLabel: 'เปิดแสดง' },

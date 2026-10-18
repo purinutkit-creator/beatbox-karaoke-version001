@@ -62,6 +62,26 @@ function Block({ b, style, qrAsImage }) {
           ))}
         </div>
       );
+    case 'timebox':
+      return (
+        <div className="doc-timebox">
+          {b.date && <div className="tb-date">{b.date}</div>}
+          <div className="tb-times">
+            <div className="tb-col">
+              <div className="tb-label">{b.startLabel}</div>
+              <div className="tb-time">{b.start}</div>
+              {b.startDate && <div className="tb-sub">{b.startDate}</div>}
+            </div>
+            <div className="tb-arrow">→</div>
+            <div className="tb-col">
+              <div className="tb-label">{b.endLabel}</div>
+              <div className="tb-time">{b.end}</div>
+              {b.endDate && <div className="tb-sub">{b.endDate}</div>}
+            </div>
+          </div>
+          {b.duration && <div className="tb-duration">{b.duration}</div>}
+        </div>
+      );
     case 'hr':
       return <div className={b.double ? 'doc-hr2' : 'doc-hr'} />;
     case 'qr':
