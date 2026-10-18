@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import net from 'node:net';
 import os from 'node:os';
-import { pool, many, one } from '../db/index.js';
+import path from 'node:path';
+import multer from 'multer';
+import { pool, many, one, runAsPlatform } from '../db/index.js';
 import { requireAuth, can } from '../lib/auth.js';
 import { logActivity } from '../lib/activity.js';
 import { z, parse } from '../lib/validate.js';
@@ -10,6 +12,11 @@ import { emitSync } from '../lib/realtime.js';
 import { notify } from '../services/notifications.js';
 import { getSettings, saveSettingsSection } from '../services/settings.js';
 import { DOC_TYPES, DEFAULT_ROUTING } from '@beatbox/shared/documents.js';
+import { saveFile } from '../services/files.js';
+
+// built-in kitchen alert sounds (played by the web app); anything else is an uploaded / recorded file
+export const ALERT_SOUNDS = ['beep', 'ding', 'bell', 'chime', 'alarm', 'pop', 'speech'];
+const SOUND_FILE = /^\/uploads\/media\/[0-9a-f-]{36}\.\w+$/i;
 
 const r = Router();
 r.use(requireAuth);
@@ -22,7 +29,8 @@ const schema = z.object({
   station: z.enum(['MAIN', 'KITCHEN', 'BAR', 'PREP']).default('MAIN'),
   paperWidth: z.coerce.number().int().default(80),
   density: z.coerce.number().int().min(1).max(15).default(8),
-  speed: z.coerce.number().int().min(1).max(9).default(3),
+  // 0 = leave the printer as it is · 1 slowest … 9 fastest (ESC/POS speed command + paced sending)
+  speed: z.coerce.number().int().min(0).max(9).default(0),
   marginMm: z.coerce.number().min(0).max(10).default(2),
   copies: z.coerce.number().int().min(1).max(5).default(1),
   autoPrint: z.boolean().default(true),
@@ -51,15 +59,25 @@ const schema = z.object({
   model: z.string().max(100).optional().nullable(),
   beepKitchen: z.boolean().default(true),
   beepTimes: z.coerce.number().int().min(1).max(9).default(3),
+  // kitchen / bar ticket alert: printer buzzer, a sound on the device that prints, both, or none
+  kitchenAlert: z.enum(['OFF', 'PRINTER', 'DEVICE', 'BOTH']).optional(),
+  alertSound: z.string().trim().max(300).refine((v) => ALERT_SOUNDS.includes(v) || SOUND_FILE.test(v), 'เสียงแจ้งเตือนไม่ถูกต้อง').default('beep'),
+  alertSoundName: z.string().trim().max(80).optional().nullable(),
+  alertVolume: z.coerce.number().int().min(0).max(100).default(80),
+  alertOrder: z.enum(['BEFORE', 'AFTER']).default('BEFORE'),
 });
 const cols = (b) => [
   b.name, b.connection, b.address, b.port, b.station, b.paperWidth, b.density, b.speed, b.marginMm, b.copies, b.autoPrint, b.autoCut, b.openDrawer, b.isDefault, b.isActive, b.deviceId ?? null,
   b.printableWidthMm ?? null, b.marginLeftMm, b.marginRightMm, b.marginTopMm, b.marginBottomMm, b.fontScale, b.renderMode, b.allowPrinterFont, b.escposCodepage ?? null, b.charsPerLine ?? null, b.model || null,
   b.usbVendorId ?? null, b.usbProductId ?? null, b.usbSerial || null, b.beepKitchen, b.beepTimes,
+  b.kitchenAlert, b.alertSound, SOUND_FILE.test(b.alertSound) ? b.alertSoundName || null : null, b.alertVolume, b.alertOrder,
 ];
 
 /** Pick a print route that works for the connection (never refuse a USB printer like the previous update did). */
 function checkRoute(b) {
+  // older screens only send beepKitchen
+  b.kitchenAlert ??= b.beepKitchen ? 'PRINTER' : 'OFF';
+  b.beepKitchen = ['PRINTER', 'BOTH'].includes(b.kitchenAlert);
   if (b.paperWidth < 30 || b.paperWidth > 210) throw badRequest('ความกว้างกระดาษต้องอยู่ระหว่าง 30–210 มม.');
   if (b.printableWidthMm && b.printableWidthMm > b.paperWidth) throw badRequest('พื้นที่พิมพ์ต้องไม่กว้างกว่ากระดาษ');
   const raw = b.connection !== 'BROWSER';
@@ -81,8 +99,8 @@ r.post('/printers', can('settings.manage'), async (req, res) => {
   const row = await one(
     `INSERT INTO printers(name, connection, address, port, station, paper_width, density, speed, margin_mm, copies, auto_print, auto_cut, open_drawer, is_default, is_active, device_id,
        printable_width_mm, margin_left_mm, margin_right_mm, margin_top_mm, margin_bottom_mm, font_scale, render_mode, allow_printer_font, escpos_codepage, chars_per_line, model,
-       usb_vendor_id, usb_product_id, usb_serial, beep_kitchen, beep_times)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32) RETURNING *`,
+       usb_vendor_id, usb_product_id, usb_serial, beep_kitchen, beep_times, kitchen_alert, alert_sound, alert_sound_name, alert_volume, alert_order)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37) RETURNING *`,
     cols(b),
   );
   await logActivity(null, req, 'PRINTER_CREATE', 'printer', row.id, b);
@@ -100,14 +118,42 @@ r.put('/printers/:id', can('settings.manage'), async (req, res) => {
        printable_width_mm=$18, margin_left_mm=$19, margin_right_mm=$20, margin_top_mm=$21, margin_bottom_mm=$22, font_scale=$23, render_mode=$24,
        allow_printer_font=$25, escpos_codepage=$26, chars_per_line=$27, model=$28,
        usb_vendor_id=COALESCE($29, usb_vendor_id), usb_product_id=COALESCE($30, usb_product_id), usb_serial=COALESCE($31, usb_serial),
-       beep_kitchen=$32, beep_times=$33
+       beep_kitchen=$32, beep_times=$33, kitchen_alert=$34, alert_sound=$35, alert_sound_name=$36, alert_volume=$37, alert_order=$38
      WHERE id=$1 AND deleted_at IS NULL RETURNING *`,
     [req.params.id, ...cols(b)],
   );
   if (!row) throw notFound();
   await logActivity(null, req, 'PRINTER_UPDATE', 'printer', req.params.id, b);
+  await cleanupSounds();
   emitSync('printers');
   res.json(row);
+});
+
+// ── Kitchen alert sounds: uploaded files or recordings made in the browser (served at /uploads/media like slides) ──
+const SOUND_MIME = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.webm': 'audio/webm' };
+const soundUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 3 * 1024 * 1024 },
+  fileFilter: (_req, f, cb) => (SOUND_MIME[path.extname(f.originalname).toLowerCase()] ? cb(null, true) : cb(Object.assign(new Error('รองรับเฉพาะไฟล์เสียง .mp3 .wav .ogg .m4a .aac .webm'), { status: 400 }))),
+});
+
+/** Remove sound files no printer of any store uses any more (kept for an hour so a form still open can be saved). */
+async function cleanupSounds() {
+  await runAsPlatform(() =>
+    pool.query(
+      `DELETE FROM stored_files f WHERE f.kind = 'SOUND' AND f.created_at < now() - interval '1 hour'
+       AND NOT EXISTS (SELECT 1 FROM printers p WHERE p.deleted_at IS NULL AND p.alert_sound LIKE '/uploads/media/' || f.id || '.%')`,
+    ),
+  );
+}
+
+r.post('/printers/sounds', can('settings.manage'), (req, res, next) => soundUpload.single('file')(req, res, (e) => (e ? res.status(400).json({ error: e.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์เสียงใหญ่เกินไป (ไม่เกิน 3 MB)' : e.message }) : next())), async (req, res) => {
+  if (!req.file) throw badRequest('กรุณาเลือกไฟล์เสียง');
+  const ext = path.extname(req.file.originalname).toLowerCase();
+  await cleanupSounds();
+  const file = await saveFile(null, { kind: 'SOUND', name: req.file.originalname, mime: SOUND_MIME[ext], buffer: req.file.buffer });
+  await logActivity(null, req, 'ALERT_SOUND_UPLOAD', 'printer', null, { name: req.file.originalname, size: req.file.size });
+  res.json({ url: `/uploads/media/${file.id}${ext}`, name: String(req.body?.name || req.file.originalname.replace(/\.[^.]+$/, '')).slice(0, 80) });
 });
 
 /** Delete a printer: it disappears from every list and from document routing (past print jobs keep their history). */
@@ -156,10 +202,21 @@ function tcpProbe(host, port, timeout = 1200) {
   });
 }
 
-function tcpSend(host, port, data, timeout = 5000) {
+/**
+ * Send raw bytes to a network printer. pace = bytes per second (0 = as fast as possible): the data is fed in small
+ * steps so the paper moves at the speed set for the printer (a printer cannot print faster than the data arrives).
+ */
+function tcpSend(host, port, data, timeout = 5000, pace = 0) {
   return new Promise((resolve, reject) => {
-    const s = net.createConnection({ host, port }, () => {
-      s.end(data, () => resolve(true));
+    const s = net.createConnection({ host, port }, async () => {
+      if (!pace) return s.end(data, () => resolve(true));
+      const step = Math.max(64, Math.ceil(pace / 50)); // 20 ms of printing per write
+      for (let i = 0; i < data.length && !s.destroyed; i += step) {
+        const t0 = Date.now();
+        s.write(data.subarray(i, i + step));
+        await new Promise((r) => setTimeout(r, Math.max(0, (step / pace) * 1000 - (Date.now() - t0))));
+      }
+      s.end(() => resolve(true));
     });
     s.setTimeout(timeout, () => {
       s.destroy();
@@ -205,13 +262,13 @@ r.post('/printers/discover', can('settings.manage'), async (req, res) => {
  * to a network printer. Nothing is rasterized here; the job row is the one the browser queue created.
  */
 r.post('/printers/:id/raw', async (req, res) => {
-  const { data, jobId } = parse(z.object({ data: z.string().min(1), jobId: z.coerce.number().int().optional().nullable() }), req.body);
+  const { data, jobId, pace } = parse(z.object({ data: z.string().min(1), jobId: z.coerce.number().int().optional().nullable(), pace: z.coerce.number().int().min(0).max(10_000_000).default(0) }), req.body);
   const p = await one('SELECT * FROM printers WHERE id = $1', [req.params.id]);
   if (!p) throw notFound();
   if (p.connection !== 'NETWORK') throw badRequest('เครื่องพิมพ์นี้ไม่ใช่ Network Printer');
   if (p.render_mode === 'DRIVER') throw badRequest('เครื่องพิมพ์นี้ตั้งเป็นไดรเวอร์ระบบ', 'PRINT_ROUTE_UNSUPPORTED');
   try {
-    await tcpSend(p.address, p.port, Buffer.from(data, 'base64'));
+    await tcpSend(p.address, p.port, Buffer.from(data, 'base64'), 5000, pace);
     await pool.query(`UPDATE printers SET status = 'ONLINE', last_seen_at = now() WHERE id = $1`, [p.id]);
     res.json({ ok: true, jobId: jobId || null });
   } catch (e) {

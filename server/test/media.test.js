@@ -1,6 +1,8 @@
 // Promotion slides: upload a picture / video, play it back in pieces (byte ranges), and remove files no slide uses.
+// Printers: print speed (paced network sending) and kitchen alert sounds (built-in, uploaded / recorded).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import net from 'node:net';
 import pg from 'pg';
 
 const DB = (process.env.TEST_DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/beatbox_test').replace(/\/[^/]+$/, '/beatbox_test_media');
@@ -93,4 +95,70 @@ test('files no slide uses any more are removed', async () => {
   const slide = (await api('GET', '/promotion-images')).body.find((x) => x.media_type === 'VIDEO');
   await api('DELETE', `/promotion-images/${slide.id}`);
   assert.equal(await count(), 0); // the deleted slide's video and the never-used picture are gone
+});
+
+const printerBody = (over = {}) => ({ name: 'ครัว', connection: 'NETWORK', address: '127.0.0.1', port: 9100, station: 'KITCHEN', renderMode: 'RASTER', ...over });
+
+test('printer: speed and kitchen alert settings are saved; an old screen sending only beepKitchen still works', async () => {
+  const p = await api('POST', '/printers', printerBody({ speed: 2, kitchenAlert: 'BOTH', alertSound: 'bell', alertVolume: 60, alertOrder: 'AFTER', beepTimes: 2 }));
+  assert.equal(p.status, 200, JSON.stringify(p.body));
+  assert.equal(p.body.speed, 2);
+  assert.equal(p.body.kitchen_alert, 'BOTH');
+  assert.equal(p.body.beep_kitchen, true);
+  assert.equal(p.body.alert_sound, 'bell');
+  assert.equal(p.body.alert_order, 'AFTER');
+  const old = await api('POST', '/printers', printerBody({ name: 'บาร์', beepKitchen: false }));
+  assert.equal(old.body.kitchen_alert, 'OFF');
+  assert.equal(old.body.speed, 0); // never changes a printer unless asked
+  const bad = await api('PUT', `/printers/${p.body.id}`, printerBody({ alertSound: 'https://evil.example/x.mp3' }));
+  assert.equal(bad.status, 400);
+  const tooFast = await api('PUT', `/printers/${p.body.id}`, printerBody({ speed: 12 }));
+  assert.equal(tooFast.status, 400);
+});
+
+test('printer: an uploaded / recorded sound is used, served publicly, and removed once no printer uses it', async () => {
+  const fd = new FormData();
+  fd.append('file', new Blob([Buffer.from('fake-recording')], { type: 'audio/webm' }), 'ออเดอร์มาแล้ว.webm');
+  const up = await api('POST', '/printers/sounds', null, { form: fd });
+  assert.equal(up.status, 200, JSON.stringify(up.body));
+  assert.match(up.body.url, /^\/uploads\/media\/[0-9a-f-]{36}\.webm$/);
+  const wrong = new FormData();
+  wrong.append('file', new Blob([Buffer.from('x')]), 'notes.txt');
+  assert.equal((await api('POST', '/printers/sounds', null, { form: wrong })).status, 400);
+  const p = await api('POST', '/printers', printerBody({ name: 'ครัว 2', kitchenAlert: 'DEVICE', alertSound: up.body.url, alertSoundName: 'ออเดอร์มาแล้ว' }));
+  assert.equal(p.body.alert_sound, up.body.url);
+  assert.equal(p.body.alert_sound_name, 'ออเดอร์มาแล้ว');
+  const f = await fetch(base + up.body.url);
+  assert.equal(f.status, 200);
+  assert.equal(f.headers.get('content-type'), 'audio/webm');
+  const { pool, runAsPlatform } = await import('../src/db/index.js');
+  const sounds = () => runAsPlatform(async () => Number((await pool.query(`SELECT count(*) FROM stored_files WHERE kind = 'SOUND'`)).rows[0].count));
+  await runAsPlatform(() => pool.query(`UPDATE stored_files SET created_at = now() - interval '2 hours' WHERE kind = 'SOUND'`));
+  await api('PUT', `/printers/${p.body.id}`, printerBody({ name: 'ครัว 2', kitchenAlert: 'DEVICE', alertSound: up.body.url }));
+  assert.equal(await sounds(), 1, 'still used → kept');
+  await api('PUT', `/printers/${p.body.id}`, printerBody({ name: 'ครัว 2', kitchenAlert: 'DEVICE', alertSound: 'ding' }));
+  assert.equal(await sounds(), 0, 'no printer uses it → removed');
+});
+
+test('printer: network printing is fed at the chosen speed (and at full speed when not set)', async () => {
+  const got = [];
+  const fake = net.createServer((sock) => {
+    const t0 = Date.now();
+    let n = 0;
+    sock.on('data', (d) => (n += d.length));
+    sock.on('end', () => got.push({ n, ms: Date.now() - t0 }));
+  });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  const p = await api('POST', '/printers', printerBody({ name: 'เครือข่าย', port: fake.address().port }));
+  const data = Buffer.alloc(20000, 0x55).toString('base64');
+  const fast = await api('POST', `/printers/${p.body.id}/raw`, { data });
+  assert.equal(fast.status, 200, JSON.stringify(fast.body));
+  const slow = await api('POST', `/printers/${p.body.id}/raw`, { data, pace: 40000 }); // 20 000 bytes at 40 000 bytes/s ≈ 0.5 s
+  assert.equal(slow.status, 200);
+  await new Promise((r) => setTimeout(r, 100));
+  fake.close();
+  assert.equal(got[0].n, 20000);
+  assert.equal(got[1].n, 20000);
+  assert.ok(got[0].ms < 300, `full speed took ${got[0].ms} ms`);
+  assert.ok(got[1].ms >= 400, `paced send took only ${got[1].ms} ms`);
 });

@@ -149,11 +149,26 @@ function qrCommand(value, sizeMm) {
   ];
 }
 
+// Print speed of a printer: 0 = leave it as it is · 1 (slowest, sharpest) … 9 (fastest).
+// Paper speed (mm/s) the data is fed at for each level (9 = no limit), and the ESC/POS speed command
+// GS ( K fn 50 (Epson and compatible printers; others skip it). Sent after every ESC @, which resets it.
+export const SPEED_MM_S = [0, 40, 55, 70, 90, 110, 140, 170, 210, 0];
+export function speedCommand(level) {
+  const n = Math.round(Number(level) || 0);
+  return n >= 1 && n <= 9 ? [GS, 0x28, 0x4b, 0x02, 0x00, 0x32, n] : [];
+}
+
+/** Approximate paper length (mm) of text lines — to feed the data at the chosen print speed. */
+export function linesLengthMm(lines) {
+  return lines.reduce((a, l) => a + (l.skipped ? 0 : l.qr ? 30 : l.mag === 2 ? 7.5 : 3.75), 15);
+}
+
 /** Lines → ESC/POS bytes (copies, cut and cash drawer per job). */
 export function encodeLines(lines, printer = {}, { copies = 1, cut = true, drawer = false } = {}) {
   const out = [];
   for (let c = 0; c < copies; c++) {
     out.push(ESC, 0x40); // init
+    out.push(...speedCommand(printer.speed));
     if (printer.escpos_codepage != null && printer.escpos_codepage !== '') out.push(ESC, 0x74, Number(printer.escpos_codepage));
     for (const l of lines) {
       if (l.skipped) continue;

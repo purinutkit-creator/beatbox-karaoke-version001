@@ -14,9 +14,10 @@
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { api, LS } from './api.js';
-import { translate } from './i18n.jsx';
+import { translate, getLang } from './i18n.jsx';
 import { buildDoc } from './docs.js';
-import { textLines, encodeLines, DRAWER_KICK } from './escpos.js';
+import { textLines, encodeLines, DRAWER_KICK, speedCommand, linesLengthMm, SPEED_MM_S } from './escpos.js';
+import { playAlert } from './sounds.js';
 import { DocView } from '../components/DocView.jsx';
 import { loadFont } from './fonts.js';
 
@@ -188,12 +189,14 @@ async function rasterBytes(pages, printer, { drawer = false } = {}) {
     await Promise.all([...host.querySelectorAll('img')].map((img) => (img.complete ? null : new Promise((r) => ((img.onload = r), (img.onerror = r))))));
     await new Promise((r) => setTimeout(r, 60));
     const out = [];
+    let lengthMm = 0;
     const nodes = [...host.querySelectorAll('.raster-page')];
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i];
       const scale = widthDots / node.getBoundingClientRect().width;
       const canvas = await html2canvas(node, { backgroundColor: '#ffffff', scale, useCORS: true, logging: false });
-      out.push(canvasToEscPos(canvas, widthDots, { density: Number(printer.density || 8), cut: pages[i].cut, drawer: drawer && i === nodes.length - 1 }));
+      out.push(canvasToEscPos(canvas, widthDots, { density: Number(printer.density || 8), speed: printer.speed, cut: pages[i].cut, drawer: drawer && i === nodes.length - 1 }));
+      lengthMm += canvas.height / DOTS_PER_MM + 4;
     }
     const all = new Uint8Array(out.reduce((a, c) => a + c.length, 0));
     let o = 0;
@@ -201,14 +204,14 @@ async function rasterBytes(pages, printer, { drawer = false } = {}) {
       all.set(c, o);
       o += c.length;
     }
-    return all;
+    return { bytes: all, lengthMm };
   } finally {
     root.unmount();
     host.remove();
   }
 }
 
-function canvasToEscPos(canvas, widthDots, { density = 8, cut = true, drawer = false } = {}) {
+function canvasToEscPos(canvas, widthDots, { density = 8, speed = 0, cut = true, drawer = false } = {}) {
   const ESC = 0x1b;
   const GS = 0x1d;
   const w = Math.min(widthDots, canvas.width);
@@ -223,7 +226,7 @@ function canvasToEscPos(canvas, widthDots, { density = 8, cut = true, drawer = f
       if (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] < threshold) raster[y * bytesPerRow + (x >> 3)] |= 0x80 >> (x & 7);
     }
   }
-  const parts = [[ESC, 0x40]];
+  const parts = [[ESC, 0x40], speedCommand(speed)];
   for (let y = 0; y < h; y += 255) {
     const rows = Math.min(255, h - y);
     parts.push([GS, 0x76, 0x30, 0x00, bytesPerRow & 0xff, (bytesPerRow >> 8) & 0xff, rows & 0xff, (rows >> 8) & 0xff]);
@@ -239,6 +242,30 @@ function canvasToEscPos(canvas, widthDots, { density = 8, cut = true, drawer = f
     o += p.length;
   }
   return out;
+}
+
+/**
+ * Kitchen / bar ticket alert of a printer: its buzzer, a sound on this device, both or none,
+ * and whether the sound comes before or after the ticket prints.
+ */
+export function kitchenAlert(printer, mode = printMode(printer)) {
+  const kind = printer.kitchen_alert || (printer.beep_kitchen === false ? 'OFF' : 'PRINTER');
+  return {
+    buzzer: ['PRINTER', 'BOTH'].includes(kind) && mode !== 'DRIVER',
+    device: ['DEVICE', 'BOTH'].includes(kind),
+    after: printer.alert_order === 'AFTER',
+    sound: printer.alert_sound || 'beep',
+    times: printer.beep_times || 3,
+    volume: printer.alert_volume ?? 80,
+  };
+}
+
+/** The sound of a kitchen alert on this device (resolves when it has finished). */
+export function playKitchenAlert(al, data = {}) {
+  const lang = getLang();
+  const where = data.room || data.queueNo;
+  const text = lang === 'en' ? `New order${where ? `, ${where}` : ''}` : `มีออเดอร์ใหม่${where ? ` ${where}` : ''}`;
+  return playAlert(al.sound, { times: al.times, volume: al.volume, text, lang });
 }
 
 /** Buzzer: ESC B n t — n beeps of t × 50 ms. */
@@ -259,6 +286,30 @@ function concatBytes(parts) {
 
 // ── raw transports ──
 const handles = {};
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Write bytes in steps of at most maxStep. pace = bytes per second (0 = as fast as possible): the data is fed at the
+ * print speed set for the printer, so the paper really moves at that speed (a printer cannot print faster than its data
+ * arrives). Based on elapsed time, so a throttled background tab still keeps the average speed.
+ */
+async function paced(bytes, pace, maxStep, write) {
+  if (!pace) {
+    for (let i = 0; i < bytes.length; i += maxStep) await write(bytes.subarray(i, i + maxStep));
+    return;
+  }
+  const t0 = performance.now();
+  let sent = 0;
+  while (sent < bytes.length) {
+    const due = Math.min(bytes.length, Math.max(sent + 64, Math.floor(((performance.now() - t0) / 1000) * pace)));
+    while (sent < due) {
+      const n = Math.min(maxStep, due - sent);
+      await write(bytes.subarray(sent, sent + n));
+      sent += n;
+    }
+    if (sent < bytes.length) await wait(20);
+  }
+}
 
 const usbMatches = (dev, p) =>
   (!p?.usb_vendor_id || dev.vendorId === Number(p.usb_vendor_id)) && (!p?.usb_product_id || dev.productId === Number(p.usb_product_id)) && (!p?.usb_serial || !dev.serialNumber || dev.serialNumber === p.usb_serial);
@@ -284,7 +335,7 @@ export function usbLabel(dev) {
   return [dev.manufacturerName, dev.productName].filter(Boolean).join(' ') || `USB ${dev.vendorId.toString(16).padStart(4, '0')}:${dev.productId.toString(16).padStart(4, '0')}`;
 }
 
-async function sendUsb(bytes, printer) {
+async function sendUsb(bytes, printer, pace = 0) {
   if (!navigator.usb) throw new PrintError(t('เบราว์เซอร์นี้ไม่รองรับการพิมพ์ผ่าน USB (ใช้ Google Chrome หรือ Microsoft Edge)'), 'TRANSPORT');
   const devices = await navigator.usb.getDevices();
   let dev = devices.find((d) => usbMatches(d, printer)) || (!printer?.usb_vendor_id ? devices[0] : null);
@@ -302,7 +353,7 @@ async function sendUsb(bytes, printer) {
     if (!iface) throw new PrintError(t('อุปกรณ์นี้ไม่ใช่เครื่องพิมพ์ (ไม่มีช่องส่งข้อมูล)'), 'USB_NOT_PRINTER');
     if (!iface.claimed) await dev.claimInterface(iface.interfaceNumber);
     const ep = iface.alternate.endpoints.find((e) => e.direction === 'out');
-    for (let i = 0; i < bytes.length; i += 16384) await dev.transferOut(ep.endpointNumber, bytes.slice(i, i + 16384));
+    await paced(bytes, pace, 16384, (chunk) => dev.transferOut(ep.endpointNumber, chunk));
     handles.usb = dev;
   } catch (e) {
     if (e instanceof PrintError) throw e;
@@ -317,14 +368,17 @@ async function sendUsb(bytes, printer) {
   }
 }
 
-async function sendSerial(bytes) {
+async function sendSerial(bytes, pace = 0) {
   if (!navigator.serial) throw new PrintError(t('เบราว์เซอร์นี้ไม่รองรับ Web Serial (ใช้ Chrome/Edge)'), 'TRANSPORT');
   let port = handles.serial || (await navigator.serial.getPorts())[0];
   if (!port) port = await navigator.serial.requestPort();
   if (!port.writable) await port.open({ baudRate: 9600 });
   const w = port.writable.getWriter();
-  await w.write(bytes);
-  w.releaseLock();
+  try {
+    await paced(bytes, pace, 4096, (chunk) => w.write(chunk));
+  } finally {
+    w.releaseLock();
+  }
   handles.serial = port;
 }
 
@@ -349,14 +403,10 @@ export async function connectBluetooth() {
   return device.name;
 }
 
-async function sendBluetooth(bytes) {
+async function sendBluetooth(bytes, pace = 0) {
   if (!handles.ble?.device?.gatt?.connected) await connectBluetooth();
   const { ch } = handles.ble;
-  for (let i = 0; i < bytes.length; i += 180) {
-    const chunk = bytes.slice(i, i + 180);
-    if (ch.properties.writeWithoutResponse) await ch.writeValueWithoutResponse(chunk);
-    else await ch.writeValue(chunk);
-  }
+  await paced(bytes, pace, 180, (chunk) => (ch.properties.writeWithoutResponse ? ch.writeValueWithoutResponse(chunk) : ch.writeValue(chunk)));
 }
 
 function toBase64(bytes) {
@@ -365,11 +415,12 @@ function toBase64(bytes) {
   return btoa(s);
 }
 
-async function sendRaw(printer, bytes, jobId) {
-  if (printer.connection === 'NETWORK') return api.post(`/printers/${printer.id}/raw`, { data: toBase64(bytes), jobId });
-  if (printer.connection === 'USB') return sendUsb(bytes, printer);
-  if (printer.connection === 'SERIAL') return sendSerial(bytes);
-  if (printer.connection === 'BLUETOOTH') return sendBluetooth(bytes);
+async function sendRaw(printer, bytes, jobId, pace = 0) {
+  pace = Math.round(pace || 0);
+  if (printer.connection === 'NETWORK') return api.post(`/printers/${printer.id}/raw`, { data: toBase64(bytes), jobId, pace });
+  if (printer.connection === 'USB') return sendUsb(bytes, printer, pace);
+  if (printer.connection === 'SERIAL') return sendSerial(bytes, pace);
+  if (printer.connection === 'BLUETOOTH') return sendBluetooth(bytes, pace);
   throw new PrintError(t('ไม่รู้จักการเชื่อมต่อเครื่องพิมพ์'), 'TRANSPORT');
 }
 
@@ -439,22 +490,34 @@ export function printJob(job) {
         for (let c = 0; c < (d.copies || 1); c++) pages.push({ sections, cut: d.cut !== false });
       }
       const mode = printMode(printer);
-      // kitchen / bar ticket: the receipt printer beeps like "a new order came in" (ESC B n t — Xprinter, Gprinter, Rongta …)
-      const beep = mode !== 'DRIVER' && printer.beep_kitchen !== false && job.docs.some((d) => d.docType === 'KITCHEN') ? beepBytes(printer.beep_times) : null;
+      // kitchen / bar ticket: the printer's buzzer (ESC B n t — Xprinter, Gprinter, Rongta …) and / or a sound on this device,
+      // before or after the ticket prints
+      const kitchenDoc = job.docs.find((d) => d.docType === 'KITCHEN');
+      const al = kitchenDoc ? kitchenAlert(printer, mode) : null;
+      const beep = al?.buzzer ? beepBytes(al.times) : null;
+      const withBeep = (bytes) => (!beep ? bytes : al.after ? concatBytes([bytes, beep]) : concatBytes([bytes.subarray(0, 2), beep, bytes.subarray(2)]));
+      if (al?.device && !al.after) await playKitchenAlert(al, kitchenDoc.data);
+      const mmPerSec = SPEED_MM_S[Number(printer.speed) || 0] || 0;
+      const t0 = Date.now();
+      let lengthMm = 0;
       if (mode === 'RASTER') {
         const img = await rasterBytes(pages, printer, { drawer: job.drawer });
-        await sendRaw(printer, beep ? concatBytes([img.subarray(0, 2), beep, img.subarray(2)]) : img, jobId);
+        lengthMm = img.lengthMm;
+        await sendRaw(printer, withBeep(img.bytes), jobId, mmPerSec && (img.bytes.length / img.lengthMm) * mmPerSec);
       } else if (mode === 'ESCPOS_TEXT') {
-        const chunks = pages.map((p, i) => encodeLines(textLines(p.sections, printer).lines, printer, { copies: 1, cut: p.cut, drawer: job.drawer && i === pages.length - 1 }));
-        const all = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
-        let o = 0;
-        for (const c of chunks) {
-          all.set(c, o);
-          o += c.length;
-        }
-        await sendRaw(printer, beep ? concatBytes([beep, all]) : all, jobId);
+        const texts = pages.map((p) => textLines(p.sections, printer).lines);
+        const chunks = texts.map((lines, i) => encodeLines(lines, printer, { copies: 1, cut: pages[i].cut, drawer: job.drawer && i === pages.length - 1 }));
+        const all = concatBytes(chunks);
+        lengthMm = texts.reduce((a, l) => a + linesLengthMm(l), 0);
+        await sendRaw(printer, withBeep(all), jobId, mmPerSec && (all.length / lengthMm) * mmPerSec);
       } else {
         await driverPrint(pages, printer);
+      }
+      if (al?.device && al.after) {
+        // the data is sent before the paper has come out: wait for the printer to finish, then the sound
+        const printMs = lengthMm ? (lengthMm / (mmPerSec || 150)) * 1000 : 1500;
+        await wait(Math.min(8000, Math.max(0, printMs - (Date.now() - t0))));
+        await playKitchenAlert(al, kitchenDoc.data);
       }
       if (jobId) api.patch(`/print-jobs/${jobId}`, { status: 'PRINTED' }).catch(() => {});
       return { ok: true, jobId };

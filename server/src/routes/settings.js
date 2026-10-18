@@ -205,11 +205,11 @@ async function cleanupMedia(graceMinutes = 60) {
   );
 }
 
-/** Public handler for /uploads/media — answers byte ranges, which iPad / Smart TV browsers need to play a video. */
+/** Public handler for /uploads/media (promotion slides, kitchen alert sounds) — answers byte ranges, which iPad / Smart TV browsers need to play a video. */
 export async function serveMedia(req, res, next) {
   const id = mediaFileId(`/uploads/media/${req.params.name}`);
   if (!id) return next();
-  const f = await one(`SELECT mime, octet_length(data) AS size FROM stored_files WHERE id = $1 AND kind = 'PROMO_MEDIA'`, [id]).catch(() => null);
+  const f = await one(`SELECT mime, octet_length(data) AS size FROM stored_files WHERE id = $1 AND kind IN ('PROMO_MEDIA','SOUND')`, [id]).catch(() => null);
   if (!f) return next();
   const size = Number(f.size);
   res.set({ 'Content-Type': f.mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*' });

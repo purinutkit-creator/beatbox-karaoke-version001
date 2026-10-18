@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react';
-import { Printer, Search, Bluetooth, Usb, Network, Cable, Activity, FileText, Wallet, RotateCcw, Copy, Route, ListOrdered, Info, CheckCheck } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Printer, Search, Bluetooth, Usb, Network, Cable, Activity, FileText, Wallet, RotateCcw, Copy, Route, ListOrdered, Info, CheckCheck, Play, Upload, Mic, Square, Bell } from 'lucide-react';
 import { CrudPage } from '../../components/Crud.jsx';
 import { Button, Modal, Badge, Input, Field, Loading, Switch, Select, Tabs, useToast } from '../../components/ui.jsx';
 import { usePrint, docLabel } from '../../components/PrintPreview.jsx';
 import { useT } from '../../lib/i18n.jsx';
-import { api } from '../../lib/api.js';
+import { api, upload } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive } from '../../lib/socket.js';
-import { pairDevice, transportStatus, openDrawer, getLocalPrinterId, setLocalPrinterId, paperGeometry, routeProblem, printMode, searchUsbPrinter, usbLabel } from '../../lib/print.jsx';
+import { pairDevice, transportStatus, openDrawer, getLocalPrinterId, setLocalPrinterId, paperGeometry, routeProblem, printMode, searchUsbPrinter, usbLabel, printJob } from '../../lib/print.jsx';
+import { ALERT_SOUNDS, isSoundFile, playAlert } from '../../lib/sounds.js';
+import { sampleData } from './Documents.jsx';
 import { DOC_TYPES, DEFAULT_ROUTING } from '@beatbox/shared/documents.js';
 import { fmtDateTime } from '@beatbox/shared/format.js';
 
@@ -28,11 +30,135 @@ const MODES = (f) =>
       ];
 const MODE_BADGE = { RASTER: ['#16a34a', 'ฟอนต์ที่ตั้งไว้ · ส่งตรง'], DRIVER: ['#2563eb', 'ไดรเวอร์ระบบ · ฟอนต์ที่ตั้งไว้'], ESCPOS_TEXT: ['#f97316', 'ฟอนต์ของเครื่องพิมพ์ (ESC/POS)'] };
 
+// print speed levels (mm/s match SPEED_MM_S in lib/escpos.js)
+const SPEEDS = [
+  { value: 0, label: 'ตามเครื่องพิมพ์ (ไม่ปรับ)' },
+  { value: 1, label: '1 — ช้าที่สุด · คมชัดที่สุด (~40 มม./วินาที)' },
+  { value: 2, label: '2 — ช้า (~55 มม./วินาที)' },
+  { value: 3, label: '3 — ช้า (~70 มม./วินาที)' },
+  { value: 4, label: '4 — ค่อนข้างช้า (~90 มม./วินาที)' },
+  { value: 5, label: '5 — ปานกลาง (~110 มม./วินาที)' },
+  { value: 6, label: '6 — ค่อนข้างเร็ว (~140 มม./วินาที)' },
+  { value: 7, label: '7 — เร็ว (~170 มม./วินาที)' },
+  { value: 8, label: '8 — เร็ว (~210 มม./วินาที)' },
+  { value: 9, label: '9 — เร็วที่สุด (ไม่จำกัด)' },
+];
+const ALERT_KINDS = [
+  { value: 'PRINTER', label: 'ลำโพงในเครื่องพิมพ์ (ปิ๊บๆ)' },
+  { value: 'DEVICE', label: 'ลำโพงของเครื่อง POS / แท็บเล็ตที่สั่งพิมพ์ (เลือกเสียงได้)' },
+  { value: 'BOTH', label: 'ทั้งสองอย่าง' },
+  { value: 'OFF', label: 'ปิดเสียง' },
+];
+const hasDeviceSound = (f) => ['DEVICE', 'BOTH'].includes(f.kitchenAlert);
+const hasAlert = (f) => f.kitchenAlert && f.kitchenAlert !== 'OFF';
+
+/** Kitchen alert sound: built-in sounds, sounds already added to other printers, upload a file or record one. */
+function SoundPicker({ form, set }) {
+  const { t } = useT();
+  const toast = useToast();
+  const { data: printers } = useLive(() => api.get('/printers'), ['printers'], []);
+  const fileRef = useRef(null);
+  const recRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [rec, setRec] = useState(null); // null | { state: 'REC', secs } | { state: 'DONE', blob, url, ext }
+  const custom = [];
+  for (const p of printers || []) if (isSoundFile(p.alert_sound) && !custom.some((c) => c.value === p.alert_sound)) custom.push({ value: p.alert_sound, label: `🎵 ${p.alert_sound_name || t('เสียงที่เพิ่มเอง')}` });
+  if (isSoundFile(form.alertSound) && !custom.some((c) => c.value === form.alertSound)) custom.push({ value: form.alertSound, label: `🎵 ${form.alertSoundName || t('เสียงที่เพิ่มเอง')}` });
+  const options = [...ALERT_SOUNDS.map((x) => ({ value: x.value, label: t(x.label) })), ...custom];
+  const preview = () => playAlert(form.alertSound, { times: 1, volume: form.alertVolume ?? 80, text: t('มีออเดอร์ใหม่ ห้อง VIP 1') });
+  const choose = (v) => {
+    set('alertSound', v);
+    set('alertSoundName', custom.find((c) => c.value === v)?.label.replace(/^🎵 /, '') || null);
+  };
+  const send = async (blob, fileName, name) => {
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      if (name) fd.append('name', name); // before the file, so the server reads it with the upload
+      fd.append('file', blob, fileName);
+      const r = await upload('/printers/sounds', fd);
+      set('alertSound', r.url);
+      set('alertSoundName', r.name);
+      setRec(null);
+      toast.success('เพิ่มเสียงแล้ว กด "บันทึก" เพื่อใช้กับเครื่องพิมพ์นี้');
+      playAlert(r.url, { volume: form.alertVolume ?? 80 });
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const record = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast.error('อุปกรณ์นี้อัดเสียงไม่ได้ — ใช้ปุ่มอัปโหลดไฟล์เสียงแทน');
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      return toast.error('ไม่ได้รับอนุญาตให้ใช้ไมโครโฟน — อนุญาตไมโครโฟนในเบราว์เซอร์แล้วลองใหม่');
+    }
+    const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find((x) => MediaRecorder.isTypeSupported?.(x)) || '';
+    const mr = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    const parts = [];
+    mr.ondataavailable = (e) => e.data.size && parts.push(e.data);
+    mr.onstop = () => {
+      stream.getTracks().forEach((x) => x.stop());
+      clearInterval(recRef.current?.timer);
+      const mime = mr.mimeType || type || 'audio/webm';
+      const blob = new Blob(parts, { type: mime });
+      const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
+      setRec({ state: 'DONE', blob, url: URL.createObjectURL(blob), ext });
+    };
+    mr.start();
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const secs = Math.floor((Date.now() - started) / 1000);
+      setRec({ state: 'REC', secs });
+      if (secs >= 15) mr.state === 'recording' && mr.stop(); // at most 15 seconds
+    }, 250);
+    recRef.current = { mr, timer };
+    setRec({ state: 'REC', secs: 0 });
+  };
+  const stop = () => recRef.current?.mr.state === 'recording' && recRef.current.mr.stop();
+  useEffect(() => () => { clearInterval(recRef.current?.timer); stop(); }, []);
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      <div className="row nowrap">
+        <Select value={form.alertSound || 'beep'} onChange={(e) => choose(e.target.value)} options={options} />
+        <Button icon={Play} onClick={preview}>{t('ฟัง')}</Button>
+      </div>
+      <input ref={fileRef} type="file" hidden accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.webm" onChange={(e) => { const f = e.target.files?.[0]; if (f) send(f, f.name); e.target.value = ''; }} />
+      {!rec && (
+        <div className="row">
+          <Button size="sm" icon={Upload} loading={busy} onClick={() => fileRef.current?.click()}>{t('อัปโหลดไฟล์เสียง')}</Button>
+          <Button size="sm" icon={Mic} onClick={record}>{t('อัดเสียงเอง')}</Button>
+        </div>
+      )}
+      {rec?.state === 'REC' && (
+        <div className="row nowrap rec-box">
+          <span className="rec-dot" /> <b>{t('กำลังอัดเสียง')} 0:{String(rec.secs).padStart(2, '0')}</b> <span className="xs muted">/ 0:15</span>
+          <Button size="sm" variant="danger" icon={Square} onClick={stop}>{t('หยุด')}</Button>
+        </div>
+      )}
+      {rec?.state === 'DONE' && (
+        <div className="col rec-box" style={{ gap: 6 }}>
+          <audio src={rec.url} controls style={{ width: '100%' }} />
+          <div className="row">
+            <Button size="sm" variant="primary" loading={busy} onClick={() => send(rec.blob, `recording.${rec.ext}`, `${t('เสียงที่อัดเอง')} ${new Date().toLocaleString('th-TH', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`)}>{t('ใช้เสียงนี้')}</Button>
+            <Button size="sm" icon={Mic} onClick={record}>{t('อัดใหม่')}</Button>
+            <Button size="sm" variant="ghost" onClick={() => setRec(null)}>{t('ยกเลิก')}</Button>
+          </div>
+        </div>
+      )}
+      <div className="xs muted">{t('ไฟล์ .mp3 .wav .ogg .m4a ไม่เกิน 3 MB · อัดเสียงได้ไม่เกิน 15 วินาที เช่น "ออเดอร์มาแล้วจ้า"')}</div>
+    </div>
+  );
+}
+
 export default function Printers() {
   const { t } = useT();
   const toast = useToast();
   const { settings, loadSettings } = useAuth();
-  const { preview } = usePrint();
+  const { preview, layouts } = usePrint();
   const [discover, setDiscover] = useState(null);
   const [usbAdded, setUsbAdded] = useState(null);
   const [searching, setSearching] = useState(false);
@@ -40,6 +166,10 @@ export default function Printers() {
   const [key, setKey] = useState(0);
   const [qrPrint, setQrPrint] = useState(localStorage.getItem('bb_print_qr_orders') !== 'false');
   const [tab, setTab] = useState('printers');
+  const testKitchen = async (p) => {
+    const r = await printJob({ printer: p, docs: [{ docType: 'KITCHEN', data: sampleData('KITCHEN', settings.store) }], layouts, record: { clientJobId: `test-kitchen-${p.id}-${Date.now()}`, reference: `TEST-${p.name}` } });
+    r.ok ? toast.success(t('พิมพ์ใบครัวทดสอบแล้ว')) : toast.error(r.suggestion ? `${r.error} — ${r.suggestion}` : r.error);
+  };
   const test = (p) => preview({ docType: 'TEST', data: { store: settings.store, timezone: settings.store.timezone, printer: p } }, { reference: `TEST-${p.name}`, title: 'ทดสอบพิมพ์' });
   const status = async (p) => {
     if (p.connection === 'NETWORK') {
@@ -136,8 +266,8 @@ export default function Printers() {
           <Button variant="primary" icon={Usb} loading={searching} onClick={searchUsb}>{t('ค้นหาเครื่องพิมพ์ USB')}</Button>
           <Button icon={Search} onClick={() => setDiscover({ printers: null, subnet: '' })}>{t('ค้นหาเครื่องพิมพ์ในเครือข่าย')}</Button>
         </>}
-        defaults={{ connection: 'USB', port: 9100, station: 'MAIN', paperWidth: 80, paperPreset: '80', printableWidthMm: '', marginLeftMm: 0, marginRightMm: 0, marginTopMm: 0, marginBottomMm: 3, fontScale: 1, renderMode: 'RASTER', allowPrinterFont: false, escposCodepage: '', charsPerLine: '', model: '', density: 8, speed: 3, marginMm: 2, copies: 1, autoPrint: true, autoCut: true, openDrawer: true, isDefault: false, isActive: true, beepKitchen: true, beepTimes: 3 }}
-        toForm={(r) => ({ id: r.id, name: r.name, connection: r.connection, address: r.address, port: r.port, station: r.station, paperWidth: r.paper_width, paperPreset: [58, 80].includes(r.paper_width) ? String(r.paper_width) : 'CUSTOM', printableWidthMm: r.printable_width_mm ?? '', marginLeftMm: r.margin_left_mm, marginRightMm: r.margin_right_mm, marginTopMm: r.margin_top_mm, marginBottomMm: r.margin_bottom_mm, fontScale: r.font_scale, renderMode: r.render_mode, allowPrinterFont: r.allow_printer_font, escposCodepage: r.escpos_codepage ?? '', charsPerLine: r.chars_per_line ?? '', model: r.model || '', density: r.density, speed: r.speed, marginMm: r.margin_mm, copies: r.copies, autoPrint: r.auto_print, autoCut: r.auto_cut, openDrawer: r.open_drawer, isDefault: r.is_default, isActive: r.is_active, beepKitchen: r.beep_kitchen !== false, beepTimes: r.beep_times || 3 })}
+        defaults={{ connection: 'USB', port: 9100, station: 'MAIN', paperWidth: 80, paperPreset: '80', printableWidthMm: '', marginLeftMm: 0, marginRightMm: 0, marginTopMm: 0, marginBottomMm: 3, fontScale: 1, renderMode: 'RASTER', allowPrinterFont: false, escposCodepage: '', charsPerLine: '', model: '', density: 8, speed: 0, marginMm: 2, copies: 1, autoPrint: true, autoCut: true, openDrawer: true, isDefault: false, isActive: true, beepKitchen: true, beepTimes: 3, kitchenAlert: 'PRINTER', alertSound: 'beep', alertSoundName: null, alertVolume: 80, alertOrder: 'BEFORE' }}
+        toForm={(r) => ({ id: r.id, name: r.name, connection: r.connection, address: r.address, port: r.port, station: r.station, paperWidth: r.paper_width, paperPreset: [58, 80].includes(r.paper_width) ? String(r.paper_width) : 'CUSTOM', printableWidthMm: r.printable_width_mm ?? '', marginLeftMm: r.margin_left_mm, marginRightMm: r.margin_right_mm, marginTopMm: r.margin_top_mm, marginBottomMm: r.margin_bottom_mm, fontScale: r.font_scale, renderMode: r.render_mode, allowPrinterFont: r.allow_printer_font, escposCodepage: r.escpos_codepage ?? '', charsPerLine: r.chars_per_line ?? '', model: r.model || '', density: r.density, speed: r.speed, marginMm: r.margin_mm, copies: r.copies, autoPrint: r.auto_print, autoCut: r.auto_cut, openDrawer: r.open_drawer, isDefault: r.is_default, isActive: r.is_active, beepKitchen: r.beep_kitchen !== false, beepTimes: r.beep_times || 3, kitchenAlert: r.kitchen_alert || (r.beep_kitchen === false ? 'OFF' : 'PRINTER'), alertSound: r.alert_sound || 'beep', alertSoundName: r.alert_sound_name, alertVolume: r.alert_volume ?? 80, alertOrder: r.alert_order || 'BEFORE' })}
         columns={[
           { label: 'เครื่องพิมพ์', render: (r) => { const I = ICON[r.connection]; return <div className="row nowrap"><I size={18} /><div><b>{r.name}</b>{r.is_default && <Badge color="#8b5cf6">{t('หลัก')}</Badge>}{local === r.id && <Badge color="#2563eb">{t('เครื่องนี้')}</Badge>}<div className="xs muted">{r.connection} {r.address && `· ${r.address}:${r.port}`}</div></div></div>; } },
           { label: 'ใช้สำหรับ', render: (r) => ({ MAIN: t('ใบเสร็จ'), KITCHEN: t('ครัว'), BAR: t('บาร์'), PREP: t('จุดเตรียม') })[r.station] },
@@ -151,6 +281,7 @@ export default function Printers() {
             {['SERIAL', 'BLUETOOTH'].includes(r.connection) && <Button size="sm" onClick={() => pair(r)}>{t('เชื่อมต่อ')}</Button>}
             <Button size="sm" variant="ghost" icon={Activity} title={t('ตรวจสอบสถานะ')} onClick={() => status(r)} />
             <Button size="sm" variant="ghost" icon={FileText} title={t('ทดสอบพิมพ์')} onClick={() => test(r)} />
+            <Button size="sm" variant="ghost" icon={Bell} title={t('ทดสอบใบครัว + เสียงเตือน')} onClick={() => testKitchen(r)} />
             <Button size="sm" variant="ghost" icon={Wallet} title={t('เปิดลิ้นชัก')} onClick={async () => { const x = await openDrawer(r); x.ok ? toast.success('เปิดลิ้นชักแล้ว') : toast.warning(x.error); api.post('/drawer/open').catch(() => {}); }} />
             <Button size="sm" variant={local === r.id ? 'primary' : ''} onClick={() => { setLocalPrinterId(r.id); setLocal(r.id); }}>{t('ใช้กับเครื่องนี้')}</Button>
             <Button size="sm" icon={CheckCheck} onClick={() => useForAll(r)}>{t('ใช้กับทุกเอกสาร')}</Button>
@@ -175,12 +306,16 @@ export default function Printers() {
           { key: 'marginRightMm', label: 'ขอบขวา (mm)', type: 'number', step: '0.5' },
           { key: 'marginTopMm', label: 'ขอบบน (mm)', type: 'number', step: '0.5' },
           { key: 'marginBottomMm', label: 'ขอบล่าง / เผื่อตัดกระดาษ (mm)', type: 'number', step: '0.5' },
+          { key: 'speed', label: 'ความเร็วการพิมพ์', type: 'select', options: SPEEDS, hidden: (f) => f.connection === 'BROWSER', hint: 'ระดับ 1–9 มีผลกับเครื่องจริง: ระบบส่งคำสั่งความเร็ว ESC/POS (เครื่องที่รองรับ เช่น Epson) และป้อนข้อมูลให้เครื่องเดินกระดาษตามความเร็วนี้ (ได้ผลทุกรุ่น) · ช้าลง = ตัวหนังสือคมและเข้มขึ้น' },
           { key: 'copies', label: 'จำนวนใบที่ต้องการพิมพ์', type: 'number' },
           { key: 'autoPrint', label: 'พิมพ์ใบเสร็จอัตโนมัติหลังชำระเงิน', type: 'switch', switchLabel: 'เปิด' },
           { key: 'autoCut', label: 'ตัดกระดาษอัตโนมัติ', type: 'switch', switchLabel: 'เปิด' },
           { key: 'openDrawer', label: 'เปิดลิ้นชักหลังรับเงินสด', type: 'switch', switchLabel: 'เปิด' },
-          { key: 'beepKitchen', label: 'เสียงเตือนเมื่อพิมพ์ใบครัว/บาร์', type: 'switch', switchLabel: 'ปิ๊บๆ เมื่อมีออเดอร์', hidden: (f) => f.connection === 'BROWSER', hint: 'ใช้ได้กับเครื่องพิมพ์ที่มีลำโพง (buzzer) เช่น Xprinter / Gprinter / Rongta' },
-          { key: 'beepTimes', label: 'จำนวนครั้งที่ดัง', type: 'number', hidden: (f) => f.connection === 'BROWSER' || !f.beepKitchen },
+          { key: 'kitchenAlert', label: 'เสียงเตือนเมื่อพิมพ์ใบครัว/บาร์', type: 'select', options: (f) => (f.connection === 'BROWSER' ? ALERT_KINDS.filter((x) => ['DEVICE', 'OFF'].includes(x.value)) : ALERT_KINDS), full: true, hint: 'ลำโพงในเครื่องพิมพ์ดังได้แค่ปิ๊บๆ (Xprinter / Gprinter / Rongta) · ถ้าต้องการเลือกเสียง อัปโหลด หรืออัดเสียงเอง ให้เลือก "ลำโพงของเครื่อง POS / แท็บเล็ต" — เสียงจะดังที่เครื่องที่สั่งพิมพ์ใบครัว' },
+          { key: 'alertSound', label: 'เสียงที่ใช้', type: 'custom', full: true, hidden: (f) => !hasDeviceSound(f), render: (form, set) => <SoundPicker form={form} set={set} /> },
+          { key: 'alertOrder', label: 'ลำดับเสียงกับการพิมพ์', type: 'select', hidden: (f) => !hasAlert(f), options: [{ value: 'BEFORE', label: 'มีเสียงก่อน แล้วค่อยพิมพ์ใบ' }, { value: 'AFTER', label: 'พิมพ์ใบก่อน แล้วค่อยมีเสียง' }] },
+          { key: 'beepTimes', label: 'จำนวนครั้งที่ดัง', type: 'number', hidden: (f) => !hasAlert(f) },
+          { key: 'alertVolume', label: 'ความดัง (0–100)', type: 'number', hidden: (f) => !hasDeviceSound(f), hint: 'ความดังของเสียงที่เครื่อง POS / แท็บเล็ต (ลำโพงเครื่องพิมพ์ปรับไม่ได้)' },
           { key: 'isDefault', label: 'เครื่องพิมพ์หลัก', type: 'switch', switchLabel: 'ตั้งเป็นเครื่องหลัก' },
           { key: 'isActive', label: 'สถานะ', type: 'switch', switchLabel: 'เปิดใช้งาน' },
         ]}
