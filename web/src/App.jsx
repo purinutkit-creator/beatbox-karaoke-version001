@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { LangProvider } from './lib/i18n.jsx';
 import { AppProvider, AuthProvider, useApp } from './lib/store.jsx';
 import { ToastProvider, DialogProvider, Loading } from './components/ui.jsx';
+import { UpdateWatcher } from './lib/version.jsx';
 
 const AdminApp = lazy(() => import('./admin/AdminApp.jsx'));
 const CustomerDisplay = lazy(() => import('./display/CustomerDisplay.jsx'));
@@ -32,6 +33,7 @@ export default function App() {
     <WithLang>
       <AppProvider>
         <DefaultLangSync />
+        <UpdateWatcher />
         <ToastProvider>
           <DialogProvider>
             <BrowserRouter>

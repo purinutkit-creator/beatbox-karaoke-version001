@@ -161,7 +161,7 @@ async function driverPrint(pages, printer) {
 
 // ── direct connection with the store font: the document is drawn exactly as on screen and sent as ESC/POS image rows ──
 const DOTS_PER_MM = 8; // 203 dpi thermal printers
-const BAND_SECONDS = 0.01; // print speed: one thin image band per ~10 ms
+const BAND_SECONDS = 0.006; // print speed: one thin image band about every 6 ms
 
 async function rasterBytes(pages, printer, { drawer = false } = {}) {
   const { default: html2canvas } = await import('html2canvas');
@@ -191,7 +191,7 @@ async function rasterBytes(pages, printer, { drawer = false } = {}) {
     await new Promise((r) => setTimeout(r, 60));
     const units = [];
     const nodes = [...host.querySelectorAll('.raster-page')];
-    // with a print speed set, the image goes in very thin bands (each a complete command), one about every 10 ms:
+    // with a print speed set, the image goes in very thin bands (each a complete command), one about every 6 ms:
     // the paper then comes out slowly and steadily instead of printing a strip, stopping, printing the next one
     const mmPerSec = SPEED_MM_S[Number(printer.speed) || 0] || 0;
     const blockRows = mmPerSec ? Math.min(255, Math.max(1, Math.round(mmPerSec * DOTS_PER_MM * BAND_SECONDS))) : 255;

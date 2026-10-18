@@ -67,6 +67,10 @@ export function createApp() {
     res.json({ ok: true, env: config.appEnv, time: new Date().toISOString() });
   });
   app.get('/api/time', (_req, res) => res.json({ now: Date.now(), iso: new Date().toISOString() }));
+  // the build of the web app this server serves — open screens compare it with their own and reload after an update
+  const indexHtml = path.join(config.webDist, 'index.html');
+  const build = fs.existsSync(indexHtml) ? fs.readFileSync(indexHtml, 'utf8').match(/index-[\w-]+\.js/)?.[0] || null : null;
+  app.get('/api/version', (_req, res) => res.set('Cache-Control', 'no-store').json({ build }));
 
   app.use('/api/platform', platformRoutes);
   app.use('/api/public', publicRoom);

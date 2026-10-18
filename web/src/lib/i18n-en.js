@@ -2638,4 +2638,5 @@ export const EN = {
   "ลำดับชิ้นส่วนไฟล์ไม่ถูกต้อง": "Invalid file piece number",
   "ชิ้นส่วนไฟล์ไม่ครบ กรุณาลองใหม่": "Incomplete file piece, please try again",
   "ไฟล์อัปโหลดไม่ครบ กรุณาลองใหม่": "The upload is incomplete, please try again",
+  "ระบบมีเวอร์ชันใหม่ — กดเพื่อโหลดใหม่": "A new version is ready — tap to reload",
 };

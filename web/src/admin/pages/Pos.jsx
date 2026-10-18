@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ShoppingCart, Trash2, Plus, Minus, CreditCard, DoorOpen, User, Percent, StickyNote, X } from 'lucide-react';
 import { Button, Modal, Badge, Empty, money, useToast, useDialog, Field, Input, Seg } from '../../components/ui.jsx';
+import { setUnsavedWork } from '../../lib/version.jsx';
 import { ProductCatalog } from '../../components/ProductCatalog.jsx';
 import { MemberPicker } from '../../components/MemberPicker.jsx';
 import Checkout from '../../components/Checkout.jsx';
@@ -17,6 +18,11 @@ export default function Pos() {
   const { prompt } = useDialog();
   const { settings, shift, can } = useAuth();
   const [cart, setCart] = useState([]);
+  // a reload for a new version must not drop a cart that is being rung up
+  useEffect(() => {
+    setUnsavedWork('pos-cart', cart.length > 0);
+    return () => setUnsavedWork('pos-cart', false);
+  }, [cart.length]);
   const [member, setMember] = useState(null);
   const [checkoutId, setCheckoutId] = useState(null);
   const [modal, setModal] = useState(null);
