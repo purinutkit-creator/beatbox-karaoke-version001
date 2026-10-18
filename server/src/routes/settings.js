@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
+import path from 'node:path';
+import multer from 'multer';
 import { pool, tx, many, one, runAsPlatform } from '../db/index.js';
 import { requireAuth, can } from '../lib/auth.js';
 import { logActivity } from '../lib/activity.js';
@@ -9,6 +11,7 @@ import { emitSync, displayOnline } from '../lib/realtime.js';
 import { notFound, badRequest, forbidden } from '../lib/errors.js';
 import { getSubscription, hasFeature, assertLimit } from '../services/subscription.js';
 import { runBackup, listBackups } from '../services/backup.js';
+import { saveFile } from '../services/files.js';
 
 const r = Router();
 r.use(requireAuth);
@@ -179,6 +182,68 @@ const imgSchema = z.object({
   showOnWebsite: z.boolean().default(true),
   isActive: z.boolean().default(true),
 });
+// Pictures / videos uploaded for promotion slides. Kept in the database (the app server keeps nothing on disk)
+// and served publicly at /uploads/media/<id>.<ext> — they are shown on the Customer Display and the website.
+const MEDIA_MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime' };
+const MEDIA_MAX = { IMAGE: 10 * 1024 * 1024, VIDEO: 40 * 1024 * 1024 };
+const MEDIA_TOTAL_MAX = 500 * 1024 * 1024; // all uploaded slides together (the database has limited space)
+const mediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MEDIA_MAX.VIDEO },
+  fileFilter: (_req, f, cb) => (MEDIA_MIME[path.extname(f.originalname).toLowerCase()] ? cb(null, true) : cb(Object.assign(new Error('รองรับเฉพาะรูป .jpg .png .webp .gif หรือวิดีโอ .mp4 .webm .mov'), { status: 400 }))),
+});
+const mediaFileId = (url) => /^\/uploads\/media\/([0-9a-f-]{36})\.\w+$/i.exec(url || '')?.[1] || null;
+
+/** Remove uploaded slide files no slide of any store uses any more (a replaced / deleted slide, or a cancelled form). */
+async function cleanupMedia(graceMinutes = 60) {
+  await runAsPlatform(() =>
+    pool.query(
+      `DELETE FROM stored_files f WHERE f.kind = 'PROMO_MEDIA' AND f.created_at < now() - make_interval(mins => $1)
+       AND NOT EXISTS (SELECT 1 FROM promotion_images p WHERE p.image_url LIKE '/uploads/media/' || f.id || '.%')`,
+      [graceMinutes],
+    ),
+  );
+}
+
+/** Public handler for /uploads/media — answers byte ranges, which iPad / Smart TV browsers need to play a video. */
+export async function serveMedia(req, res, next) {
+  const id = mediaFileId(`/uploads/media/${req.params.name}`);
+  if (!id) return next();
+  const f = await one(`SELECT mime, octet_length(data) AS size FROM stored_files WHERE id = $1 AND kind = 'PROMO_MEDIA'`, [id]).catch(() => null);
+  if (!f) return next();
+  const size = Number(f.size);
+  res.set({ 'Content-Type': f.mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*' });
+  let start = 0;
+  let end = size - 1;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+  if (m && (m[1] !== '' || m[2] !== '')) {
+    if (m[1] === '') start = Math.max(0, size - Number(m[2]));
+    else {
+      start = Number(m[1]);
+      if (m[2] !== '') end = Math.min(end, Number(m[2]));
+    }
+    end = Math.min(end, start + 4 * 1024 * 1024 - 1); // at most 4 MB per answer, the player asks for the rest
+    if (start >= size || start > end) return res.status(416).set('Content-Range', `bytes */${size}`).end();
+    res.status(206).set('Content-Range', `bytes ${start}-${end}/${size}`);
+  }
+  res.set('Content-Length', String(end - start + 1));
+  if (req.method === 'HEAD') return res.end();
+  const part = await one('SELECT substring(data FROM $2 FOR $3) AS d FROM stored_files WHERE id = $1', [id, start + 1, end - start + 1]);
+  res.end(part.d);
+}
+
+r.post('/promotion-images/upload', can('settings.manage'), (req, res, next) => mediaUpload.single('file')(req, res, (e) => (e ? res.status(400).json({ error: e.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกินไป (วิดีโอไม่เกิน 40 MB)' : e.message }) : next())), async (req, res) => {
+  if (!req.file) throw badRequest('กรุณาเลือกไฟล์รูปหรือวิดีโอ');
+  const ext = path.extname(req.file.originalname).toLowerCase();
+  const mediaType = MEDIA_MIME[ext].startsWith('video/') ? 'VIDEO' : 'IMAGE';
+  if (req.file.size > MEDIA_MAX[mediaType]) throw badRequest(`ไฟล์ใหญ่เกินไป (${mediaType === 'VIDEO' ? 'วิดีโอไม่เกิน 40 MB' : 'รูปไม่เกิน 10 MB'})`);
+  await cleanupMedia();
+  const used = await runAsPlatform(() => one(`SELECT COALESCE(sum(size_bytes),0)::bigint AS n FROM stored_files WHERE kind = 'PROMO_MEDIA'`));
+  if (Number(used.n) + req.file.size > MEDIA_TOTAL_MAX) throw badRequest('พื้นที่เก็บรูป/วิดีโอเต็ม กรุณาลบสไลด์ที่ไม่ใช้ หรือใช้ไฟล์ที่เล็กลง / ใส่เป็นลิงก์แทน');
+  const file = await saveFile(null, { kind: 'PROMO_MEDIA', name: req.file.originalname, mime: MEDIA_MIME[ext], buffer: req.file.buffer });
+  await logActivity(null, req, 'PROMO_MEDIA_UPLOAD', 'promotion_image', null, { name: req.file.originalname, size: req.file.size });
+  res.json({ url: `/uploads/media/${file.id}${ext}`, mediaType, size: req.file.size });
+});
 r.get('/promotion-images', async (_req, res) => res.json(await many('SELECT * FROM promotion_images ORDER BY sort_order, id')));
 r.post('/promotion-images', can('settings.manage'), async (req, res) => {
   const b = parse(imgSchema, req.body);
@@ -191,6 +256,7 @@ r.put('/promotion-images/:id', can('settings.manage'), async (req, res) => {
   const b = parse(imgSchema, req.body);
   const row = await one(`UPDATE promotion_images SET title=$2, image_url=$3, link_url=$4, duration_seconds=$5, sort_order=$6, show_on_display=$7, show_on_website=$8, is_active=$9, media_type=$10 WHERE id=$1 RETURNING *`, [req.params.id, b.title, b.imageUrl, b.linkUrl, b.durationSeconds, b.sortOrder, b.showOnDisplay, b.showOnWebsite, b.isActive, b.mediaType]);
   await logActivity(null, req, 'PROMO_IMAGE_UPDATE', 'promotion_image', req.params.id, b);
+  await cleanupMedia();
   emitSync('promotion-images');
   res.json(row);
 });
@@ -205,6 +271,7 @@ r.post('/promotion-images/reorder', can('settings.manage'), async (req, res) => 
 r.delete('/promotion-images/:id', can('settings.manage'), async (req, res) => {
   await pool.query('DELETE FROM promotion_images WHERE id = $1', [req.params.id]);
   await logActivity(null, req, 'PROMO_IMAGE_DELETE', 'promotion_image', req.params.id);
+  await cleanupMedia();
   emitSync('promotion-images');
   res.json({ ok: true });
 });

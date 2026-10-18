@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
-import { MonitorSmartphone, RefreshCw, ArrowUp, ArrowDown, ExternalLink, Copy, Image as ImageIcon, Film } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { MonitorSmartphone, RefreshCw, ArrowUp, ArrowDown, ExternalLink, Copy, Image as ImageIcon, Film, Upload, Link2 } from 'lucide-react';
 import { CrudPage } from '../../components/Crud.jsx';
 import { PageHead, Button, Badge, Img, Switch, QRCode, Input, useToast } from '../../components/ui.jsx';
 import { useT } from '../../lib/i18n.jsx';
-import { api } from '../../lib/api.js';
+import { api, upload } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive, useSocketEvent, getSocket } from '../../lib/socket.js';
 import { ensurePairCode, pushDisplay, idleDisplay } from '../../lib/display.js';
@@ -17,30 +17,79 @@ function SlideThumb({ item, style }) {
   return <Img src={item.image_url} style={style} />;
 }
 
-/** Picture or video for a promotion slide — added by URL (a video file link .mp4/.webm, or a YouTube link). */
+/** Picture or video for a promotion slide: upload a file (main way) or paste a link (video file / YouTube / picture). */
 function MediaInput({ form, set }) {
   const { t } = useT();
+  const toast = useToast();
+  const fileRef = useRef(null);
+  const [progress, setProgress] = useState(null); // null | 0..1 while uploading
+  const [drag, setDrag] = useState(false);
+  const [showUrl, setShowUrl] = useState(!!form.imageUrl && !form.imageUrl.startsWith('/uploads/media/'));
   const video = form.mediaType === 'VIDEO';
+  const send = async (file) => {
+    if (!file) return;
+    const isVideo = file.type.startsWith('video/') || /\.(mp4|m4v|webm|mov)$/i.test(file.name);
+    if (file.size > (isVideo ? 40 : 10) * 1024 * 1024) return toast.error(isVideo ? 'ไฟล์ใหญ่เกินไป (วิดีโอไม่เกิน 40 MB)' : 'ไฟล์ใหญ่เกินไป (รูปไม่เกิน 10 MB)');
+    const fd = new FormData();
+    fd.append('file', file);
+    setProgress(0);
+    try {
+      const r = await upload('/promotion-images/upload', fd, setProgress);
+      set('imageUrl', r.url);
+      set('mediaType', r.mediaType);
+      if (!form.title) set('title', file.name.replace(/\.[^.]+$/, ''));
+      toast.success(r.mediaType === 'VIDEO' ? 'อัปโหลดวิดีโอแล้ว' : 'อัปโหลดรูปแล้ว');
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setProgress(null);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
   const onUrl = (url) => {
     set('imageUrl', url);
-    const k = slideKind({ image_url: url });
-    if (k !== 'IMAGE') set('mediaType', 'VIDEO');
+    set('mediaType', slideKind({ image_url: url }) === 'IMAGE' ? 'IMAGE' : 'VIDEO');
   };
   return (
     <div className="col" style={{ gap: 8 }}>
-      <div className="seg">
-        <button type="button" className={!video ? 'on' : ''} onClick={() => set('mediaType', 'IMAGE')}><ImageIcon size={16} /> {t('รูปภาพ')}</button>
-        <button type="button" className={video ? 'on' : ''} onClick={() => set('mediaType', 'VIDEO')}><Film size={16} /> {t('วิดีโอ')}</button>
+      <input ref={fileRef} type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime,.mp4,.m4v,.webm,.mov" onChange={(e) => send(e.target.files?.[0])} />
+      <div
+        className={`media-drop ${drag ? 'drag' : ''}`}
+        role="button"
+        tabIndex={0}
+        onClick={() => progress == null && fileRef.current?.click()}
+        onKeyDown={(e) => e.key === 'Enter' && fileRef.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={(e) => { e.preventDefault(); setDrag(false); send(e.dataTransfer.files?.[0]); }}
+      >
+        {form.imageUrl ? (
+          <SlideThumb item={{ image_url: form.imageUrl, media_type: form.mediaType }} style={{ width: 200, height: 112, borderRadius: 10, objectFit: 'cover', flex: 'none' }} />
+        ) : (
+          <div className="media-drop-icon"><Upload size={30} /></div>
+        )}
+        <div className="col" style={{ gap: 4, flex: 1, minWidth: 0 }}>
+          {progress != null ? (
+            <>
+              <b>{t('กำลังอัปโหลด')} {Math.round(progress * 100)}%</b>
+              <div className="media-progress"><span style={{ width: `${Math.round(progress * 100)}%` }} /></div>
+            </>
+          ) : (
+            <>
+              <b className="row nowrap" style={{ gap: 6 }}>{form.imageUrl ? <>{video ? <Film size={16} /> : <ImageIcon size={16} />} {t(video ? 'วิดีโอ' : 'รูปภาพ')} · {t('กดเพื่อเปลี่ยนไฟล์')}</> : t('กดเพื่ออัปโหลดรูปหรือวิดีโอ หรือลากไฟล์มาวางที่นี่')}</b>
+              <span className="small muted">{t('รูป .jpg .png .webp .gif (ไม่เกิน 10 MB) · วิดีโอ .mp4 .webm .mov (ไม่เกิน 40 MB) · แนะนำแนวนอน 16:9')}</span>
+              {video && <span className="small muted">{t('วิดีโอเล่นแบบปิดเสียงจนจบ แล้วจึงไปสไลด์ถัดไป')}</span>}
+            </>
+          )}
+        </div>
       </div>
-      <div className="row nowrap">
-        <SlideThumb item={{ image_url: form.imageUrl, media_type: form.mediaType }} style={{ width: 120, height: 68, borderRadius: 8, objectFit: 'cover', flex: 'none' }} />
-        <Input value={form.imageUrl || ''} onChange={(e) => onUrl(e.target.value.trim())} placeholder={video ? 'https://.../promo.mp4  ·  https://youtu.be/...' : 'https://.../promo.jpg'} />
-      </div>
-      <div className="small muted">
-        {video
-          ? t('ใส่ลิงก์ไฟล์วิดีโอ (.mp4 / .webm) หรือลิงก์ YouTube · วิดีโอเล่นแบบปิดเสียงจนจบแล้วจึงไปสไลด์ถัดไป (YouTube ใช้ "เวลาแสดง")')
-          : t('ใส่ URL รูปภาพ (แนะนำแนวนอน 16:9)')}
-      </div>
+      <button type="button" className="link-btn small" onClick={() => setShowUrl((v) => !v)}><Link2 size={14} /> {t(showUrl ? 'ซ่อนช่องใส่ลิงก์' : 'หรือใส่เป็นลิงก์ (ลิงก์รูป / ไฟล์วิดีโอ / YouTube)')}</button>
+      {showUrl && (
+        <>
+          <Input value={form.imageUrl || ''} onChange={(e) => onUrl(e.target.value.trim())} placeholder="https://.../promo.jpg  ·  https://.../promo.mp4  ·  https://youtu.be/..." />
+          <div className="small muted">{t('ลิงก์ YouTube จะเปลี่ยนสไลด์ตาม "เวลาแสดงต่อสไลด์"')}</div>
+        </>
+      )}
     </div>
   );
 }
@@ -128,7 +177,7 @@ export default function DisplaySettings() {
             { label: 'สถานะ', render: (r) => (r.is_active ? <Badge color="#16a34a">{t('เปิด')}</Badge> : <Badge color="#6b7280">{t('ปิด')}</Badge>) },
           ]}
           fields={[
-            { key: 'title', label: 'ชื่อรูป' },
+            { key: 'title', label: 'ชื่อสไลด์' },
             { key: 'durationSeconds', label: 'เวลาแสดงต่อสไลด์ (วินาที)', type: 'number', hint: 'วิดีโอไฟล์จะเล่นจนจบเอง' },
             { key: 'imageUrl', label: 'รูปภาพ / วิดีโอ', type: 'custom', full: true, required: true, render: (form, set) => <MediaInput form={form} set={set} /> },
             { key: 'linkUrl', label: 'ลิงก์ของรูป', full: true },

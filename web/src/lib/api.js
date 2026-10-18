@@ -132,10 +132,8 @@ if (typeof window !== 'undefined') {
   setInterval(() => offlineQueue.flush(), 15000);
 }
 
-export async function request(method, url, body, opts = {}) {
+function authHeaders(opts) {
   const headers = {};
-  // queueable operations always carry an idempotency key so a retry/offline sync can never apply twice
-  if (opts.queueable && !opts.idempotencyKey) opts = { ...opts, idempotencyKey: uid() };
   const token = opts.member ? LS.get('bb_member_token') : LS.get('bb_token');
   if (token && opts.auth !== false) headers.Authorization = `Bearer ${token}`;
   if (opts.platform) {
@@ -149,6 +147,13 @@ export async function request(method, url, body, opts = {}) {
   if (opts.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
   if (opts.storeSession && storeSession.get()) headers['X-Store-Session'] = storeSession.get();
   if (opts.passive) headers['X-Passive'] = '1';
+  return headers;
+}
+
+export async function request(method, url, body, opts = {}) {
+  // queueable operations always carry an idempotency key so a retry/offline sync can never apply twice
+  if (opts.queueable && !opts.idempotencyKey) opts = { ...opts, idempotencyKey: uid() };
+  const headers = authHeaders(opts);
   let payload;
   if (body instanceof FormData) payload = body;
   else if (body !== undefined) {
@@ -186,6 +191,28 @@ export const api = {
   patch: (u, b, o) => request('PATCH', u, b ?? {}, o),
   del: (u, b, o) => request('DELETE', u, b, o),
 };
+
+/** POST a file (FormData) and report the upload progress (0–1) — for large files such as videos. */
+export function upload(url, form, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api${url}`);
+    for (const [k, v] of Object.entries(authHeaders({}))) xhr.setRequestHeader(k, v);
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
+    xhr.onerror = () => reject(new ApiError(translate('ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ (Offline)'), 0, { code: 'OFFLINE' }));
+    xhr.onload = () => {
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        /* not json */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new ApiError(translatePhrase(data?.error || (xhr.status === 413 ? 'ไฟล์ใหญ่เกินไป' : `Error ${xhr.status}`)), xhr.status, data));
+    };
+    xhr.send(form);
+  });
+}
 
 export async function download(url, filename) {
   const res = await request('GET', url, undefined, { raw: true });

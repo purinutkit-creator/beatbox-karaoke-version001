@@ -20,7 +20,7 @@ import platformRoutes from './routes/platform.js';
 import subscriptionRoutes from './routes/subscription.js';
 
 import authRoutes from './routes/auth.js';
-import settingsRoutes from './routes/settings.js';
+import settingsRoutes, { serveMedia } from './routes/settings.js';
 import employeeRoutes from './routes/employees.js';
 import shiftRoutes from './routes/shifts.js';
 import catalogRoutes from './routes/catalog.js';
@@ -92,8 +92,10 @@ export function createApp() {
   app.use('/api', smartRoutes);
   app.use('/api', (_req, res) => res.status(404).json({ error: 'ไม่พบ API' }));
 
-  // Only fonts are public uploads — payment slips stay private (served through an authenticated endpoint)
+  // Only fonts and promotion slides are public uploads — payment slips stay private (served through an authenticated endpoint)
   app.get('/uploads/fonts/:name', serveFont);
+  app.get('/uploads/media/:name', serveMedia);
+  app.use('/uploads/media', (_req, res) => res.status(404).end());
   app.use('/uploads/fonts', express.static(path.join(config.uploadDir, 'fonts'), { maxAge: '30d', setHeaders: (res) => res.setHeader('Access-Control-Allow-Origin', '*') }));
 
   // Frontend (POS, Customer Display, Booking website) — single build
