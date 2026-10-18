@@ -41,7 +41,7 @@ const SPEEDS = [
   { value: 6, label: '6 — ค่อนข้างเร็ว (~140 มม./วินาที)' },
   { value: 7, label: '7 — เร็ว (~170 มม./วินาที)' },
   { value: 8, label: '8 — เร็ว (~210 มม./วินาที)' },
-  { value: 9, label: '9 — เร็วที่สุด (ไม่จำกัด)' },
+  { value: 9, label: '9 — เร็วที่สุดของเครื่อง (ไม่หน่วง)' },
 ];
 const ALERT_KINDS = [
   { value: 'PRINTER', label: 'ลำโพงในเครื่องพิมพ์ (ปิ๊บๆ)' },
@@ -306,7 +306,7 @@ export default function Printers() {
           { key: 'marginRightMm', label: 'ขอบขวา (mm)', type: 'number', step: '0.5' },
           { key: 'marginTopMm', label: 'ขอบบน (mm)', type: 'number', step: '0.5' },
           { key: 'marginBottomMm', label: 'ขอบล่าง / เผื่อตัดกระดาษ (mm)', type: 'number', step: '0.5' },
-          { key: 'speed', label: 'ความเร็วการพิมพ์', type: 'select', options: SPEEDS, hidden: (f) => f.connection === 'BROWSER', hint: 'ระดับ 1–9 มีผลกับเครื่องจริง: ระบบส่งคำสั่งความเร็ว ESC/POS (เครื่องที่รองรับ เช่น Epson) และป้อนข้อมูลให้เครื่องเดินกระดาษตามความเร็วนี้ (ได้ผลทุกรุ่น) · ช้าลง = ตัวหนังสือคมและเข้มขึ้น' },
+          { key: 'speed', label: 'ความเร็วการพิมพ์', type: 'select', options: SPEEDS, hidden: (f) => f.connection === 'BROWSER', hint: 'ใช้ได้กับทุกรุ่น: ระบบป้อนงานพิมพ์ให้เครื่องเดินกระดาษตามความเร็วที่เลือก (ทีละช่วงที่สมบูรณ์ ไม่มีตัวอักษรแปลกปน) · ทำให้ช้าลงได้ แต่เร็วเกินความเร็วสูงสุดของเครื่องไม่ได้ · ช้าลง = ตัวหนังสือคมและเข้มขึ้น · เครื่อง Epson (ใส่รุ่นในช่อง "รุ่นเครื่องพิมพ์") จะได้รับคำสั่งตั้งความเร็วของ Epson ด้วย' },
           { key: 'copies', label: 'จำนวนใบที่ต้องการพิมพ์', type: 'number' },
           { key: 'autoPrint', label: 'พิมพ์ใบเสร็จอัตโนมัติหลังชำระเงิน', type: 'switch', switchLabel: 'เปิด' },
           { key: 'autoCut', label: 'ตัดกระดาษอัตโนมัติ', type: 'switch', switchLabel: 'เปิด' },

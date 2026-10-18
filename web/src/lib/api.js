@@ -156,7 +156,10 @@ export async function request(method, url, body, opts = {}) {
   const headers = authHeaders(opts);
   let payload;
   if (body instanceof FormData) payload = body;
-  else if (body !== undefined) {
+  else if (body instanceof Blob) {
+    headers['Content-Type'] = 'application/octet-stream';
+    payload = body;
+  } else if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
     payload = JSON.stringify(body);
   }
@@ -212,6 +215,29 @@ export function upload(url, form, onProgress) {
     };
     xhr.send(form);
   });
+}
+
+/**
+ * Upload a large file in pieces (start → pieces → finish). Each piece is retried if the connection drops, so a video
+ * survives a shaky Wi-Fi; onProgress gets 0–1. base: e.g. '/promotion-images/upload'.
+ */
+export async function uploadInChunks(base, file, onProgress) {
+  const s = await request('POST', `${base}/start`, { name: file.name, size: file.size });
+  for (let seq = 0; seq < s.chunks; seq++) {
+    const piece = file.slice(seq * s.chunkSize, Math.min(file.size, (seq + 1) * s.chunkSize));
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await request('PUT', `${base}/${s.id}/chunks/${seq}`, piece);
+        break;
+      } catch (e) {
+        // a business error (wrong file, too large …) will not change on retry
+        if (attempt >= 4 || (e.status >= 400 && e.status < 500)) throw e;
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      }
+    }
+    onProgress?.((seq + 1) / s.chunks);
+  }
+  return request('POST', `${base}/${s.id}/finish`, {});
 }
 
 export async function download(url, filename) {

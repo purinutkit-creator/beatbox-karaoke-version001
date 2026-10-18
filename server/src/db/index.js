@@ -39,6 +39,9 @@ export function setContextStore(storeId) {
 
 const rawPool = new pg.Pool({ connectionString: config.databaseUrl, max: Number(process.env.DB_POOL_MAX || 20) });
 rawPool.on('error', (err) => console.error('[db] idle client error', err.message));
+// a connection that is checked out (e.g. inside a transaction) and dies between two queries emits 'error' on the
+// client, which pg-pool only listens to while idle — without this a database restart would crash the whole server
+rawPool.on('connect', (client) => client.on('error', (err) => console.error('[db] connection lost', err.message)));
 
 // When the server connects as a PostgreSQL superuser (local development), row-level security would be skipped.
 // In that case every pooled connection switches to the restricted role `beatbox_app` (created by ensureAppRole).

@@ -1,7 +1,6 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import multer from 'multer';
 import { pool, tx, many, one, runAsPlatform } from '../db/index.js';
 import { requireAuth, can } from '../lib/auth.js';
 import { logActivity } from '../lib/activity.js';
@@ -11,7 +10,6 @@ import { emitSync, displayOnline } from '../lib/realtime.js';
 import { notFound, badRequest, forbidden } from '../lib/errors.js';
 import { getSubscription, hasFeature, assertLimit } from '../services/subscription.js';
 import { runBackup, listBackups } from '../services/backup.js';
-import { saveFile } from '../services/files.js';
 
 const r = Router();
 r.use(requireAuth);
@@ -187,14 +185,11 @@ const imgSchema = z.object({
 const MEDIA_MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime' };
 const MEDIA_MAX = { IMAGE: 10 * 1024 * 1024, VIDEO: 40 * 1024 * 1024 };
 const MEDIA_TOTAL_MAX = 500 * 1024 * 1024; // all uploaded slides together (the database has limited space)
-const mediaUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MEDIA_MAX.VIDEO },
-  fileFilter: (_req, f, cb) => (MEDIA_MIME[path.extname(f.originalname).toLowerCase()] ? cb(null, true) : cb(Object.assign(new Error('รองรับเฉพาะรูป .jpg .png .webp .gif หรือวิดีโอ .mp4 .webm .mov'), { status: 400 }))),
-});
+// files are uploaded and stored in pieces of this size (see migration 016): small queries, no memory spikes
+const CHUNK = 512 * 1024;
 const mediaFileId = (url) => /^\/uploads\/media\/([0-9a-f-]{36})\.\w+$/i.exec(url || '')?.[1] || null;
 
-/** Remove uploaded slide files no slide of any store uses any more (a replaced / deleted slide, or a cancelled form). */
+/** Remove uploaded slide files no slide of any store uses any more (a replaced / deleted slide, an unfinished upload). */
 async function cleanupMedia(graceMinutes = 60) {
   await runAsPlatform(() =>
     pool.query(
@@ -205,18 +200,29 @@ async function cleanupMedia(graceMinutes = 60) {
   );
 }
 
+/** Bytes [start, end] of a stored file, whether it is kept in one value or in pieces. */
+async function readRange(f, id, start, end) {
+  if (!f.chunked) return (await one('SELECT substring(data FROM $2 FOR $3) AS d FROM stored_files WHERE id = $1', [id, start + 1, end - start + 1])).d;
+  const rows = await many('SELECT seq, data FROM stored_file_chunks WHERE file_id = $1 AND seq BETWEEN $2 AND $3 ORDER BY seq', [id, Math.floor(start / CHUNK), Math.floor(end / CHUNK)]);
+  const buf = Buffer.concat(rows.map((x) => x.data));
+  const from = start - Math.floor(start / CHUNK) * CHUNK;
+  return buf.subarray(from, from + (end - start + 1));
+}
+
 /** Public handler for /uploads/media (promotion slides, kitchen alert sounds) — answers byte ranges, which iPad / Smart TV browsers need to play a video. */
 export async function serveMedia(req, res, next) {
   const id = mediaFileId(`/uploads/media/${req.params.name}`);
   if (!id) return next();
-  const f = await one(`SELECT mime, octet_length(data) AS size FROM stored_files WHERE id = $1 AND kind IN ('PROMO_MEDIA','SOUND')`, [id]).catch(() => null);
+  const f = await one(`SELECT mime, chunked, CASE WHEN chunked THEN size_bytes ELSE octet_length(data) END AS size FROM stored_files WHERE id = $1 AND complete AND kind IN ('PROMO_MEDIA','SOUND')`, [id]).catch(() => null);
   if (!f) return next();
   const size = Number(f.size);
   res.set({ 'Content-Type': f.mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*' });
   let start = 0;
   let end = size - 1;
   const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
-  if (m && (m[1] !== '' || m[2] !== '')) {
+  // without a range a large file is still answered in one go, but read piece by piece
+  const whole = !(m && (m[1] !== '' || m[2] !== ''));
+  if (!whole) {
     if (m[1] === '') start = Math.max(0, size - Number(m[2]));
     else {
       start = Number(m[1]);
@@ -228,21 +234,60 @@ export async function serveMedia(req, res, next) {
   }
   res.set('Content-Length', String(end - start + 1));
   if (req.method === 'HEAD') return res.end();
-  const part = await one('SELECT substring(data FROM $2 FOR $3) AS d FROM stored_files WHERE id = $1', [id, start + 1, end - start + 1]);
-  res.end(part.d);
+  for (let s0 = start; s0 <= end; s0 += 4 * CHUNK) {
+    const part = await readRange(f, id, s0, Math.min(end, s0 + 4 * CHUNK - 1));
+    if (!res.write(part)) await new Promise((r) => res.once('drain', r));
+  }
+  res.end();
 }
 
-r.post('/promotion-images/upload', can('settings.manage'), (req, res, next) => mediaUpload.single('file')(req, res, (e) => (e ? res.status(400).json({ error: e.code === 'LIMIT_FILE_SIZE' ? 'ไฟล์ใหญ่เกินไป (วิดีโอไม่เกิน 40 MB)' : e.message }) : next())), async (req, res) => {
-  if (!req.file) throw badRequest('กรุณาเลือกไฟล์รูปหรือวิดีโอ');
-  const ext = path.extname(req.file.originalname).toLowerCase();
-  const mediaType = MEDIA_MIME[ext].startsWith('video/') ? 'VIDEO' : 'IMAGE';
-  if (req.file.size > MEDIA_MAX[mediaType]) throw badRequest(`ไฟล์ใหญ่เกินไป (${mediaType === 'VIDEO' ? 'วิดีโอไม่เกิน 40 MB' : 'รูปไม่เกิน 10 MB'})`);
+// Upload in three steps so a large video never travels or gets stored as one huge piece:
+// start (checks type, size and space) → each piece (retried by the browser if the network drops) → finish
+r.post('/promotion-images/upload/start', can('settings.manage'), async (req, res) => {
+  const b = parse(z.object({ name: z.string().trim().min(1).max(200), size: z.coerce.number().int().min(1) }), req.body);
+  const ext = path.extname(b.name).toLowerCase();
+  const mime = MEDIA_MIME[ext];
+  if (!mime) throw badRequest('รองรับเฉพาะรูป .jpg .png .webp .gif หรือวิดีโอ .mp4 .webm .mov');
+  const mediaType = mime.startsWith('video/') ? 'VIDEO' : 'IMAGE';
+  if (b.size > MEDIA_MAX[mediaType]) throw badRequest(mediaType === 'VIDEO' ? 'ไฟล์ใหญ่เกินไป (วิดีโอไม่เกิน 40 MB)' : 'ไฟล์ใหญ่เกินไป (รูปไม่เกิน 10 MB)');
   await cleanupMedia();
   const used = await runAsPlatform(() => one(`SELECT COALESCE(sum(size_bytes),0)::bigint AS n FROM stored_files WHERE kind = 'PROMO_MEDIA'`));
-  if (Number(used.n) + req.file.size > MEDIA_TOTAL_MAX) throw badRequest('พื้นที่เก็บรูป/วิดีโอเต็ม กรุณาลบสไลด์ที่ไม่ใช้ หรือใช้ไฟล์ที่เล็กลง / ใส่เป็นลิงก์แทน');
-  const file = await saveFile(null, { kind: 'PROMO_MEDIA', name: req.file.originalname, mime: MEDIA_MIME[ext], buffer: req.file.buffer });
-  await logActivity(null, req, 'PROMO_MEDIA_UPLOAD', 'promotion_image', null, { name: req.file.originalname, size: req.file.size });
-  res.json({ url: `/uploads/media/${file.id}${ext}`, mediaType, size: req.file.size });
+  if (Number(used.n) + b.size > MEDIA_TOTAL_MAX) throw badRequest('พื้นที่เก็บรูป/วิดีโอเต็ม กรุณาลบสไลด์ที่ไม่ใช้ หรือใช้ไฟล์ที่เล็กลง / ใส่เป็นลิงก์แทน');
+  const f = await one(
+    `INSERT INTO stored_files(kind, file_name, mime, size_bytes, sha256, data, chunked, complete) VALUES ('PROMO_MEDIA', $1, $2, $3, '', ''::bytea, true, false) RETURNING id`,
+    [b.name, mime, b.size],
+  );
+  res.json({ id: f.id, chunkSize: CHUNK, chunks: Math.ceil(b.size / CHUNK), mediaType });
+});
+
+const pendingUpload = async (id) => {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw notFound();
+  const f = await one(`SELECT id, file_name, size_bytes, complete FROM stored_files WHERE id = $1 AND kind = 'PROMO_MEDIA' AND chunked`, [id]);
+  if (!f) throw notFound('ไม่พบไฟล์ที่กำลังอัปโหลด กรุณาเริ่มใหม่');
+  return f;
+};
+
+r.put('/promotion-images/upload/:id/chunks/:seq', can('settings.manage'), express.raw({ type: 'application/octet-stream', limit: CHUNK + 1024 }), async (req, res) => {
+  const f = await pendingUpload(req.params.id);
+  if (f.complete) throw badRequest('อัปโหลดไฟล์นี้เสร็จแล้ว');
+  const seq = Number(req.params.seq);
+  const last = Math.ceil(Number(f.size_bytes) / CHUNK) - 1;
+  const want = seq === last ? Number(f.size_bytes) - last * CHUNK : CHUNK;
+  if (!Number.isInteger(seq) || seq < 0 || seq > last) throw badRequest('ลำดับชิ้นส่วนไฟล์ไม่ถูกต้อง');
+  if (!Buffer.isBuffer(req.body) || req.body.length !== want) throw badRequest('ชิ้นส่วนไฟล์ไม่ครบ กรุณาลองใหม่');
+  // the same piece sent twice (a retry after a dropped connection) simply replaces itself
+  await pool.query('INSERT INTO stored_file_chunks(file_id, seq, data) VALUES ($1,$2,$3) ON CONFLICT (file_id, seq) DO UPDATE SET data = EXCLUDED.data', [f.id, seq, req.body]);
+  res.json({ ok: true });
+});
+
+r.post('/promotion-images/upload/:id/finish', can('settings.manage'), async (req, res) => {
+  const f = await pendingUpload(req.params.id);
+  const got = await one('SELECT count(*)::int AS n, COALESCE(sum(octet_length(data)),0)::bigint AS bytes FROM stored_file_chunks WHERE file_id = $1', [f.id]);
+  if (Number(got.bytes) !== Number(f.size_bytes) || got.n !== Math.ceil(Number(f.size_bytes) / CHUNK)) throw badRequest('ไฟล์อัปโหลดไม่ครบ กรุณาลองใหม่', 'UPLOAD_INCOMPLETE');
+  await pool.query('UPDATE stored_files SET complete = true WHERE id = $1', [f.id]);
+  const ext = path.extname(f.file_name).toLowerCase();
+  await logActivity(null, req, 'PROMO_MEDIA_UPLOAD', 'promotion_image', null, { name: f.file_name, size: Number(f.size_bytes) });
+  res.json({ url: `/uploads/media/${f.id}${ext}`, mediaType: MEDIA_MIME[ext].startsWith('video/') ? 'VIDEO' : 'IMAGE', size: Number(f.size_bytes) });
 });
 r.get('/promotion-images', async (_req, res) => res.json(await many('SELECT * FROM promotion_images ORDER BY sort_order, id')));
 r.post('/promotion-images', can('settings.manage'), async (req, res) => {

@@ -3,7 +3,7 @@ import { MonitorSmartphone, RefreshCw, ArrowUp, ArrowDown, ExternalLink, Copy, I
 import { CrudPage } from '../../components/Crud.jsx';
 import { PageHead, Button, Badge, Img, Switch, QRCode, Input, useToast } from '../../components/ui.jsx';
 import { useT } from '../../lib/i18n.jsx';
-import { api, upload } from '../../lib/api.js';
+import { api, uploadInChunks } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive, useSocketEvent, getSocket } from '../../lib/socket.js';
 import { ensurePairCode, pushDisplay, idleDisplay } from '../../lib/display.js';
@@ -30,11 +30,9 @@ function MediaInput({ form, set }) {
     if (!file) return;
     const isVideo = file.type.startsWith('video/') || /\.(mp4|m4v|webm|mov)$/i.test(file.name);
     if (file.size > (isVideo ? 40 : 10) * 1024 * 1024) return toast.error(isVideo ? 'ไฟล์ใหญ่เกินไป (วิดีโอไม่เกิน 40 MB)' : 'ไฟล์ใหญ่เกินไป (รูปไม่เกิน 10 MB)');
-    const fd = new FormData();
-    fd.append('file', file);
     setProgress(0);
     try {
-      const r = await upload('/promotion-images/upload', fd, setProgress);
+      const r = await uploadInChunks('/promotion-images/upload', file, setProgress);
       set('imageUrl', r.url);
       set('mediaType', r.mediaType);
       if (!form.title) set('title', file.name.replace(/\.[^.]+$/, ''));

@@ -149,45 +149,59 @@ function qrCommand(value, sizeMm) {
   ];
 }
 
-// Print speed of a printer: 0 = leave it as it is · 1 (slowest, sharpest) … 9 (fastest).
-// Paper speed (mm/s) the data is fed at for each level (9 = no limit), and the ESC/POS speed command
-// GS ( K fn 50 (Epson and compatible printers; others skip it). Sent after every ESC @, which resets it.
+// Print speed of a printer: 0 = leave it as it is · 1 (slowest, sharpest) … 9 (the printer's own top speed).
+// The data is fed so the paper moves at SPEED_MM_S[level] (9 = no limit) — this works on every printer, sending only
+// whole commands at a time. The ESC/POS speed command (GS ( K fn 50) is sent only to Epson printers: other printers
+// (e.g. generic USB "POS-80" models) don't know it and print the following data as text.
 export const SPEED_MM_S = [0, 40, 55, 70, 90, 110, 140, 170, 210, 0];
-export function speedCommand(level) {
-  const n = Math.round(Number(level) || 0);
-  return n >= 1 && n <= 9 ? [GS, 0x28, 0x4b, 0x02, 0x00, 0x32, n] : [];
+export const isEpson = (printer) => /epson|\btm[-_ ]?[a-z]?\d/i.test(printer?.model || '');
+export function speedCommand(printer) {
+  const n = Math.round(Number(printer?.speed) || 0);
+  return n >= 1 && n <= 9 && isEpson(printer) ? [GS, 0x28, 0x4b, 0x02, 0x00, 0x32, n] : [];
 }
+// paper fed by ESC d 4 at the end of a document (4 lines of the default 1/6 inch spacing)
+export const FEED_MM = 17;
 
-/** Approximate paper length (mm) of text lines — to feed the data at the chosen print speed. */
-export function linesLengthMm(lines) {
-  return lines.reduce((a, l) => a + (l.skipped ? 0 : l.qr ? 30 : l.mag === 2 ? 7.5 : 3.75), 15);
-}
-
-/** Lines → ESC/POS bytes (copies, cut and cash drawer per job). */
-export function encodeLines(lines, printer = {}, { copies = 1, cut = true, drawer = false } = {}) {
-  const out = [];
+/** Lines → ESC/POS as units { bytes, mm }: each unit is complete commands for one line (paper length mm). */
+export function encodeLineUnits(lines, printer = {}, { copies = 1, cut = true, drawer = false } = {}) {
+  const units = [];
   for (let c = 0; c < copies; c++) {
-    out.push(ESC, 0x40); // init
-    out.push(...speedCommand(printer.speed));
-    if (printer.escpos_codepage != null && printer.escpos_codepage !== '') out.push(ESC, 0x74, Number(printer.escpos_codepage));
+    const head = [ESC, 0x40, ...speedCommand(printer)]; // init
+    if (printer.escpos_codepage != null && printer.escpos_codepage !== '') head.push(ESC, 0x74, Number(printer.escpos_codepage));
+    units.push({ bytes: head, mm: 0 });
     for (const l of lines) {
       if (l.skipped) continue;
       const align = l.align === 'center' ? 1 : l.align === 'right' ? 2 : 0;
-      out.push(ESC, 0x61, align);
+      const out = [ESC, 0x61, align];
       if (l.qr) {
         out.push(...qrCommand(l.qr, l.size), 0x0a);
+        units.push({ bytes: out, mm: 30 });
         continue;
       }
       out.push(GS, 0x21, l.mag === 2 ? 0x11 : l.mag === 'h' ? 0x01 : 0x00);
       out.push(ESC, 0x45, l.bold ? 1 : 0);
       out.push(...encodeTis620(l.text || ''), 0x0a);
+      units.push({ bytes: out, mm: l.mag === 2 ? 7.5 : 3.75 });
     }
-    out.push(GS, 0x21, 0, ESC, 0x45, 0, ESC, 0x61, 0);
-    out.push(ESC, 0x64, 4); // feed so the last line clears the cutter
-    if (cut) out.push(GS, 0x56, 0x42, 0x00);
+    const tail = [GS, 0x21, 0, ESC, 0x45, 0, ESC, 0x61, 0];
+    tail.push(ESC, 0x64, 4); // feed so the last line clears the cutter
+    if (cut) tail.push(GS, 0x56, 0x42, 0x00);
+    units.push({ bytes: tail, mm: FEED_MM });
   }
-  if (drawer) out.push(ESC, 0x70, 0x00, 0x19, 0xfa);
-  return new Uint8Array(out);
+  if (drawer) units.push({ bytes: [ESC, 0x70, 0x00, 0x19, 0xfa], mm: 0 });
+  return units.map((u) => ({ bytes: new Uint8Array(u.bytes), mm: u.mm }));
+}
+
+/** Lines → ESC/POS bytes (copies, cut and cash drawer per job). */
+export function encodeLines(lines, printer = {}, opts = {}) {
+  const units = encodeLineUnits(lines, printer, opts);
+  const out = new Uint8Array(units.reduce((a, u) => a + u.bytes.length, 0));
+  let o = 0;
+  for (const u of units) {
+    out.set(u.bytes, o);
+    o += u.bytes.length;
+  }
+  return out;
 }
 
 export const DRAWER_KICK = new Uint8Array([ESC, 0x40, ESC, 0x70, 0x00, 0x19, 0xfa]);

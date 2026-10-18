@@ -20,11 +20,17 @@ async function api(method, url, body, { headers = {}, form } = {}) {
   const res = await fetch(base + '/api' + url, { method, headers: { ...(form ? {} : { 'Content-Type': 'application/json' }), Authorization: `Bearer ${token}`, ...headers }, body: form || (body ? JSON.stringify(body) : undefined) });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
-const uploadFile = (name, type, bytes) => {
-  const fd = new FormData();
-  fd.append('file', new Blob([bytes], { type }), name);
-  return api('POST', '/promotion-images/upload', null, { form: fd });
-};
+const putChunk = (id, seq, bytes) => fetch(`${base}/api/promotion-images/upload/${id}/chunks/${seq}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${token}` }, body: bytes });
+/** start → pieces → finish, like the browser does */
+async function uploadFile(name, _type, bytes) {
+  const s = await api('POST', '/promotion-images/upload/start', { name, size: bytes.length });
+  if (s.status !== 200) return s;
+  for (let i = 0; i < s.body.chunks; i++) {
+    const r = await putChunk(s.body.id, i, bytes.subarray(i * s.body.chunkSize, (i + 1) * s.body.chunkSize));
+    assert.equal(r.status, 200, await r.text());
+  }
+  return api('POST', `/promotion-images/upload/${s.body.id}/finish`);
+}
 
 before(async () => {
   const admin = new pg.Client({ connectionString: DB.replace(/\/[^/]+$/, '/postgres') });
@@ -46,7 +52,7 @@ after(async () => {
   setTimeout(() => process.exit(0), 200).unref();
 });
 
-const video = Buffer.from(Array.from({ length: 300000 }, (_, i) => i % 251));
+const video = Buffer.from(Array.from({ length: 1_300_000 }, (_, i) => (i * 7 + (i >> 9)) % 251)); // 3 pieces of 512 KB
 
 test('upload a video and a picture, then show them as slides', async () => {
   const v = await uploadFile('promo.mp4', 'video/mp4', video);
@@ -79,6 +85,9 @@ test('the file is public and answers byte ranges (needed by iPad / Smart TV play
   assert.equal(part.status, 206);
   assert.equal(part.headers.get('content-range'), `bytes 1000-1999/${video.length}`);
   assert.deepEqual(Buffer.from(await part.arrayBuffer()), video.subarray(1000, 2000));
+  // a range across two stored pieces (512 KB boundary)
+  const cross = await fetch(base + url, { headers: { Range: 'bytes=524000-525999' } });
+  assert.deepEqual(Buffer.from(await cross.arrayBuffer()), video.subarray(524000, 526000));
   const tail = await fetch(base + url, { headers: { Range: 'bytes=-500' } });
   assert.deepEqual(Buffer.from(await tail.arrayBuffer()), video.subarray(video.length - 500));
   const out = await fetch(base + url, { headers: { Range: `bytes=${video.length + 10}-` } });
@@ -86,15 +95,35 @@ test('the file is public and answers byte ranges (needed by iPad / Smart TV play
   assert.equal((await fetch(base + '/uploads/media/00000000-0000-0000-0000-000000000000.mp4')).status, 404);
 });
 
+test('upload pieces: a repeated piece (retry) is fine, a wrong-size piece is refused, an unfinished file is never served', async () => {
+  const bytes = Buffer.alloc(600_000, 7);
+  const s = await api('POST', '/promotion-images/upload/start', { name: 'clip.mp4', size: bytes.length });
+  assert.equal(s.body.chunks, 2);
+  assert.equal((await putChunk(s.body.id, 0, bytes.subarray(0, 1000))).status, 400); // short piece
+  assert.equal((await putChunk(s.body.id, 0, bytes.subarray(0, s.body.chunkSize))).status, 200);
+  assert.equal((await putChunk(s.body.id, 0, bytes.subarray(0, s.body.chunkSize))).status, 200); // retried
+  const early = await api('POST', `/promotion-images/upload/${s.body.id}/finish`);
+  assert.equal(early.status, 400);
+  assert.equal((await fetch(`${base}/uploads/media/${s.body.id}.mp4`)).status, 404);
+  assert.equal((await putChunk(s.body.id, 1, bytes.subarray(s.body.chunkSize))).status, 200);
+  const done = await api('POST', `/promotion-images/upload/${s.body.id}/finish`);
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+  assert.deepEqual(Buffer.from(await (await fetch(base + done.body.url)).arrayBuffer()), bytes);
+  assert.equal((await api('POST', '/promotion-images/upload/start', { name: 'big.mp4', size: 41 * 1024 * 1024 })).status, 400);
+  assert.equal((await api('POST', '/promotion-images/upload/start', { name: 'virus.exe', size: 10 })).status, 400);
+});
+
 test('files no slide uses any more are removed', async () => {
   const { pool, runAsPlatform } = await import('../src/db/index.js');
   const count = () => runAsPlatform(async () => Number((await pool.query(`SELECT count(*) FROM stored_files WHERE kind = 'PROMO_MEDIA'`)).rows[0].count));
-  assert.equal(await count(), 2);
+  assert.equal(await count(), 3);
   // pretend the uploads are old (past the grace time that protects a form still being filled in)
   await runAsPlatform(() => pool.query(`UPDATE stored_files SET created_at = now() - interval '2 hours' WHERE kind = 'PROMO_MEDIA'`));
   const slide = (await api('GET', '/promotion-images')).body.find((x) => x.media_type === 'VIDEO');
   await api('DELETE', `/promotion-images/${slide.id}`);
-  assert.equal(await count(), 0); // the deleted slide's video and the never-used picture are gone
+  assert.equal(await count(), 0); // the deleted slide's video and the never-used uploads are gone
+  const chunks = await runAsPlatform(async () => Number((await pool.query('SELECT count(*) FROM stored_file_chunks')).rows[0].count));
+  assert.equal(chunks, 0, 'pieces are removed with their file');
 });
 
 const printerBody = (over = {}) => ({ name: 'ครัว', connection: 'NETWORK', address: '127.0.0.1', port: 9100, station: 'KITCHEN', renderMode: 'RASTER', ...over });
@@ -140,7 +169,7 @@ test('printer: an uploaded / recorded sound is used, served publicly, and remove
   assert.equal(await sounds(), 0, 'no printer uses it → removed');
 });
 
-test('printer: network printing is fed at the chosen speed (and at full speed when not set)', async () => {
+test('printer: network printing follows the send plan of the print speed (and goes at once when not set)', async () => {
   const got = [];
   const fake = net.createServer((sock) => {
     const t0 = Date.now();
@@ -153,7 +182,8 @@ test('printer: network printing is fed at the chosen speed (and at full speed wh
   const data = Buffer.alloc(20000, 0x55).toString('base64');
   const fast = await api('POST', `/printers/${p.body.id}/raw`, { data });
   assert.equal(fast.status, 200, JSON.stringify(fast.body));
-  const slow = await api('POST', `/printers/${p.body.id}/raw`, { data, pace: 40000 }); // 20 000 bytes at 40 000 bytes/s ≈ 0.5 s
+  // the app's send plan: 4 whole commands of 5 000 bytes, the last one 0.5 s after the start
+  const slow = await api('POST', `/printers/${p.body.id}/raw`, { data, steps: [[5000, 0], [10000, 170], [15000, 340], [20000, 500]] });
   assert.equal(slow.status, 200);
   await new Promise((r) => setTimeout(r, 100));
   fake.close();
