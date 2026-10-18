@@ -6,7 +6,7 @@ import { logActivity } from '../lib/activity.js';
 import { z, parse } from '../lib/validate.js';
 import { notFound, badRequest } from '../lib/errors.js';
 import { emitSync } from '../lib/realtime.js';
-import { tuyaConfig, tuyaDevices, tuyaSend, tuyaDeviceInfo, TUYA_REGIONS } from '../providers/tuya.js';
+import { tuyaConfig, tuyaDevices, tuyaSend, tuyaDeviceInfo, tuyaPowerState, TUYA_REGIONS } from '../providers/tuya.js';
 import { runSystem, SMART_TRIGGERS } from '../services/smart.js';
 
 const r = Router();
@@ -128,12 +128,26 @@ r.post('/smart/run', can('room.operate'), async (req, res) => {
 /** Settings page: try a command on a device before saving it. */
 r.post('/smart/test-device', can('settings.manage'), async (req, res) => {
   const b = parse(z.object({ deviceId: z.string().trim().min(1).max(100), commands: z.array(commandSchema).min(1).max(6) }), req.body);
+  let out;
   try {
-    await tuyaSend(b.deviceId, b.commands);
+    out = await tuyaSend(b.deviceId, b.commands);
   } catch (e) {
+    await pool.query(`INSERT INTO smart_logs(device_id, name, trigger, ok, error, employee_id, detail) VALUES ($1,'ทดสอบสั่งงาน','TEST',false,$2,$3,$4)`, [b.deviceId, e.message, req.employee.id, { trace: e.trace || [] }]);
     throw badRequest(e.message, 'TUYA_ERROR');
   }
-  res.json({ ok: true });
+  await pool.query(`INSERT INTO smart_logs(device_id, name, trigger, ok, employee_id, detail) VALUES ($1,'ทดสอบสั่งงาน','TEST',true,$2,$3)`, [b.deviceId, req.employee.id, { via: out?.via, trace: out?.trace || [] }]);
+  emitSync('smart');
+  res.json({ ok: true, via: out?.via, trace: out?.trace || [] });
+});
+
+/** On / off right now of the devices of a room (for the buttons). */
+r.get('/smart/rooms/:roomId/state', async (req, res) => {
+  const cfg = await tuyaConfig();
+  if (!cfg.enabled) return res.json({});
+  const rows = await many('SELECT system_id, device_id FROM smart_bindings WHERE room_id = $1', [req.params.roomId]);
+  const devices = [...new Set(rows.map((x) => x.device_id))];
+  const states = Object.fromEntries(await Promise.all(devices.map(async (d) => [d, await tuyaPowerState(d).catch(() => null)])));
+  res.json(Object.fromEntries(rows.map((x) => [x.system_id, states[x.device_id] ?? null])));
 });
 
 export default r;

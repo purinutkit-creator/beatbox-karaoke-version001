@@ -2531,4 +2531,10 @@ export const EN = {
   "ปุ่มของรีโมต": "Remote keys",
   "ต้องการกดปุ่มอื่น: ตั้ง \"ค่าที่ส่ง\" เป็น \"ค่าอื่น\" แล้วใส่ชื่อปุ่ม เช่น Speed": "For another key: set \"Value\" to \"Other value\" and enter the key name, e.g. Speed",
   "อ่านข้อมูลอุปกรณ์ไม่ได้": "Could not read the device",
+  "สลับเปิด / ปิด (กดครั้งหนึ่งเปิด กดอีกครั้งปิด)": "Toggle on / off (one press on, next press off)",
+  "ค่าอื่น / ปุ่มรีโมต (ตัวเลข / ข้อความ)": "Other value / remote key (number / text)",
+  "สลับเปิด / ปิด": "Toggle on / off",
+  "ผ่าน IR Hub": "via IR hub",
+  "สิ่งที่ส่งไป Tuya": "Sent to Tuya",
+  "เปิดอยู่": "on",
 };

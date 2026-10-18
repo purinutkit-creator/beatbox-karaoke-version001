@@ -17,7 +17,7 @@ export const TRIGGERS = [
   { value: 'ON_CLOSE', label: 'เมื่อปิดห้อง / ยกเลิกห้อง' },
 ];
 export const triggerLabel = (s, t) => (s.trigger === 'BEFORE_END' ? `${t('เมื่อเวลาเหลือ')} ${s.minutes} ${t('นาที')}` : t(TRIGGERS.find((x) => x.value === s.trigger)?.label || s.trigger));
-const cmdText = (c, t) => (c.value === true ? t('เปิด') : c.value === false ? t('ปิด') : String(c.value));
+const cmdText = (c, t) => (c.value === true ? t('เปิด') : c.value === false ? t('ปิด') : c.value === 'toggle' ? t('สลับเปิด / ปิด') : String(c.value));
 
 /** Tuya Cloud project credentials (Access Secret is write-only). */
 function TuyaCard({ all, setAll }) {
@@ -57,11 +57,11 @@ function TuyaCard({ all, setAll }) {
   );
 }
 
-const EMPTY = { name: '', trigger: 'MANUAL', minutes: 5, code: 'switch_1', action: 'ON', customValue: '', extra: [], showButton: true, isActive: true, sortOrder: 0 };
+const EMPTY = { name: '', trigger: 'MANUAL', minutes: 5, code: 'switch_1', action: 'TOGGLE', customValue: '', extra: [], showButton: true, isActive: true, sortOrder: 0 };
 
 function toForm(s) {
   const [first, ...extra] = s.commands || [];
-  const action = first?.value === true ? 'ON' : first?.value === false ? 'OFF' : 'CUSTOM';
+  const action = first?.value === true ? 'ON' : first?.value === false ? 'OFF' : first?.value === 'toggle' ? 'TOGGLE' : 'CUSTOM';
   return { id: s.id, name: s.name, trigger: s.trigger, minutes: s.minutes, code: first?.code || 'switch_1', action, customValue: action === 'CUSTOM' ? String(first?.value ?? '') : '', extra, showButton: s.show_button, isActive: s.is_active, sortOrder: s.sort_order };
 }
 function parseValue(x) {
@@ -72,7 +72,7 @@ function parseValue(x) {
   return v;
 }
 function toBody(f) {
-  const value = f.action === 'ON' ? true : f.action === 'OFF' ? false : parseValue(f.customValue);
+  const value = f.action === 'ON' ? true : f.action === 'OFF' ? false : f.action === 'TOGGLE' ? 'toggle' : parseValue(f.customValue);
   return { name: f.name, trigger: f.trigger, minutes: Number(f.minutes) || 5, commands: [{ code: f.code.trim() || 'switch_1', value }, ...f.extra], showButton: f.showButton, isActive: f.isActive, sortOrder: Number(f.sortOrder) || 0 };
 }
 
@@ -106,7 +106,7 @@ function SystemModal({ initial, onClose, onSaved }) {
           <Input value={f.code} onChange={(e) => set('code', e.target.value)} />
         </Field>
         <Field label="ค่าที่ส่ง">
-          <Select value={f.action} onChange={(e) => set('action', e.target.value)} options={[{ value: 'ON', label: t('เปิด (true)') }, { value: 'OFF', label: t('ปิด (false)') }, { value: 'CUSTOM', label: t('ค่าอื่น (ตัวเลข / ข้อความ)') }]} />
+          <Select value={f.action} onChange={(e) => set('action', e.target.value)} options={[{ value: 'TOGGLE', label: t('สลับเปิด / ปิด (กดครั้งหนึ่งเปิด กดอีกครั้งปิด)') }, { value: 'ON', label: t('เปิด (true)') }, { value: 'OFF', label: t('ปิด (false)') }, { value: 'CUSTOM', label: t('ค่าอื่น / ปุ่มรีโมต (ตัวเลข / ข้อความ)') }]} />
         </Field>
         {f.action === 'CUSTOM' && <Field label="ค่า"><Input value={f.customValue} onChange={(e) => set('customValue', e.target.value)} placeholder="เช่น 1, white, scene_1" /></Field>}
         <Switch checked={f.showButton} onChange={(x) => set('showButton', x)} label={t('แสดงเป็นปุ่มในหน้าห้อง (กดสั่งเองได้)')} />
@@ -176,8 +176,8 @@ function Bindings({ data, rooms, devices, reload }) {
   };
   const test = async (sys, deviceId) => {
     try {
-      await api.post('/smart/test-device', { deviceId, commands: sys.commands });
-      toast.success(`${t('ส่งคำสั่งแล้ว')}: ${sys.name}`);
+      const r = await api.post('/smart/test-device', { deviceId, commands: sys.commands });
+      toast.success(`${t('ส่งคำสั่งแล้ว')}: ${sys.name}${r.via === 'ir' ? ` (${t('ผ่าน IR Hub')})` : ''}`);
     } catch (e) {
       toast.error(e);
     }
@@ -349,7 +349,19 @@ export default function SmartDevices() {
                     <td>{l.room_name || '-'}</td>
                     <td>{l.name}</td>
                     <td className="small">{l.employee_name || t(l.trigger === 'MANUAL' ? 'พนักงาน' : 'อัตโนมัติ')}{l.trigger !== 'MANUAL' && <div className="xs muted">{triggerLabel({ trigger: l.trigger, minutes: '' }, t)}</div>}</td>
-                    <td>{l.ok ? <CheckCircle2 size={16} color="var(--ok)" /> : <span className="small" style={{ color: 'var(--danger)' }}><XCircle size={14} /> {l.error}</span>}</td>
+                    <td>
+                      {l.ok ? <CheckCircle2 size={16} color="var(--ok)" /> : <span className="small" style={{ color: 'var(--danger)' }}><XCircle size={14} /> {l.error}</span>}
+                      {l.detail?.trace?.length > 0 && (
+                        <details className="xs muted">
+                          <summary>{t('สิ่งที่ส่งไป Tuya')}{l.detail.via === 'ir' ? ` (IR Hub)` : ''}</summary>
+                          {l.detail.trace.map((x, i) => (
+                            <div key={i} style={{ fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                              {x.method} {x.path} {x.body ? JSON.stringify(x.body) : ''} → {x.ok ? `ok ${x.result != null ? JSON.stringify(x.result).slice(0, 200) : ''}` : `${x.error}`}
+                            </div>
+                          ))}
+                        </details>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -369,6 +381,7 @@ export function RoomSmartButtons({ roomId }) {
   const toast = useToast();
   const { can } = useAuth();
   const { data } = useLive(() => api.get('/smart', { passive: true }), ['smart', 'settings'], []);
+  const { data: state, reload: reloadState } = useLive(() => api.get(`/smart/rooms/${roomId}/state`, { passive: true }), ['smart'], [roomId]);
   const [busy, setBusy] = useState(null);
   if (!data) return null;
   const list = data.systems.filter((s) => s.is_active && s.show_button && data.bindings.some((b) => b.system_id === s.id && b.room_id === roomId));
@@ -396,6 +409,7 @@ export function RoomSmartButtons({ roomId }) {
     try {
       await api.post('/smart/run', { systemId: s.id, roomId });
       toast.success(`${s.name}: ${t('สั่งงานแล้ว')}`);
+      setTimeout(reloadState, 1500); // the device reports its new state a moment later
     } catch (e) {
       toast.error(e);
     } finally {
@@ -408,9 +422,11 @@ export function RoomSmartButtons({ roomId }) {
       <div className="row" style={{ gap: 6 }}>
         {list.map((s) => {
           const off = s.commands[0]?.value === false;
+          const isOn = state?.[s.id]; // true / false / null (unknown)
           return (
-            <Button key={s.id} size="sm" variant={off ? 'danger' : ''} icon={off ? PowerOff : Power} loading={busy === s.id} disabled={!can('room.operate')} onClick={() => run(s)} title={triggerLabel(s, t)}>
+            <Button key={s.id} size="sm" variant={isOn === true ? 'success' : off ? 'danger' : ''} icon={isOn === true ? Power : off || isOn === false ? PowerOff : Power} loading={busy === s.id} disabled={!can('room.operate')} onClick={() => run(s)} title={triggerLabel(s, t)}>
               {s.name}
+              {isOn != null && <span className="xs" style={{ opacity: 0.8 }}> · {isOn ? t('เปิดอยู่') : t('ปิดอยู่')}</span>}
             </Button>
           );
         })}

@@ -17,6 +17,8 @@ process.env.ADMIN_PASSWORD = 'Admin12345';
 const ID = 'testaccessid123';
 const SECRET = 'testaccesssecret456';
 const commands = [];
+let fanOn = false; // the Wi-Fi fan's switch state
+let acPower = '1'; // the IR air conditioner's last known power
 let fake;
 let fakeUrl;
 
@@ -42,11 +44,14 @@ function startFakeTuya() {
           if (fnm[1] === 'fan-1') return send({ success: true, result: { category: 'fs', functions: [{ code: 'switch', type: 'Boolean' }, { code: 'fan_speed_enum', type: 'Enum' }] } });
           return send({ success: true, result: { category: 'infrared_ac', functions: [] } });
         }
+        if (req.url === '/v1.0/iot-03/devices/fan-1/status') return send({ success: true, result: [{ code: 'switch', value: fanOn }, { code: 'fan_speed_enum', value: '2' }] });
+        if (req.url === '/v2.0/infrareds/hub-1/remotes/ir-ac/ac/status') return send({ success: true, result: { power: acPower, mode: '0', temp: '25', wind: '0' } });
         if (req.url === '/v2.0/infrareds/hub-1/remotes') return send({ success: true, result: [{ remote_id: 'ir-ac', category_id: 5, remote_index: 11, remote_name: 'แอร์' }, { remote_id: 'ir-fan', category_id: 8, remote_index: 12, remote_name: 'พัดลม IR' }] });
         if (req.url === '/v2.0/infrareds/hub-1/remotes/ir-fan/keys') return send({ success: true, result: { category_id: 8, key_list: [{ key: 'PowerOn' }, { key: 'PowerOff' }, { key: 'Speed' }] } });
         const ir = req.url.match(/^\/v2\.0\/infrareds\/hub-1\/(air-conditioners|remotes)\/([^/]+)\/command$/);
         if (ir && req.method === 'POST') {
           commands.push({ device: ir[2], ir: JSON.parse(body) });
+          if (ir[1] === 'air-conditioners') acPower = String(JSON.parse(body).value);
           return send({ success: true, result: true });
         }
         const m = req.url.match(/^\/v1\.0\/iot-03\/devices\/([^/]+)\/commands$/);
@@ -54,6 +59,7 @@ function startFakeTuya() {
           if (m[1] === 'offline-dev') return send({ success: false, code: 2017, msg: 'device not found' });
           const cmds = JSON.parse(body).commands;
           if (m[1] === 'fan-1' && cmds[0].code !== 'switch') return send({ success: false, code: 2008, msg: 'command or value not support' });
+          if (m[1] === 'fan-1') fanOn = cmds[0].value === true;
           if (m[1].startsWith('ir-')) return send({ success: false, code: 2008, msg: 'command or value not support' });
           commands.push({ device: m[1], commands: JSON.parse(body).commands });
           return send({ success: true, result: true });
@@ -174,6 +180,30 @@ test('a device without switch_1 uses its own switch; IR air conditioner and IR f
   const irInfo = await api('GET', '/smart/devices/ir-fan/info');
   assert.equal(irInfo.body.kind, 'ir');
   assert.ok(irInfo.body.keys.includes('PowerOn'));
+});
+
+test('toggle: a press switches the device on, the next press off (Wi-Fi fan reads its state, IR air conditioner its power)', async () => {
+  const mk = async (b) => (await api('POST', '/smart/systems', b)).body;
+  const fan = await mk({ name: 'พัดลม (สลับ)', trigger: 'MANUAL', commands: [{ code: 'switch_1', value: 'toggle' }] });
+  const ac = await mk({ name: 'แอร์ (สลับ)', trigger: 'MANUAL', commands: [{ code: 'switch_1', value: 'toggle' }] });
+  await api('PUT', '/smart/bindings', { systemId: fan.id, roomId: 9, deviceId: 'fan-1' });
+  await api('PUT', '/smart/bindings', { systemId: ac.id, roomId: 9, deviceId: 'ir-ac' });
+  fanOn = false;
+  await api('POST', '/smart/run', { systemId: fan.id, roomId: 9 });
+  assert.deepEqual(commands.pop(), { device: 'fan-1', commands: [{ code: 'switch', value: true }] });
+  assert.equal((await api('GET', '/smart/rooms/9/state')).body[fan.id], true);
+  await api('POST', '/smart/run', { systemId: fan.id, roomId: 9 });
+  assert.deepEqual(commands.pop(), { device: 'fan-1', commands: [{ code: 'switch', value: false }] });
+  acPower = '1';
+  await api('POST', '/smart/run', { systemId: ac.id, roomId: 9 });
+  assert.deepEqual(commands.pop(), { device: 'ir-ac', ir: { code: 'power', value: 0 } });
+  await api('POST', '/smart/run', { systemId: ac.id, roomId: 9 });
+  assert.deepEqual(commands.pop(), { device: 'ir-ac', ir: { code: 'power', value: 1 } });
+  // the log keeps exactly what was sent and answered
+  const logs = (await api('GET', '/smart/logs?roomId=9')).body;
+  const last = logs[0];
+  assert.equal(last.detail.via, 'ir');
+  assert.ok(last.detail.trace.some((x) => x.path.endsWith('/air-conditioners/ir-ac/command') && x.ok));
 });
 
 test('automations: on at start, warning N min before, cut at time up, back on after adding time — each once', async () => {

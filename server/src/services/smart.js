@@ -12,18 +12,21 @@ export const SMART_TRIGGERS = ['MANUAL', 'ON_START', 'BEFORE_END', 'AT_END', 'ON
 export async function runSystem(system, binding, { sessionId = null, trigger = 'MANUAL', employeeId = null } = {}) {
   let ok = true;
   let error = null;
+  let detail = null;
   try {
-    await tuyaSend(binding.device_id, system.commands);
+    const r = await tuyaSend(binding.device_id, system.commands);
+    detail = { via: r?.via || null, trace: r?.trace || [] };
   } catch (e) {
     ok = false;
     error = e.message;
+    detail = { trace: e.trace || [] };
   }
   await pool.query(
-    `INSERT INTO smart_logs(system_id, room_id, session_id, device_id, name, trigger, ok, error, employee_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [system.id, binding.room_id, sessionId, binding.device_id, system.name, trigger, ok, error, employeeId],
+    `INSERT INTO smart_logs(system_id, room_id, session_id, device_id, name, trigger, ok, error, employee_id, detail) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [system.id, binding.room_id, sessionId, binding.device_id, system.name, trigger, ok, error, employeeId, detail],
   );
   emitSync(['smart']);
-  return { ok, error };
+  return { ok, error, detail };
 }
 
 /** Automations on the room clock. Each (system, session, end time) runs once, even with several servers. */

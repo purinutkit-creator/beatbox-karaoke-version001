@@ -178,51 +178,117 @@ async function resolveDevice(deviceId) {
 }
 
 const pickKey = (keys, on) => {
-  const want = on === true ? ['PowerOn', 'power_on', 'Power', 'power'] : on === false ? ['PowerOff', 'power_off', 'Power', 'power'] : [];
+  const want = on === true ? ['PowerOn', 'power_on', 'Power', 'power'] : on === false ? ['PowerOff', 'power_off', 'Power', 'power'] : ['Power', 'power'];
   return want.find((w) => keys.includes(w)) || keys.find((x) => /power/i.test(x)) || null;
 };
+const TOGGLE = 'toggle';
+const lastIrState = new Map(); // remotes without a readable state: remember what we sent last (for toggling PowerOn/PowerOff)
 
-async function sendIr(ir, commands) {
+/** Every request to Tuya while running a command is kept (path, body, answer) so the log shows exactly what happened. */
+async function traced(trace, method, path, body) {
+  try {
+    const result = await request(method, path, body ? { body } : {});
+    trace.push({ method, path, body: body || null, ok: true, result: result ?? null });
+    return result;
+  } catch (e) {
+    trace.push({ method, path, body: body || null, ok: false, error: e.message, code: e.code ?? null });
+    e.trace = trace;
+    throw e;
+  }
+}
+
+async function irAcPower(ir, trace) {
+  const st = await traced(trace, 'GET', `/v2.0/infrareds/${encodeURIComponent(ir.hub)}/remotes/${encodeURIComponent(ir.remote)}/ac/status`).catch(() => null);
+  return st && st.power != null ? String(st.power) === '1' : null;
+}
+
+async function sendIr(ir, commands, trace) {
   for (const c of commands) {
     if (ir.categoryId === 5) {
-      // air conditioner: power 1 / 0 (or mode / temp / wind with their numbers)
-      const code = typeof c.value === 'boolean' && /^(switch|power)/i.test(c.code) ? 'power' : c.code;
-      const value = typeof c.value === 'boolean' ? (c.value ? 1 : 0) : c.value;
-      await request('POST', `/v2.0/infrareds/${encodeURIComponent(ir.hub)}/air-conditioners/${encodeURIComponent(ir.remote)}/command`, { body: { code, value } });
+      // air conditioner: power 1 / 0 (toggle reads the remembered state first), or mode / temp / wind with their numbers
+      const isPower = typeof c.value === 'boolean' || c.value === TOGGLE; // on / off / toggle of an air conditioner = its power
+      let value = c.value;
+      if (c.value === TOGGLE) value = (await irAcPower(ir, trace)) ? 0 : 1;
+      else if (typeof c.value === 'boolean') value = c.value ? 1 : 0;
+      await traced(trace, 'POST', `/v2.0/infrareds/${encodeURIComponent(ir.hub)}/air-conditioners/${encodeURIComponent(ir.remote)}/command`, { code: isPower ? 'power' : c.code, value });
     } else {
-      // fan / TV / other remotes: a key of the remote (PowerOn / PowerOff, or Power which toggles)
-      const key = typeof c.value === 'boolean' ? pickKey(ir.keys, c.value) : String(c.value);
-      if (!key) throw new Error(`Tuya: รีโมตนี้ไม่มีปุ่ม Power (ปุ่มที่มี: ${ir.keys.slice(0, 12).join(', ') || '-'})`);
-      await request('POST', `/v2.0/infrareds/${encodeURIComponent(ir.hub)}/remotes/${encodeURIComponent(ir.remote)}/command`, { body: { category_id: ir.categoryId, remote_index: ir.remoteIndex, key } });
+      // fan / TV / other remotes: press a key of the remote
+      let key;
+      if (typeof c.value === 'string' && c.value !== TOGGLE) key = c.value; // a key typed as the value
+      else if (ir.keys.includes(c.code) && c.value !== false && c.value !== TOGGLE) key = c.code; // a key typed as the command
+      else if (c.value === TOGGLE) {
+        const k = cacheKey(ir.remote);
+        key = ir.keys.includes('Power') || ir.keys.includes('power') ? pickKey(ir.keys, null) : pickKey(ir.keys, !lastIrState.get(k));
+      } else key = pickKey(ir.keys, c.value);
+      if (!key) throw Object.assign(new Error(`Tuya: รีโมตนี้ไม่มีปุ่ม Power (ปุ่มที่มี: ${ir.keys.slice(0, 15).join(', ') || '-'})`), { trace });
+      await traced(trace, 'POST', `/v2.0/infrareds/${encodeURIComponent(ir.hub)}/remotes/${encodeURIComponent(ir.remote)}/command`, { category_id: ir.categoryId, remote_index: ir.remoteIndex, key });
+      if (/on$/i.test(key)) lastIrState.set(cacheKey(ir.remote), true);
+      else if (/off$/i.test(key)) lastIrState.set(cacheKey(ir.remote), false);
+      else if (/power/i.test(key)) lastIrState.set(cacheKey(ir.remote), !lastIrState.get(cacheKey(ir.remote)));
     }
   }
-  return { via: 'ir' };
+  return { via: 'ir', remote: { categoryId: ir.categoryId, keys: ir.keys }, trace };
+}
+
+/** Current on/off of a Wi-Fi device's switch (null when unknown). */
+async function dpSwitchState(deviceId, code, trace) {
+  const st = await traced(trace, 'GET', `/v1.0/iot-03/devices/${encodeURIComponent(deviceId)}/status`).catch(() => null);
+  const v = (Array.isArray(st) ? st : []).find((x) => x.code === code);
+  return v ? v.value === true || v.value === 'true' || v.value === 1 : null;
 }
 
 /**
- * Send commands to one device, e.g. [{ code: 'switch_1', value: false }].
- * If the device does not have that data point (Tuya 2008), its own on/off switch is used instead (switch, switch_led …);
+ * Send commands to one device, e.g. [{ code: 'switch_1', value: false }] or { value: 'toggle' } (switch on ↔ off).
+ * A Wi-Fi device without that data point uses its own on/off switch (switch, switch_led …);
  * a remote behind an IR hub (air conditioner, fan, TV) is controlled through Tuya's IR API.
+ * Returns { trace } — every request and answer, kept in the log.
  */
 export async function tuyaSend(deviceId, commands) {
-  const known = resolved.get(cacheKey(deviceId));
-  if (known?.kind === 'ir') return sendIr(known, commands);
-  const send = (cmds) => request('POST', `/v1.0/iot-03/devices/${encodeURIComponent(deviceId)}/commands`, { body: { commands: cmds } });
-  const remap = (dev) => commands.map((c) => (dev.codes.includes(c.code) || typeof c.value !== 'boolean' || !dev.switchCode ? c : { ...c, code: dev.switchCode }));
-  if (known?.kind === 'dp') return send(remap(known));
+  const trace = [];
+  const needsDevice = commands.some((c) => c.value === TOGGLE);
+  let dev = resolved.get(cacheKey(deviceId));
+  if (!dev && needsDevice) dev = await resolveDevice(deviceId);
+  if (dev?.kind === 'ir') return sendIr(dev, commands, trace);
+  const send = (cmds) => traced(trace, 'POST', `/v1.0/iot-03/devices/${encodeURIComponent(deviceId)}/commands`, { commands: cmds });
+  const remap = async (d) => {
+    const out = [];
+    for (const c of commands) {
+      const code = d.codes.includes(c.code) || !d.switchCode || (typeof c.value !== 'boolean' && c.value !== TOGGLE) ? c.code : d.switchCode;
+      let value = c.value;
+      if (value === TOGGLE) value = !((await dpSwitchState(deviceId, code, trace)) ?? false);
+      out.push({ code, value });
+    }
+    return out;
+  };
+  if (dev?.kind === 'dp') {
+    await send(await remap(dev));
+    return { via: 'dp', trace };
+  }
   try {
-    return await send(commands);
+    await send(commands);
+    return { via: 'dp', trace };
   } catch (e) {
     if (![2008, 2007, 1109, 2001].includes(e.code)) throw e;
-    const dev = await resolveDevice(deviceId);
-    if (dev?.kind === 'ir') return sendIr(dev, commands);
+    dev = await resolveDevice(deviceId);
+    if (dev?.kind === 'ir') return sendIr(dev, commands, trace);
     if (dev?.kind === 'dp') {
-      const fixed = remap(dev);
-      if (JSON.stringify(fixed) === JSON.stringify(commands)) throw new Error(`${e.message} — คำสั่งที่อุปกรณ์รองรับ: ${dev.codes.join(', ')}`);
-      return send(fixed);
+      const fixed = await remap(dev);
+      if (JSON.stringify(fixed) === JSON.stringify(commands)) throw Object.assign(new Error(`${e.message} — คำสั่งที่อุปกรณ์รองรับ: ${dev.codes.join(', ')}`), { trace });
+      await send(fixed);
+      return { via: 'dp', trace };
     }
     throw e;
   }
+}
+
+/** On / off right now of each device (Wi-Fi switch or IR air conditioner); null when the device can't tell. */
+export async function tuyaPowerState(deviceId) {
+  const dev = await resolveDevice(deviceId).catch(() => null);
+  const trace = [];
+  if (dev?.kind === 'dp' && dev.switchCode) return dpSwitchState(deviceId, dev.switchCode, trace);
+  if (dev?.kind === 'ir' && dev.categoryId === 5) return irAcPower(dev, trace);
+  if (dev?.kind === 'ir') return lastIrState.has(cacheKey(dev.remote)) ? lastIrState.get(cacheKey(dev.remote)) : null;
+  return null;
 }
 
 /** For the settings page: what a device accepts (data points, or the IR remote and its keys). */
