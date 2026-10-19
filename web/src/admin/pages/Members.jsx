@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Users, Plus, Pencil, Crown, Coins, Gift, Search, KeyRound, RotateCcw, Printer } from 'lucide-react';
+import { Users, Plus, Pencil, Crown, Coins, Gift, Search, KeyRound, RotateCcw, Printer, CreditCard, Palette } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { PageHead, Button, Input, Modal, Field, Select, Switch, Textarea, Badge, Tabs, Loading, Empty, Drawer, Img, ImageUrlInput, money, useToast, useDialog, QRCode } from '../../components/ui.jsx';
 import { StatusBadge } from '../../components/ReservationParts.jsx';
 import { useT } from '../../lib/i18n.jsx';
@@ -8,6 +9,8 @@ import { useAuth } from '../../lib/store.jsx';
 import { usePrint } from '../../components/PrintPreview.jsx';
 import { useLive } from '../../lib/socket.js';
 import { fmtDate, fmtDateTime } from '@beatbox/shared/format.js';
+import { MemberCardPanel, PrintCardsModal } from '../../components/MemberCardParts.jsx';
+import { useCardReader } from '../../lib/cardReader.js';
 
 function MemberForm({ initial, tiers, onClose, onSaved }) {
   const { t } = useT();
@@ -140,6 +143,7 @@ function MemberDrawer({ id, tiers, onClose, onEdit }) {
         <div className="small muted">{t('ห้องที่ใช้บ่อย')}: {m.favorite_room || '-'} · {t('รายการโปรด')}: {m.favorite_items || m.topItems.map((x) => x.name).join(', ') || '-'}</div>
         {m.note && <div className="small">📝 {m.note}</div>}
         {can('member.points') && <div className="row"><Button icon={Coins} onClick={() => setAdj({ points: '', reason: '' })}>{t('เพิ่ม/ลดคะแนน')}</Button></div>}
+        <MemberCardPanel m={m} tiers={tiers} onChanged={reload} />
         <MemberLoginCard m={m} onDone={reload} />
         <Tabs value={tab} onChange={setTab} tabs={[{ value: 'points', label: 'ประวัติคะแนน' }, { value: 'rewards', label: 'แลกรางวัล' }, { value: 'orders', label: 'ประวัติการใช้บริการ' }, { value: 'bookings', label: 'ประวัติการจอง' }, { value: 'login', label: 'การเชื่อมบัญชี' }]} />
         {tab === 'points' && (
@@ -183,8 +187,23 @@ export default function Members() {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(null);
   const [edit, setEdit] = useState(null);
+  const [picked, setPicked] = useState([]);
+  const [printing, setPrinting] = useState(null);
+  const nav = useNavigate();
   const { data, loading, reload } = useLive(() => api.get(`/members?q=${encodeURIComponent(query)}`), ['members'], [query]);
   const { data: tiers } = useLive(() => api.get('/member-tiers'), [], []);
+  // a member card tapped on the reader / scanned → that member
+  useCardReader(async (code) => {
+    if (open || edit || printing) return;
+    const m = await api.get(`/members/lookup?q=${encodeURIComponent(code)}`).catch(() => null);
+    if (m) setOpen(m.id);
+    else {
+      setQ(code);
+      setQuery(code);
+    }
+  });
+  const pick = (id, on) => setPicked((x) => (on ? [...new Set([...x, id])] : x.filter((y) => y !== id)));
+  const allOn = !!data?.length && data.every((m) => picked.includes(m.id));
   return (
     <div>
       <PageHead icon={Users} title="สมาชิก">
@@ -192,18 +211,21 @@ export default function Members() {
           <Input placeholder={t('เบอร์โทร / ชื่อ / รหัสสมาชิก')} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && setQuery(q)} />
           <Button icon={Search} onClick={() => setQuery(q)} />
         </div>
+        {picked.length > 0 && can('member.edit') && <Button variant="primary" icon={CreditCard} onClick={() => setPrinting(picked)}>{t('พิมพ์บัตร')} ({picked.length})</Button>}
+        {can('member.edit') && <Button icon={Palette} onClick={() => nav('/admin/member-cards')}>{t('ออกแบบบัตรสมาชิก')}</Button>}
         <Button icon={Printer} onClick={printSignup}>{t('พิมพ์ใบสมัครสมาชิก (QR)')}</Button>
         {can('member.edit') && <Button variant="primary" icon={Plus} onClick={() => setEdit({})}>{t('เพิ่มสมาชิก')}</Button>}
       </PageHead>
       {loading ? <Loading /> : !data?.length ? <Empty /> : (
         <div className="table-wrap">
           <table className="table">
-            <thead><tr><th /><th>{t('รหัสสมาชิก')}</th><th>{t('ชื่อ')}</th><th>{t('เบอร์โทรศัพท์')}</th><th>{t('ระดับ')}</th><th className="right">{t('คะแนน')}</th><th className="right">{t('ยอดสะสม')}</th><th className="right">{t('ครั้ง')}</th><th>{t('วันที่สมัคร')}</th><th>{t('สถานะ')}</th></tr></thead>
+            <thead><tr><th><input type="checkbox" checked={allOn} onChange={(e) => setPicked(e.target.checked ? data.map((m) => m.id) : [])} title={t('เลือกทั้งหมด')} /></th><th /><th>{t('รหัสสมาชิก')}</th><th>{t('ชื่อ')}</th><th>{t('เบอร์โทรศัพท์')}</th><th>{t('ระดับ')}</th><th className="right">{t('คะแนน')}</th><th className="right">{t('ยอดสะสม')}</th><th className="right">{t('ครั้ง')}</th><th>{t('วันที่สมัคร')}</th><th>{t('สถานะ')}</th></tr></thead>
             <tbody>
               {data.map((m) => (
                 <tr key={m.id} className="clickable" onClick={() => setOpen(m.id)}>
+                  <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={picked.includes(m.id)} onChange={(e) => pick(m.id, e.target.checked)} /></td>
                   <td><Img src={m.photo_url} style={{ width: 36, height: 36, borderRadius: 99, objectFit: 'cover' }} /></td>
-                  <td className="bold">{m.member_code}</td>
+                  <td className="bold nowrap">{m.member_code} {m.card_kind && <CreditCard size={14} style={{ color: 'var(--ok)', verticalAlign: -2 }} title={t('มีบัตรแล้ว')} />}</td>
                   <td>{m.first_name} {m.last_name || ''} {m.nickname && <span className="muted">({m.nickname})</span>} {m.line_connected && <Badge color="#06c755">LINE</Badge>}</td>
                   <td>{m.phone}</td>
                   <td><Badge color={m.tier_color}>{m.tier_name}</Badge></td>
@@ -219,6 +241,7 @@ export default function Members() {
         </div>
       )}
       {open && <MemberDrawer id={open} tiers={tiers} onClose={() => setOpen(null)} onEdit={(m) => setEdit(m)} />}
+      {printing && <PrintCardsModal memberIds={printing} onClose={() => setPrinting(null)} onPrinted={() => { setPicked([]); reload(); }} />}
       {edit && <MemberForm initial={edit} tiers={tiers} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload(); }} />}
     </div>
   );

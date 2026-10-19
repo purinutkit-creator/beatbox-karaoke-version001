@@ -163,6 +163,31 @@ export const DEFAULT_SETTINGS = {
     passwordNote: 'สำหรับการสมัครสมาชิกครั้งแรก รหัสผ่านเริ่มต้นคือเลข 4 ตัวท้ายของเบอร์โทรศัพท์ และสามารถเปลี่ยนรหัสผ่านได้หลังเข้าสู่ระบบ',
     extraFields: [], // [{ key, label, type: 'text' | 'date' | 'select' | 'email', required, options: [] }]
   },
+  // member cards (85.5 × 54 mm): the look of each tier, the back side, and how they are printed
+  memberCard: {
+    numberDigits: 12, // new member / card numbers: random digits
+    title: 'MEMBER CARD',
+    showLogo: true,
+    showTier: true,
+    showSince: true,
+    showPhoto: false,
+    tiers: {}, // { [tierId]: { theme, color1, color2, textColor, accent, imageUrl, title } } — empty = the theme picked from the tier
+    back: {
+      heading: 'สิทธิประโยชน์สมาชิก',
+      text: 'สะสมคะแนนทุกการใช้บริการ\nแสดงบัตรนี้ทุกครั้งที่ใช้บริการ',
+      showStoreInfo: true,
+      links: [], // [{ label, url }] → QR codes
+      imageUrl: '',
+      terms: 'บัตรนี้เป็นทรัพย์สินของร้าน ไม่สามารถโอนสิทธิ์ให้ผู้อื่นได้',
+    },
+    print: {
+      paper: 'A4', // A4 = 10 cards a sheet (front page then back page) | CARD = a card printer, one card a page
+      flip: 'LONG', // duplex: LONG = flip on the long edge (usual) | SHORT = short edge
+      offsetX: 0, // mm, moves the back page to line up with the front
+      offsetY: 0,
+      cutMarks: true,
+    },
+  },
   calendar: {
     orientation: 'TIME_X', // TIME_X = time horizontal / rooms vertical; TIME_Y = time vertical / rooms horizontal
     nowLine: { enabled: true, color: '#ef4444', glow: true, speed: 2 }, // speed = seconds per glow cycle

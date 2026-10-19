@@ -507,6 +507,9 @@ export async function browserPrint(elements) {
   const root = createRoot(host);
   flushSync(() => root.render(<>{elements}</>));
   await document.fonts?.ready;
+  // pictures (logo, card backgrounds) must be loaded or they print blank; one that never loads is not waited for long
+  const imgs = [...host.querySelectorAll('img')].filter((i) => !i.complete);
+  await Promise.race([Promise.all(imgs.map((i) => new Promise((r) => { i.onload = i.onerror = r; }))), new Promise((r) => setTimeout(r, 5000))]);
   await new Promise((r) => setTimeout(r, 150));
   window.print();
   setTimeout(() => {

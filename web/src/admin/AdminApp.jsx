@@ -29,6 +29,7 @@ const pages = {
   checkin: lazy(() => import('./pages/CheckIn.jsx')),
   members: lazy(() => import('./pages/Members.jsx')),
   rewards: lazy(() => import('./pages/Rewards.jsx')),
+  memberCards: lazy(() => import('./pages/MemberCards.jsx')),
   products: lazy(() => import('./pages/Products.jsx')),
   categories: lazy(() => import('./pages/Categories.jsx')),
   stock: lazy(() => import('./pages/Stock.jsx')),
@@ -65,6 +66,7 @@ export const MENU = [
   { group: 'ลูกค้า' },
   { to: 'members', label: 'สมาชิก', icon: Users, perm: 'member.view', feature: 'members' },
   { to: 'rewards', label: 'Rewards & Tier', icon: Gift, perm: 'member.view', feature: 'members' },
+  { to: 'member-cards', label: 'บัตรสมาชิก', icon: CreditCard, perm: 'member.edit', feature: 'members' },
   { group: 'สินค้าและห้อง' },
   { to: 'products', label: 'สินค้า', icon: Package, feature: 'pos' },
   { to: 'categories', label: 'หมวดหมู่', icon: Tags, feature: 'pos' },
@@ -602,6 +604,7 @@ function Layout() {
               <Route path="checkin" element={gate('checkin', <pages.checkin />)} />
               <Route path="members" element={gate('members', <pages.members />)} />
               <Route path="rewards" element={gate('rewards', <pages.rewards />)} />
+              <Route path="member-cards" element={can('member.edit') ? gate('member-cards', <pages.memberCards />) : <Forbidden />} />
               <Route path="products" element={gate('products', <pages.products />)} />
               <Route path="categories" element={gate('categories', <pages.categories />)} />
               <Route path="stock" element={gate('stock', <pages.stock />)} />

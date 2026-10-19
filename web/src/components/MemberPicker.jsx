@@ -14,7 +14,12 @@ export function MemberPicker({ onPick, initialPhone = '' }) {
   const search = async () => {
     if (!q.trim()) return;
     try {
-      setRows(await api.get(`/members?q=${encodeURIComponent(q.trim())}&limit=20`));
+      const found = await api.get(`/members?q=${encodeURIComponent(q.trim())}&limit=20`);
+      // a member card read into the box (reader / scanner) → that member at once
+      const code = q.trim().replace(/^MEMBER:/i, '').toUpperCase();
+      const exact = found.filter((m) => m.member_code.toUpperCase() === code);
+      if (exact.length === 1) return onPick(exact[0]);
+      setRows(found);
     } catch (e) {
       toast.error(e);
     }
@@ -32,7 +37,7 @@ export function MemberPicker({ onPick, initialPhone = '' }) {
   return (
     <div className="col">
       <div className="row nowrap">
-        <Input placeholder={t('เบอร์โทร / ชื่อ / รหัสสมาชิก')} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && search()} />
+        <Input autoFocus placeholder={t('เบอร์โทร / ชื่อ / รหัสสมาชิก / แตะบัตร')} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && search()} />
         <Button icon={Search} onClick={search}>{t('ค้นหา')}</Button>
         <Button icon={UserPlus} onClick={() => setCreating({ firstName: '', phone: /^\d+$/.test(q) ? q : '' })}>{t('สมัคร')}</Button>
       </div>

@@ -18,11 +18,79 @@ export const MEMBER_SELECT = `
          (m.password_hash IS NULL) AS password_is_default,
          (SELECT e.name FROM employees e WHERE e.id = m.password_reset_by) AS password_reset_by_name,
          EXISTS (SELECT 1 FROM line_connections lc WHERE lc.member_id = m.id AND lc.status = 'CONNECTED') AS line_connected,
-         (SELECT rm.name FROM room_sessions rs JOIN rooms rm ON rm.id = rs.room_id WHERE rs.member_id = m.id GROUP BY rm.name ORDER BY COUNT(*) DESC LIMIT 1) AS favorite_room
-  FROM members m LEFT JOIN member_tiers t ON t.id = m.tier_id`;
+         (SELECT rm.name FROM room_sessions rs JOIN rooms rm ON rm.id = rs.room_id WHERE rs.member_id = m.id GROUP BY rm.name ORDER BY COUNT(*) DESC LIMIT 1) AS favorite_room,
+         t.code AS tier_code, t.sort_order AS tier_sort, mc.kind AS card_kind, mc.created_at AS card_issued_at, mc.print_count AS card_print_count, mc.last_printed_at AS card_printed_at
+  FROM members m LEFT JOIN member_tiers t ON t.id = m.tier_id
+  LEFT JOIN member_cards mc ON mc.member_id = m.id AND mc.status = 'ACTIVE'`;
+
+/** What a scanner / card reader / typed search gives → a member number ("MEMBER:…" from the member QR, spaces). */
+export const cardCode = (v) => String(v || '').trim().replace(/^MEMBER:/i, '').replace(/\s+/g, '').toUpperCase();
+const CARD_NO = /^[A-Z0-9-]{4,32}$/;
+/** A first card keeps the member's number when it already looks like a card number (random digits). */
+const isCardNumber = (v) => /^\d{8,16}$/.test(v || '');
+
+/** Make `code` the member's number and their one active card (the card they had before stops working). */
+async function giveCard(c, req, m, code, kind) {
+  await c.query(`UPDATE member_cards SET status = 'REPLACED', replaced_at = now() WHERE member_id = $1 AND status = 'ACTIVE'`, [m.id]);
+  if (code !== m.member_code) await c.query('UPDATE members SET member_code = $2, updated_at = now() WHERE id = $1', [m.id, code]);
+  const card = (await c.query('INSERT INTO member_cards(member_id, card_no, kind, previous_code, issued_by) VALUES ($1,$2,$3,$4,$5) RETURNING *', [m.id, code, kind, m.member_code, req.employee.id])).rows[0];
+  await logActivity(c, req, kind === 'SYNCED' ? 'MEMBER_CARD_SYNC' : 'MEMBER_CARD_ISSUE', 'member', m.id, { cardNo: code, previousCode: m.member_code });
+  return card;
+}
+
+async function lockMember(c, id) {
+  const m = (await c.query('SELECT * FROM members WHERE id = $1 AND deleted_at IS NULL FOR UPDATE', [id])).rows[0];
+  if (!m) throw notFound('ไม่พบสมาชิก');
+  return m;
+}
+
+/** Print cards: members without a card get their first one; the print is counted. Returns the members to print. */
+r.post('/members/cards/print', can('member.edit'), async (req, res) => {
+  const { memberIds } = parse(z.object({ memberIds: z.array(z.coerce.number().int()).min(1).max(200) }), req.body);
+  await tx(async (c) => {
+    for (const id of memberIds) {
+      const m = await lockMember(c, id);
+      const has = (await c.query(`SELECT id FROM member_cards WHERE member_id = $1 AND status = 'ACTIVE'`, [m.id])).rows[0];
+      if (!has) await giveCard(c, req, m, isCardNumber(m.member_code) ? m.member_code : await nextMemberCode(c), 'ISSUED');
+      await c.query(`UPDATE member_cards SET print_count = print_count + 1, last_printed_at = now() WHERE member_id = $1 AND status = 'ACTIVE'`, [m.id]);
+    }
+    await logActivity(c, req, 'MEMBER_CARD_PRINT', 'member', memberIds.length === 1 ? memberIds[0] : null, { memberIds });
+  });
+  emitSync('members');
+  res.json(await many(`${MEMBER_SELECT} WHERE m.id = ANY($1::int[]) ORDER BY array_position($1::int[], m.id)`, [memberIds]));
+});
+
+/** Who a card number belongs to (the "ซิงค์บัตร" screen checks the card before it is used). */
+r.get('/members/card-owner', can('member.view'), async (req, res) => {
+  const code = cardCode(req.query.no);
+  if (!CARD_NO.test(code)) return res.json({ code, valid: false });
+  const m = await one('SELECT id, first_name, last_name, member_code, deleted_at FROM members WHERE upper(member_code) = $1', [code]);
+  res.json({ code, valid: true, owner: m && { id: m.id, name: `${m.first_name} ${m.last_name || ''}`.trim(), deleted: !!m.deleted_at } });
+});
+
+/** "ออกบัตรใหม่": a new random number → the member's number and card; the old card stops working. */
+r.post('/members/:id/card/issue', can('member.edit'), async (req, res) => {
+  const card = await tx(async (c) => giveCard(c, req, await lockMember(c, req.params.id), await nextMemberCode(c), 'ISSUED'));
+  emitSync('members');
+  res.json(card);
+});
+
+/** "ซิงค์บัตร": the number read from an existing card (barcode / RFID reader) becomes the member's number and card. */
+r.post('/members/:id/card/sync', can('member.edit'), async (req, res) => {
+  const code = cardCode(parse(z.object({ cardNo: z.string().max(80) }), req.body).cardNo);
+  if (!CARD_NO.test(code)) throw badRequest('เลขบัตรไม่ถูกต้อง (ตัวอักษร/ตัวเลข 4–32 ตัว)');
+  const card = await tx(async (c) => {
+    const m = await lockMember(c, req.params.id);
+    const other = (await c.query('SELECT first_name, deleted_at FROM members WHERE upper(member_code) = $1 AND id <> $2', [code, m.id])).rows[0];
+    if (other) throw conflict(other.deleted_at ? 'เลขบัตรนี้เคยใช้กับสมาชิกที่ถูกลบแล้ว ใช้บัตรใบอื่น' : `บัตรนี้เป็นของสมาชิก ${other.first_name} อยู่แล้ว`);
+    return giveCard(c, req, m, code, 'SYNCED');
+  });
+  emitSync('members');
+  res.json(card);
+});
 
 r.get('/members', can('member.view'), async (req, res) => {
-  const q = String(req.query.q || '').trim();
+  const q = String(req.query.q || '').trim().replace(/^MEMBER:/i, '');
   const phone = normalizePhone(q);
   const rows = await many(
     `${MEMBER_SELECT} WHERE m.deleted_at IS NULL AND ($1 = '' OR m.phone LIKE '%'||$2||'%' AND $2 <> '' OR m.first_name ILIKE '%'||$1||'%' OR m.last_name ILIKE '%'||$1||'%'
@@ -35,8 +103,8 @@ r.get('/members', can('member.view'), async (req, res) => {
 
 r.get('/members/lookup', async (req, res) => {
   const phone = normalizePhone(req.query.phone || req.query.q);
-  const q = String(req.query.q || '').trim();
-  const m = await one(`${MEMBER_SELECT} WHERE m.deleted_at IS NULL AND (m.phone = $1 OR upper(m.member_code) = upper($2)) LIMIT 1`, [phone, q]);
+  const q = cardCode(req.query.q);
+  const m = await one(`${MEMBER_SELECT} WHERE m.deleted_at IS NULL AND (m.phone = $1 OR upper(m.member_code) = $2) LIMIT 1`, [phone, q]);
   res.json(m);
 });
 
@@ -49,7 +117,8 @@ r.get('/members/:id', can('member.view'), async (req, res) => {
   const redemptions = await many(`SELECT rr.*, rw.name AS reward_name FROM reward_redemptions rr JOIN rewards rw ON rw.id = rr.reward_id WHERE rr.member_id = $1 ORDER BY rr.id DESC LIMIT 100`, [m.id]);
   const identities = await many(`SELECT provider, display_name, picture_url, status, linked_at, last_login_at FROM member_auth_identities WHERE member_id = $1 ORDER BY id`, [m.id]);
   const topItems = await many(`SELECT oi.name, SUM(oi.qty) AS qty FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE o.member_id = $1 AND o.status = 'PAID' AND oi.item_type = 'PRODUCT' AND oi.voided_at IS NULL GROUP BY oi.name ORDER BY qty DESC LIMIT 5`, [m.id]);
-  res.json({ ...m, ledger, orders, reservations, redemptions, identities, topItems });
+  const cards = await many(`SELECT mc.*, e.name AS issued_by_name FROM member_cards mc LEFT JOIN employees e ON e.id = mc.issued_by WHERE mc.member_id = $1 ORDER BY mc.id DESC LIMIT 50`, [m.id]);
+  res.json({ ...m, ledger, orders, reservations, redemptions, identities, topItems, cards });
 });
 
 const memberSchema = z.object({

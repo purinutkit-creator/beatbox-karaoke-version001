@@ -17,9 +17,23 @@ export const nextRefundNo = (client) => templated(client, 'refund', 'RF{YY}{MM}{
 export const nextPaymentNo = (client) => templated(client, 'payment', 'PM{YY}{MM}{DD}{SEQ:5}');
 export const nextShiftNo = (client) => templated(client, 'shift', 'SH{YY}{MM}{DD}{SEQ:2}');
 
+/**
+ * A new member number = the number on the member's card: random digits (no leading 0), as many as the store set for its
+ * cards (8–16, 12 by default), never one already used in the store (deleted members keep theirs).
+ */
 export async function nextMemberCode(client) {
-  const seq = await nextCounter(client, 'member', 'ALL');
-  return 'M' + String(seq).padStart(6, '0');
+  const set = (await client.query(`SELECT value->>'numberDigits' AS d FROM system_settings WHERE key = 'memberCard'`)).rows[0];
+  const digits = Math.min(16, Math.max(8, Number(set?.d) || 12));
+  for (let i = 0; i < 20; i++) {
+    const code = randomDigits(digits);
+    if (!(await client.query('SELECT 1 FROM members WHERE member_code = $1', [code])).rows[0]) return code;
+  }
+  throw new Error('member number: no free number');
+}
+
+export function randomDigits(n) {
+  const buf = crypto.randomBytes(n);
+  return [...buf].map((b, i) => (i === 0 ? 1 + (b % 9) : b % 10)).join('');
 }
 
 /** Queue number according to settings: DAILY / SHIFT / NEVER reset; manual "set last number" supported. */

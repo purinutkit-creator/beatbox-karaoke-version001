@@ -10,7 +10,8 @@ import { api, uid } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive } from '../../lib/socket.js';
 import { pushDisplay, idleDisplay } from '../../lib/display.js';
-import { useScannerWedge } from '../../lib/scanner.js';
+import { isBookingCode } from '../../lib/scanner.js';
+import { useCardReader, cleanCardNo } from '../../lib/cardReader.js';
 import { BookingCard, bookingCardData } from '../../components/BookingCard.jsx';
 import { ReservationDrawer } from '../../components/ReservationParts.jsx';
 import { calculateBill } from '@beatbox/shared/calc.js';
@@ -108,6 +109,14 @@ export default function Pos() {
   const [bookingId, setBookingId] = useState(null);
   const findBooking = async (code) => {
     try {
+      // a member card (tapped on the reader / barcode scanned) → this sale is for that member
+      if (!isBookingCode(code)) {
+        const m = await api.get(`/members/lookup?q=${encodeURIComponent(cleanCardNo(code))}`).catch(() => null);
+        if (m) {
+          setMember(m);
+          return toast.success(`${t('สมาชิก')}: ${m.first_name} ${m.last_name || ''} · ${m.tier_name || ''}`);
+        }
+      }
       const rows = await api.get(`/reservations/lookup?q=${encodeURIComponent(code)}`);
       if (!rows.length) return toast.warning(`${t('ไม่พบสินค้าหรือการจองของรหัส')} ${code}`);
       setFound({ code, rows: rows.slice(0, 4) });
@@ -115,7 +124,7 @@ export default function Pos() {
       toast.error(e);
     }
   };
-  useScannerWedge(findBooking, !checkoutId);
+  useCardReader(findBooking, !checkoutId);
   const showOnDisplay = (rv) => {
     pushDisplay({ mode: 'CHECKIN_RESULT', found: true, booking: bookingCardData(rv) });
     setTimeout(() => idleDisplay(), 20000);

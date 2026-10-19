@@ -52,7 +52,7 @@ r.put('/settings/:section', can('settings.manage'), async (req, res) => {
   if (!(section in DEFAULT_SETTINGS)) throw notFound('ไม่พบหมวดการตั้งค่า');
   // documents have their own validated endpoint (plan feature "receipt settings")
   if (section === 'documents') throw badRequest('กรุณาบันทึกผ่านหน้าออกแบบเอกสาร');
-  const sectionFeature = { memberSignup: 'members', booking: 'booking', calendar: 'booking', receipt: 'receipt_settings' }[section];
+  const sectionFeature = { memberSignup: 'members', memberCard: 'members', booking: 'booking', calendar: 'booking', receipt: 'receipt_settings' }[section];
   if (sectionFeature && !hasFeature(req.subscription, sectionFeature)) throw forbidden('แพ็กเกจปัจจุบันไม่รวมฟังก์ชันนี้ กรุณาอัปเกรดแพ็กเกจ');
   if (section === 'room' && isBadPaymentMode(req.body)) throw badRequest('โหมดการชำระค่าห้องไม่ถูกต้อง');
   const value = req.body || {};
@@ -73,6 +73,20 @@ r.put('/settings/:section', can('settings.manage'), async (req, res) => {
   }
   if (section === 'queue') {
     parse(z.object({ prefix: z.string().max(20), digits: z.coerce.number().int().min(1).max(8), start: z.coerce.number().int().min(0), resetMode: z.enum(['DAILY', 'SHIFT', 'NEVER']) }).passthrough(), value);
+  }
+  if (section === 'memberCard') {
+    const link = z.object({ label: z.string().trim().max(40), url: z.string().trim().min(1).max(500) });
+    const look = z.object({ theme: z.string().max(30).optional(), color1: z.string().max(30).optional(), color2: z.string().max(30).optional(), textColor: z.string().max(30).optional(), accent: z.string().max(30).optional(), imageUrl: zUrl, title: z.string().max(40).optional().nullable() }).passthrough();
+    parse(
+      z.object({
+        numberDigits: z.coerce.number().int().min(8).max(16),
+        title: z.string().max(40).optional().nullable(),
+        tiers: z.record(z.string(), look).optional(),
+        back: z.object({ heading: z.string().max(60).optional().nullable(), text: z.string().max(600).optional().nullable(), imageUrl: zUrl, links: z.array(link).max(4).optional(), terms: z.string().max(400).optional().nullable() }).passthrough(),
+        print: z.object({ paper: z.enum(['A4', 'CARD']), flip: z.enum(['LONG', 'SHORT']), offsetX: z.coerce.number().min(-10).max(10), offsetY: z.coerce.number().min(-10).max(10) }).passthrough(),
+      }).passthrough(),
+      value,
+    );
   }
   if (section === 'payment' && value.qrImageUrl) parse(z.object({ qrImageUrl: zUrl }).passthrough(), value);
   if (section === 'general' && value.backgroundUrl) parse(z.object({ backgroundUrl: zUrl }).passthrough(), value);
