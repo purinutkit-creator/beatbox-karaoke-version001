@@ -614,7 +614,7 @@ function BackupTab() {
       ]} />
       <SaveBar onSave={s.save} busy={s.busy} />
       <Button icon={Database} onClick={async () => { try { await api.post('/backups'); toast.success('สำรองข้อมูลเรียบร้อย'); reload(); } catch (e) { toast.error(e); } }}>{t('สำรองข้อมูลตอนนี้')}</Button>
-      <div className="col mt">{(data || []).map((b) => <div key={b.id} className="row between card flat small" style={{ padding: 8 }}><span>{b.file_name}</span><span><Badge color={b.status === 'SUCCESS' ? '#16a34a' : '#dc2626'}>{b.status}</Badge> {b.size_bytes ? `${(b.size_bytes / 1024).toFixed(0)} KB` : ''} · {fmtDateTime(b.created_at)}</span></div>)}</div>
+      <div className="col mt">{(data || []).map((b) => <div key={b.id} className="row between card flat small" style={{ padding: 8 }}><span>{b.file_name}</span><span><Badge color={b.status === 'SUCCESS' ? '#16a34a' : b.status === 'RUNNING' ? '#f97316' : '#dc2626'}>{b.status}</Badge> {b.size_bytes ? `${(b.size_bytes / 1024).toFixed(0)} KB` : ''} · {fmtDateTime(b.created_at)}</span></div>)}</div>
     </div>
   );
 }

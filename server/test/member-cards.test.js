@@ -8,7 +8,7 @@ const DB = (process.env.TEST_DATABASE_URL || 'postgres://postgres:postgres@local
 process.env.DATABASE_URL = DB;
 process.env.DISABLE_SCHEDULER = 'true';
 process.env.PAYMENT_MODE = 'DEMO';
-process.env.PORT = '4993';
+process.env.PORT = '4981';
 process.env.SEED_STORE_CODE = 'beatbox1';
 process.env.ADMIN_PASSWORD = 'Admin12345';
 
@@ -28,7 +28,7 @@ before(async () => {
   await admin.end();
   const { start } = await import('../src/index.js');
   server = await start();
-  base = 'http://localhost:4993/api';
+  base = 'http://localhost:4981/api';
   const storeSession = (await api('POST', '/auth/store-login', { storeCode: 'beatbox1', login: 'admin', password: 'Admin12345' })).body.storeSession;
   token = (await api('POST', '/auth/login', { pin: '1234' }, { headers: { 'X-Store-Session': storeSession } })).body.token;
 });
