@@ -21,10 +21,11 @@ import { PAYMENT_METHODS } from '@beatbox/shared/constants.js';
 const METHOD_ICON = { CASH: Banknote, QR: QrCode, TRANSFER: ArrowRightLeft, CARD: CreditCard, CREDIT: Wallet, OTHER: MoreHorizontal };
 
 /** QR payment panel with simulated (Demo) / provider / manual slip verification. */
-export function QrPayPanel({ amount, orderId, depositRef, onVerified, method = 'QR', toDisplay = false }) {
+export function QrPayPanel({ amount, orderId, depositRef, onVerified, method = 'QR', toDisplay = false, room = null, reference = null }) {
   const { t } = useT();
-  const { settings } = useAuth();
+  const { settings, employee } = useAuth();
   const toast = useToast();
+  const { print } = usePrint();
   const [state, setState] = useState('idle'); // idle | checking | ok
   const [file, setFile] = useState(null);
   const p = settings?.payment || {};
@@ -36,6 +37,18 @@ export function QrPayPanel({ amount, orderId, depositRef, onVerified, method = '
     return () => idleDisplay();
   }, [toDisplay, method, amount, payload]);
   const production = settings?.runtime?.paymentMode === 'PRODUCTION';
+  // stores without a customer screen: print the QR (with the amount) for the customer to scan
+  const [printing, setPrinting] = useState(false);
+  const printQr = async () => {
+    setPrinting(true);
+    const ref = reference || depositRef || null;
+    const r = await print(
+      { docType: 'PAY_QR', data: { store: settings?.store, timezone: settings?.store?.timezone, amount, payload, imageUrl: payload ? null : p.qrImageUrl, accountName: p.accountName, bankName: p.bankName, accountNumber: p.accountNumber, promptPayId: p.promptPayId, room, reference: ref, employee: employee?.name, time: new Date().toISOString() } },
+      { force: true, reference: ref, clientJobId: `payqr-${ref || 'x'}-${amount}-${Date.now()}` },
+    );
+    setPrinting(false);
+    if (r?.ok) toast.success('พิมพ์ QR ชำระเงินแล้ว');
+  };
   const verify = async (manual = false) => {
     setState('checking');
     try {
@@ -84,6 +97,9 @@ export function QrPayPanel({ amount, orderId, depositRef, onVerified, method = '
         <div className="mt">
           <input type="file" accept="image/png,image/jpeg" onChange={(e) => setFile(e.target.files[0])} />
         </div>
+      )}
+      {method === 'QR' && (payload || p.qrImageUrl) && (
+        <Button className="mt" icon={Printer} loading={printing} onClick={printQr}>{t('พิมพ์ QR ให้ลูกค้าสแกน')}</Button>
       )}
       <div className="row mt" style={{ justifyContent: 'center' }}>
         <Button variant="primary" size="lg" icon={CheckCircle2} onClick={() => verify(false)} disabled={production && !file}>
@@ -508,7 +524,7 @@ export default function Checkout({ orderId: billId, prepaySession = null, onClos
           ) : method === 'QR' || method === 'TRANSFER' ? (
             <div className="col">
               <Field label="จำนวนเงิน (กรณีชำระบางส่วน)"><Input type="number" value={amountInput} placeholder={String(remaining)} onChange={(e) => setAmountInput(e.target.value)} /></Field>
-              <QrPayPanel key={`${method}-${remaining}-${amountInput}`} method={method} amount={Number(amountInput) || remaining} orderId={orderId} onVerified={(r) => { const amt = Number(amountInput) || remaining; addTender({ method, amount: amt, verificationToken: r.verificationToken, reference: r.reference }); if (amt >= remaining) setAutoPay(true); }} />
+              <QrPayPanel key={`${method}-${remaining}-${amountInput}`} method={method} amount={Number(amountInput) || remaining} orderId={orderId} room={data.session?.room_name} reference={data.order?.order_no} onVerified={(r) => { const amt = Number(amountInput) || remaining; addTender({ method, amount: amt, verificationToken: r.verificationToken, reference: r.reference }); if (amt >= remaining) setAutoPay(true); }} />
             </div>
           ) : (
             <div className="col">

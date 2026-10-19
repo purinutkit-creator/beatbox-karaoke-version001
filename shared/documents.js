@@ -11,6 +11,7 @@ export const DOC_TYPES = [
   { key: 'KITCHEN', label: 'ใบครัว' },
   { key: 'MEMBER_SIGNUP', label: 'ใบสมัครสมาชิก (QR)' },
   { key: 'DEPOSIT', label: 'ใบรับ / คืนเงินมัดจำ' },
+  { key: 'PAY_QR', label: 'ใบ QR ชำระเงิน (สำหรับร้านที่ไม่มีจอลูกค้า)' },
   { key: 'VOID', label: 'ใบยกเลิกรายการ' },
   { key: 'SHIFT_REPORT', label: 'รายงานปิดรอบ' },
   { key: 'REPORT', label: 'รายงานแบบใบเสร็จ' },
@@ -32,6 +33,7 @@ export const DOC_ELEMENTS = {
   payments: { label: 'การชำระเงิน (ชำระล่วงหน้า ชำระเพิ่ม เงินสด/เงินทอน)' },
   member: { label: 'ข้อมูลสมาชิกและคะแนน' },
   qr: { label: 'QR Code' },
+  payQr: { label: 'QR ชำระเงิน ยอดเงิน และบัญชีรับเงิน' },
   memberSignup: { label: 'ส่วนสมัครสมาชิก (QR + คำเชิญ)', text: true },
   footer: { label: 'ข้อความท้ายเอกสาร', text: true },
 };
@@ -145,6 +147,14 @@ export const DEFAULT_LAYOUTS = {
     info: el(true, 9.5),
     payments: el(true, 10.5),
     footer: el(true, 8.5, { align: 'center', text: 'กรุณาเก็บเอกสารนี้ไว้เป็นหลักฐาน' }),
+  },
+  PAY_QR: {
+    storeName: el(true, 12, { bold: true, align: 'center' }),
+    title: el(true, 12, { bold: true, align: 'center', text: 'สแกนเพื่อชำระเงิน' }),
+    room: el(true, 14, { bold: true, align: 'center' }),
+    payQr: el(true, 11, { align: 'center', qrSize: 50, spaceBefore: 1, spaceAfter: 1 }),
+    info: el(true, 9),
+    footer: el(true, 9, { align: 'center', text: 'โอนแล้วกรุณาแสดงสลิปให้พนักงาน\nเอกสารนี้ไม่ใช่ใบเสร็จรับเงิน' }),
   },
   VOID: {
     storeName: el(true, 12, { bold: true, align: 'center' }),

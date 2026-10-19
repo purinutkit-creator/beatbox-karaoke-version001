@@ -93,7 +93,7 @@ function Block({ b, style, qrAsImage }) {
     case 'img':
       return (
         <div style={{ textAlign: style.align || 'center' }}>
-          <img className="doc-logo" src={b.url} alt="" crossOrigin="anonymous" style={{ width: `${Number(style.logoWidth) || DEFAULT_LOGO_MM}mm` }} />
+          <img className="doc-logo" src={b.url} alt="" crossOrigin="anonymous" style={{ width: `${Number(b.widthMm || style.logoWidth) || DEFAULT_LOGO_MM}mm` }} />
         </div>
       );
     default:

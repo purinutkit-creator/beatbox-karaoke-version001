@@ -78,6 +78,7 @@ const BUILDERS = {
   KITCHEN: kitchen,
   MEMBER_SIGNUP: memberSignup,
   DEPOSIT: deposit,
+  PAY_QR: payQr,
   VOID: voidSlip,
   SHIFT_REPORT: shiftReport,
   REPORT: report,
@@ -295,6 +296,31 @@ function memberSignup(d, el, ctx) {
       return [text(el.text || t('สมัครสมาชิก'))];
     case 'memberSignup':
       return [el.text && text(el.text, { strong: true }), qr(`${ctx.origin}${d.path}`), d.note && text(d.note, { rel: 0.85 })].filter(Boolean);
+    case 'footer':
+      return withText(el, []);
+    default:
+      return [];
+  }
+}
+
+/** QR to pay — printed for stores without a customer screen: the QR, the amount, and the account it goes to. */
+function payQr(d, el, ctx) {
+  switch (el.key) {
+    case 'title':
+      return [text(el.text || t('สแกนเพื่อชำระเงิน'))];
+    case 'room':
+      return d.room ? [text(d.room)] : [];
+    case 'payQr':
+      return [
+        d.payload ? qr(d.payload) : d.imageUrl ? { t: 'img', url: d.imageUrl, widthMm: Number(el.qrSize) || 50 } : text(t('ยังไม่ได้ตั้งค่า QR Code')),
+        text(`฿${money(d.amount)}`, { strong: true, rel: 2.2 }),
+        d.payload && text(t('ยอดเงินอยู่ใน QR แล้ว ไม่ต้องกรอกเอง'), { rel: 0.8 }),
+        d.accountName && text(d.accountName, { strong: true }),
+        (d.bankName || d.accountNumber) && text([d.bankName, d.accountNumber].filter(Boolean).join(' · ')),
+        d.promptPayId && text(`PromptPay: ${d.promptPayId}`),
+      ].filter(Boolean);
+    case 'info':
+      return [d.reference && kv(t('อ้างอิง'), d.reference), kv(t('เวลา'), dmyhm(d.time || ctx.now, d.timezone)), d.employee && kv(t('พนักงาน'), d.employee)].filter(Boolean);
     case 'footer':
       return withText(el, []);
     default:

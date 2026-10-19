@@ -696,7 +696,7 @@ export function DepositModal({ session, reservation, onClose, onDone }) {
         <Field label="จำนวนเงินมัดจำ"><Input className="lg" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
         <Field label="ช่องทางชำระ"><Select value={method} onChange={(e) => { setMethod(e.target.value); setToken(null); }} options={[{ value: 'CASH', label: 'เงินสด' }, { value: 'QR', label: 'QR Code' }, { value: 'TRANSFER', label: 'โอนเงิน' }, { value: 'CARD', label: 'บัตร' }, { value: 'OTHER', label: 'ช่องทางอื่น' }]} /></Field>
       </div>
-      {needsSlip && Number(amount) > 0 && !token && <div className="mt"><QrPayPanel toDisplay method={method} amount={Number(amount)} depositRef={reservation?.booking_no || `session-${session?.id}`} onVerified={(r) => setToken(r.verificationToken)} /></div>}
+      {needsSlip && Number(amount) > 0 && !token && <div className="mt"><QrPayPanel toDisplay method={method} amount={Number(amount)} room={session?.room_name || reservation?.room_name} depositRef={reservation?.booking_no || `session-${session?.id}`} onVerified={(r) => setToken(r.verificationToken)} /></div>}
       {token && <div className="mt center"><Badge color="#16a34a">{t('ตรวจสอบเรียบร้อย')}</Badge></div>}
     </Modal>
   );
@@ -846,7 +846,7 @@ export function OpenRoomModal({ room: initialRoom, onClose, onOpened }) {
                 <Select value={f.depositMethod} onChange={(e) => { set('depositMethod', e.target.value); setToken(null); }} options={[{ value: 'CASH', label: 'เงินสด' }, { value: 'QR', label: 'QR Code' }, { value: 'TRANSFER', label: 'โอนเงิน' }, { value: 'CARD', label: 'บัตร' }]} />
               </div>
             </Field>
-            {['QR', 'TRANSFER'].includes(f.depositMethod) && Number(f.depositAmount) > 0 && !token && <QrPayPanel toDisplay method={f.depositMethod} amount={Number(f.depositAmount)} depositRef={`open-${opKey}`} onVerified={(r) => setToken(r.verificationToken)} />}
+            {['QR', 'TRANSFER'].includes(f.depositMethod) && Number(f.depositAmount) > 0 && !token && <QrPayPanel toDisplay method={f.depositMethod} amount={Number(f.depositAmount)} room={room?.name} depositRef={`open-${opKey}`} onVerified={(r) => setToken(r.verificationToken)} />}
             {token && <Badge color="#16a34a">{t('ตรวจสอบเรียบร้อย')}</Badge>}
             <Field label="หมายเหตุ"><Textarea style={{ minHeight: 42 }} value={f.note} onChange={(e) => set('note', e.target.value)} /></Field>
           </div>

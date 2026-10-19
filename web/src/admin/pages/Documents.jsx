@@ -55,6 +55,8 @@ export function sampleData(docType, store) {
       };
     case 'ORDER_LIST':
       return { store, timezone: tz, room: 'VIP 1', type: 'VIP', roomNumber: '101', orderNo: 'OR261012-0042', time: new Date().toISOString(), lines: [{ name: 'เบียร์สิงห์ (ขวดใหญ่)', qty: 3, unitPrice: 120, gross: 360 }, { name: 'เฟรนช์ฟรายส์', qty: 1, unitPrice: 89, gross: 89, note: 'ไม่ใส่เกลือ' }] };
+    case 'PAY_QR':
+      return { store, timezone: tz, amount: 1199, payload: '00020101021229370016A000000677010111011300668123456785303764540411995802TH6304ABCD', accountName: 'บจก. บีทบ็อกซ์ คาราโอเกะ', bankName: 'กสิกรไทย', accountNumber: '123-4-56789-0', promptPayId: '0812345678', room: 'VIP 1', reference: 'OR261012-0042', employee: 'นภา (แคชเชียร์)', time: new Date().toISOString() };
     case 'KITCHEN':
       return { timezone: tz, station: 'KITCHEN', queueNo: 'BEATBOX07', room: 'VIP 1', orderNo: 'OR261012-0042', time: new Date().toISOString(), employee: 'นภา', items: [{ name: 'เฟรนช์ฟรายส์', qty: 1, note: 'ไม่ใส่เกลือ' }, { name: 'ปีกไก่ทอด', qty: 2 }] };
     case 'MEMBER_SIGNUP':

@@ -2651,4 +2651,10 @@ export const EN = {
   "9 — เร็วที่สุด": "9 — fastest",
   "ส่งคำสั่งตั้งความเร็วของ Epson ให้เครื่องเดินกระดาษช้า/เร็วต่อเนื่องจริง · ช้าลง = ตัวหนังสือคมและเข้มขึ้น": "Sends Epson's speed command so the paper really moves slower / faster, continuously · slower = sharper, darker print",
   "เครื่องพิมพ์รุ่นทั่วไป (เช่น POS-80, Xprinter) เก็บความเร็วไว้ในตัวเครื่อง และไม่รับคำสั่งปรับความเร็วจากโปรแกรม — ตั้งได้ที่ตัวเครื่องครั้งเดียวแล้วมีผลถาวร: ใช้โปรแกรมตั้งค่าของผู้ผลิต (เช่น \"Printer Tool\" / \"POS Printer Setting\" เมนู Print Speed หรือ Density) หรือ DIP switch ใต้เครื่อง (ดูคู่มือรุ่นนั้น) · ถ้าเป็นเครื่อง Epson ให้ใส่ชื่อรุ่นในช่อง \"รุ่นเครื่องพิมพ์\" แล้วจะเลือกระดับความเร็วได้": "Generic printers (e.g. POS-80, Xprinter) keep their speed inside the printer and do not accept a speed command from software — set it once on the printer and it stays: use the maker's setup tool (e.g. \"Printer Tool\" / \"POS Printer Setting\", menu Print Speed or Density) or the DIP switches underneath (see the model's manual) · For an Epson printer, enter the model under \"Printer model\" to choose a speed level",
+  "ใบ QR ชำระเงิน (สำหรับร้านที่ไม่มีจอลูกค้า)": "Payment QR slip (for stores without a customer screen)",
+  "QR ชำระเงิน ยอดเงิน และบัญชีรับเงิน": "Payment QR, amount and receiving account",
+  "ยอดเงินอยู่ใน QR แล้ว ไม่ต้องกรอกเอง": "The amount is in the QR — no need to type it",
+  "โอนแล้วกรุณาแสดงสลิปให้พนักงาน\nเอกสารนี้ไม่ใช่ใบเสร็จรับเงิน": "After paying, please show the slip to staff\\nThis is not a receipt",
+  "พิมพ์ QR ให้ลูกค้าสแกน": "Print the QR for the customer",
+  "พิมพ์ QR ชำระเงินแล้ว": "Payment QR printed",
 };
