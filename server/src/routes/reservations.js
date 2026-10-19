@@ -24,6 +24,7 @@ r.use(requireAuth);
 
 export const RESERVATION_SELECT = `
   SELECT rv.*, rm.name AS room_name, rm.number AS room_number, rm.capacity AS room_capacity, rt.name AS type_name, rt.color AS type_color,
+         COALESCE(rm.image_url, rt.image_url) AS room_image, fl.name AS floor_name, rm.guide_token,
          p.name AS package_name, m.member_code, m.first_name AS member_first_name, m.last_name AS member_last_name, m.points_balance AS member_points,
          e.name AS created_by_name,
          EXISTS (SELECT 1 FROM line_connections lc WHERE lc.member_id = rv.member_id AND lc.status = 'CONNECTED') AS line_connected,
@@ -35,7 +36,8 @@ export const RESERVATION_SELECT = `
   JOIN room_types rt ON rt.id = rv.room_type_id
   LEFT JOIN room_packages p ON p.id = rv.package_id
   LEFT JOIN members m ON m.id = rv.member_id
-  LEFT JOIN employees e ON e.id = rv.created_by`;
+  LEFT JOIN employees e ON e.id = rv.created_by
+  LEFT JOIN floors fl ON fl.id = rm.floor_id`;
 
 r.get('/reservations', async (req, res) => {
   const q = req.query;

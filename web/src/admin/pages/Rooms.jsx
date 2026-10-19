@@ -16,7 +16,7 @@ import { useT } from '../../lib/i18n.jsx';
 import { api, uid } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive, useServerNow, serverNow } from '../../lib/socket.js';
-import { pushDisplay, orderToDisplay } from '../../lib/display.js';
+import { pushDisplay, orderToDisplay, idleDisplay, roomForDisplay } from '../../lib/display.js';
 import { ROOM_STATUS_LABEL, ROOM_STATUS_COLOR, RESERVATION_STATUS_LABEL } from '@beatbox/shared/constants.js';
 import { round2 } from '@beatbox/shared/money.js';
 import { sessionTiming, computeSessionCharges, formatMinutesShort, priceForMinutes } from '@beatbox/shared/roomPricing.js';
@@ -167,6 +167,13 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
   const [detail, setDetail] = useState(null);
   const [tab, setTab] = useState(initialTab || 'bill');
   const printTickets = usePrintRoomTickets();
+  // room opened (pay later): the customer display shows the room, its times and the QR to the way there
+  const showRoomReady = async (session) => {
+    const room = await roomForDisplay(session);
+    if (!room) return;
+    pushDisplay({ mode: 'ROOM_READY', room });
+    setTimeout(() => idleDisplay(), 30000);
+  };
   const { data: rsState, reload: reloadRs } = useLive(() => api.get('/room-service', { passive: true }), ['room-service', 'rooms'], []);
   const prepays = (rsState?.payments || []).filter((p) => p.room_id === room.id);
   const loadDetail = async () => {
@@ -436,7 +443,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
           )}
         </div>
       )}
-      {modal === 'open' && <OpenRoomModal room={room} onClose={() => setModal(null)} onOpened={(session) => { setModal(null); reload(); if (session?.id && session.status !== 'PENDING_PAYMENT') printTickets(session.id, { auto: true }); }} />}
+      {modal === 'open' && <OpenRoomModal room={room} onClose={() => setModal(null)} onOpened={(session) => { setModal(null); reload(); if (session?.id && session.status !== 'PENDING_PAYMENT') { printTickets(session.id, { auto: true }); showRoomReady(session); } }} />}
       {modal === 'checkout' && checkoutOrderId && <Checkout orderId={checkoutOrderId} onClose={() => { setModal(null); setCheckoutOrderId(null); reload(); }} onPaid={() => reload()} />}
       {outstanding && <OutstandingModal data={outstanding} onPay={goPay} onBack={() => setOutstanding(null)} />}
       {modal === 'products' && (

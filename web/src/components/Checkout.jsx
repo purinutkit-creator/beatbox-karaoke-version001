@@ -10,7 +10,7 @@ import { usePrint } from './PrintPreview.jsx';
 import { useT } from '../lib/i18n.jsx';
 import { api, uid } from '../lib/api.js';
 import { useAuth } from '../lib/store.jsx';
-import { pushDisplay, orderToDisplay, idleDisplay } from '../lib/display.js';
+import { pushDisplay, orderToDisplay, idleDisplay, roomForDisplay } from '../lib/display.js';
 import { openDrawer } from '../lib/print.jsx';
 import { cashQuickAmounts } from '@beatbox/shared/calc.js';
 import { promptPayPayload } from '@beatbox/shared/promptpay.js';
@@ -275,8 +275,11 @@ export default function Checkout({ orderId: billId, prepaySession = null, onClos
         // pay before entering: the payment is recorded and the room clock starts (the bill stays open until "ปิดห้อง")
         const r = await api.post(`/sessions/${prepaySession.id}/prepay`, { payments: finalTenders }, { idempotencyKey: idemKey.current });
         setDone({ prepay: true, amount: net, change: r.change || 0 });
-        pushDisplay({ mode: 'SUCCESS', total: net, paid: round2(finalTenders.reduce((a, x) => a + Number(x.received ?? x.amount), 0)), change: r.change || 0 });
-        setTimeout(() => idleDisplay(), 12000);
+        const paidShown = { mode: 'SUCCESS', total: net, paid: round2(finalTenders.reduce((a, x) => a + Number(x.received ?? x.amount), 0)), change: r.change || 0 };
+        pushDisplay(paidShown);
+        // paid to enter: the customer display then also shows the room, its times and the QR to the way there
+        roomForDisplay(r.session || data.session).then((room) => room && pushDisplay({ ...paidShown, room }));
+        setTimeout(() => idleDisplay(), 30000);
         toast.success(`${t('ชำระค่าห้องแล้ว เริ่มเวลา')} ${data.session?.room_name || ''}${r.change > 0 ? ` · ${t('เงินทอน')} ฿${money(r.change)}` : ''}`);
         const printer = printerFor('RECEIPT');
         if (finalTenders.some((x) => x.method === 'CASH') && printer?.open_drawer) openDrawer(printer);

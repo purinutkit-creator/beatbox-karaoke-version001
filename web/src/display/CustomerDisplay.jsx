@@ -12,6 +12,7 @@ import { QRCode, PinPad, money } from '../components/ui.jsx';
 import { formatMinutesShort } from '@beatbox/shared/roomPricing.js';
 import { PAYMENT_METHODS } from '@beatbox/shared/constants.js';
 import { slideKind, youtubeId, youtubeEmbed } from '../lib/media.js';
+import { BookingCard, HeroImg } from '../components/BookingCard.jsx';
 
 /** One slide. A video plays only while it is on screen, and tells the slideshow when it has finished. */
 function Slide({ item, active, single, onEnded }) {
@@ -148,7 +149,8 @@ export default function CustomerDisplay() {
   }
 
   const mode = state.mode || 'IDLE';
-  if (mode === 'CHECKIN' || mode === 'CHECKIN_RESULT') return <CheckInScreen state={state} socket={sockRef.current} store={store} />;
+  if (mode === 'CHECKIN' || mode === 'CHECKIN_RESULT') return <CheckInScreen state={state} socket={sockRef.current} store={store} facing={publicSettings?.general?.displayCameraFacing || 'user'} />;
+  if (mode === 'ROOM_READY') return <RoomReadyScreen state={state} store={store} />;
   const split = ['CART', 'PAY_CASH', 'PAY_QR', 'PAY_OTHER'].includes(mode);
   const autoplay = publicSettings?.general?.displayAutoplay;
   return (
@@ -223,13 +225,13 @@ export default function CustomerDisplay() {
         </div>
       </div>
       {mode === 'SUCCESS' && (
-        <div className="overlay" style={{ zIndex: 5 }}>
+        <div className={`overlay ${state.room ? 'cd-success-room' : ''}`} style={{ zIndex: 5 }}>
           <div className="check-anim"><CheckCircle2 size="70%" color="#fff" /></div>
-          <div className="huge" style={{ marginTop: '3vh' }}>{t('ชำระเงินเรียบร้อย')}</div>
+          <div className="huge" style={{ marginTop: state.room ? '1vh' : '3vh' }}>{t('ชำระเงินเรียบร้อย')}</div>
           <div style={{ fontSize: 'clamp(20px,3vw,48px)' }}>{t('ยอดที่ชำระ')} ฿{money(state.total)}</div>
           {state.change > 0 && <div style={{ fontSize: 'clamp(24px,4vw,64px)', color: '#4ade80', fontWeight: 800 }}>{t('เงินทอน')} ฿{money(state.change)}</div>}
           {state.points > 0 && <div style={{ fontSize: 'clamp(16px,2vw,30px)', color: '#facc15' }}>+{state.points} {t('คะแนน')}</div>}
-          <div style={{ fontSize: 'clamp(18px,2.5vw,40px)', marginTop: '2vh' }}>{publicSettings?.receipt?.thankYou || t('ขอบคุณที่ใช้บริการ')}</div>
+          {state.room ? <div style={{ marginTop: '2vh', width: '100%', display: 'flex', justifyContent: 'center' }}><RoomPanel room={state.room} /></div> : <div style={{ fontSize: 'clamp(18px,2.5vw,40px)', marginTop: '2vh' }}>{publicSettings?.receipt?.thankYou || t('ขอบคุณที่ใช้บริการ')}</div>}
         </div>
       )}
       <div style={{ position: 'fixed', bottom: 8, right: 8, opacity: 0.4, display: 'flex', gap: 8, zIndex: 9 }}>
@@ -243,7 +245,62 @@ export default function CustomerDisplay() {
 }
 
 /** POS asked the customer to check in on this display: scan the booking QR with the camera or type the phone number. */
-function CheckInScreen({ state, socket, store }) {
+/** The room the customer has just paid for / been given: picture, floor, START → END, how long, QR to the way there. */
+function RoomPanel({ room }) {
+  const { t, lang } = useT();
+  if (!room) return null;
+  const hm = (d) => new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bangkok' });
+  const day = (d) => new Date(d).toLocaleDateString(lang === 'en' ? 'en-GB' : 'th-TH', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Bangkok' });
+  return (
+    <div className="cd-room">
+      <div className="cd-room-pic">
+        <HeroImg src={room.imageUrl} />
+        <div className="cd-room-name">
+          <div className="bk-chips">
+            {room.typeName && <span className="bk-chip">{room.typeName}</span>}
+            {room.floorName && <span className="bk-chip">{room.floorName}</span>}
+            {room.number && <span className="bk-chip">#{room.number}</span>}
+          </div>
+          <div>{room.name}</div>
+        </div>
+      </div>
+      <div className="cd-room-info">
+        {room.startAt && (
+          <>
+            <div className="cd-room-day">{day(room.startAt)}</div>
+            <div className="cd-room-time"><b>{hm(room.startAt)}</b><span>→</span><b>{room.endAt ? hm(room.endAt) : '--:--'}</b></div>
+            {room.minutes > 0 && <div className="cd-room-len">{t('ระยะเวลา')} {formatMinutesShort(room.minutes)}</div>}
+          </>
+        )}
+        {room.guideUrl && (
+          <div className="cd-room-guide">
+            <QRCode value={room.guideUrl} size={360} className="cd-room-qr" />
+            <div><b>{t('สแกนเพื่อดูทางไปห้อง')}</b><div style={{ opacity: 0.8 }}>{t('ผังร้านและตำแหน่งห้องของคุณ')}</div></div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RoomReadyScreen({ state, store }) {
+  const { t } = useT();
+  return (
+    <div className="cd">
+      <div className="promo">
+        <div className="overlay cd-room-wrap">
+          <div className="cd-head" style={{ marginBottom: '2vh' }}>
+            {store?.logoUrl ? <img src={store.logoUrl} alt="" style={{ width: 56, height: 56, borderRadius: 14, objectFit: 'cover' }} /> : <div className="brand-logo" style={{ width: 56, height: 56 }}><Mic2 size={26} /></div>}
+            <div style={{ fontSize: 'clamp(20px,2.6vw,40px)', fontWeight: 800 }}>{t('ห้องของคุณพร้อมแล้ว')}</div>
+          </div>
+          <RoomPanel room={state.room} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CheckInScreen({ state, socket, store, facing = 'user' }) {
   const { t } = useT();
   const [how, setHow] = useState(null); // null | CAMERA | PHONE | SENT
   const [phone, setPhone] = useState('');
@@ -258,7 +315,8 @@ function CheckInScreen({ state, socket, store }) {
     socket?.emit('display:checkin', { requestId: state.requestId, kind, value });
     setHow('SENT');
   };
-  useCameraScanner(videoRef, how === 'CAMERA', (v) => send('SCAN', v), (e) => { setErr(t(e.message)); setHow(null); });
+  // the camera stays ready between customers (paused, not closed): the browser asks for permission only once
+  useCameraScanner(videoRef, how === 'CAMERA', (v) => send('SCAN', v), (e) => { setErr(t(e.message)); setHow(null); }, { facing, keep: true });
   const result = state.mode === 'CHECKIN_RESULT' ? state : null;
   return (
     <div className="cd">
@@ -270,14 +328,10 @@ function CheckInScreen({ state, socket, store }) {
           </div>
           {result ? (
             <div className="cd-checkin">
-              {result.found ? <CheckCircle2 size={110} color="#4ade80" /> : <XCircle size={110} color="#f87171" />}
+              {result.found ? <CheckCircle2 size={result.booking ? 64 : 110} color="#4ade80" /> : <XCircle size={110} color="#f87171" />}
               <div style={{ fontSize: 'clamp(24px,3.2vw,52px)', fontWeight: 800 }}>{result.found ? t('พบการจองของคุณ') : t('ไม่พบการจอง')}</div>
               {result.found ? (
-                <div style={{ fontSize: 'clamp(18px,2.2vw,34px)' }}>
-                  <div>{result.customerName}</div>
-                  <div style={{ opacity: 0.85 }}>{result.bookingNo} · {result.roomName}</div>
-                  <div style={{ opacity: 0.85 }}>{result.time}</div>
-                </div>
+                result.booking ? <BookingCard b={result.booking} variant="display" /> : <div style={{ fontSize: 'clamp(18px,2.2vw,34px)' }}>{result.customerName}</div>
               ) : <div style={{ opacity: 0.8 }}>{t('กรุณาติดต่อพนักงาน')}</div>}
             </div>
           ) : (
@@ -293,7 +347,7 @@ function CheckInScreen({ state, socket, store }) {
               )}
               {how === 'CAMERA' && (
                 <>
-                  <video ref={videoRef} muted playsInline />
+                  <video ref={videoRef} muted playsInline className={facing === 'user' ? 'mirror' : ''} />
                   <div style={{ opacity: 0.85 }}>{t('หันหน้าจอ QR การจองเข้าหากล้อง')}</div>
                   <button className="btn ghost" onClick={() => setHow(null)}><ArrowLeft size={22} /> {t('ย้อนกลับ')}</button>
                 </>

@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { ScanLine, Search, Camera, Phone, MonitorSmartphone } from 'lucide-react';
-import { PageHead, Input, Button, Empty, Badge, money, useToast } from '../../components/ui.jsx';
-import { ReservationDrawer, StatusBadge } from '../../components/ReservationParts.jsx';
+import { ScanLine, Search, Camera, MonitorSmartphone } from 'lucide-react';
+import { PageHead, Input, Button, Empty, useToast } from '../../components/ui.jsx';
+import { ReservationDrawer } from '../../components/ReservationParts.jsx';
+import { BookingCard, bookingCardData } from '../../components/BookingCard.jsx';
 import { useT } from '../../lib/i18n.jsx';
 import { api, uid } from '../../lib/api.js';
-import { useCameraScanner } from '../../lib/scanner.js';
+import { useCameraScanner, useScannerWedge } from '../../lib/scanner.js';
 import { useSocketEvent } from '../../lib/socket.js';
 import { pushDisplay, idleDisplay, getPairCode } from '../../lib/display.js';
-import { fmtDate, fmtTime } from '@beatbox/shared/format.js';
 
 /** Staff check-in: scan the customer's booking QR/barcode, or type booking number / phone number. */
 export default function CheckIn() {
@@ -32,6 +32,11 @@ export default function CheckIn() {
     }
   };
   useEffect(() => inputRef.current?.focus(), []);
+  // a USB / Bluetooth barcode scanner works even when the cursor is not in the search box
+  useScannerWedge((code) => {
+    setQ(code);
+    search(code);
+  });
   useCameraScanner(videoRef, camera, (v) => { setQ(v); setCamera(false); search(v); }, (e) => { toast.error(t(e.message)); setCamera(false); });
 
   // Customer checks in on the Customer Display (camera scan or phone number) → result comes back here
@@ -47,9 +52,9 @@ export default function CheckIn() {
     setQ(m.value);
     const r = await search(m.value);
     const rv = r?.find((x) => ['PENDING', 'CONFIRMED', 'DEPOSIT_PAID', 'WAITING', 'ARRIVED'].includes(x.status)) || r?.[0];
-    pushDisplay(rv ? { mode: 'CHECKIN_RESULT', requestId: displayReq, found: true, bookingNo: rv.booking_no, customerName: rv.customer_name, roomName: rv.room_name, time: `${fmtDate(rv.start_at)} ${fmtTime(rv.start_at)}–${fmtTime(rv.end_at)}` } : { mode: 'CHECKIN_RESULT', requestId: displayReq, found: false });
+    pushDisplay(rv ? { mode: 'CHECKIN_RESULT', requestId: displayReq, found: true, booking: bookingCardData(rv) } : { mode: 'CHECKIN_RESULT', requestId: displayReq, found: false });
     setDisplayReq(null);
-    setTimeout(() => idleDisplay(), 10000);
+    setTimeout(() => idleDisplay(), rv ? 20000 : 10000);
   });
   return (
     <div>
@@ -70,20 +75,9 @@ export default function CheckIn() {
       </div>
       <div className="col mt">
         {rows && !rows.length && <Empty text="ไม่พบการจอง" />}
-        {rows?.map((r) => (
-          <div key={r.id} className="card row between clickable" style={{ cursor: 'pointer' }} onClick={() => setOpen(r.id)}>
-            <div>
-              <div className="row"><b style={{ fontSize: '1.15rem' }}>{r.booking_no}</b><StatusBadge status={r.status} /><Badge>{r.source}</Badge></div>
-              <div>{r.customer_name} · <Phone size={13} /> {r.phone} {r.member_code && <Badge color="#eab308">{r.member_code}</Badge>}</div>
-              <div className="small muted">{r.room_name} ({r.type_name}) · {fmtDate(r.start_at)} {fmtTime(r.start_at)}–{fmtTime(r.end_at)} · {r.guest_count} {t('คน')} · {r.package_name || t('รายชั่วโมง')}</div>
-            </div>
-            <div className="right">
-              <div className="small muted">{t('มัดจำ')}</div>
-              <b>฿{money(r.deposit_paid)}</b>
-              <div className="xs muted">{r.payment_status || ''}</div>
-            </div>
-          </div>
-        ))}
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 340px), 1fr))', gap: 14 }}>
+          {rows?.map((r) => <BookingCard key={r.id} b={bookingCardData(r)} onClick={() => setOpen(r.id)} />)}
+        </div>
       </div>
       {open && <ReservationDrawer id={open} onClose={() => setOpen(null)} onChanged={() => search()} />}
     </div>

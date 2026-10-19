@@ -19,6 +19,9 @@ export const DEFAULT_SETTINGS = {
     backgroundUrl: '',
     defaultTheme: 'dark',
     uiStyle: 'neon', // neon (Neon Night) | ocean (Ocean Glass) | luxe (Black Gold)
+    displayCameraFacing: 'user', // customer display check-in camera: user (front, faces the customer) | environment (back)
+    roomNavEnabled: false, // room guide page: GPS directions to the room (the floor plan is always shown)
+    roomNavArriveM: 10, // "you are here" when this close to the room (m)
     currency: 'THB',
     currencySymbol: '฿',
   },

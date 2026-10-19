@@ -9,6 +9,7 @@ const AdminApp = lazy(() => import('./admin/AdminApp.jsx'));
 const CustomerDisplay = lazy(() => import('./display/CustomerDisplay.jsx'));
 const BookingApp = lazy(() => import('./booking/BookingApp.jsx'));
 const RoomOrderApp = lazy(() => import('./order/RoomOrderApp.jsx'));
+const RoomGuide = lazy(() => import('./guide/RoomGuide.jsx'));
 
 function LangBoot({ children }) {
   return children;
@@ -43,6 +44,7 @@ export default function App() {
                     <Route path="/display/*" element={<CustomerDisplay />} />
                     <Route path="/book/*" element={<BookingApp />} />
                     <Route path="/order/:token" element={<RoomOrderApp />} />
+                    <Route path="/guide/:token" element={<RoomGuide />} />
                     <Route
                       path="/*"
                       element={

@@ -151,6 +151,17 @@ export default function DisplaySettings() {
             {can('settings.manage') && (
               <Switch checked={autoplay} onChange={async (v) => { await api.put('/settings/general', { ...settings.general, displayAutoplay: v }); loadSettings(); }} label="ให้รูปเลื่อนอัตโนมัติ" />
             )}
+            {can('settings.manage') && (
+              <div className="col" style={{ gap: 4 }}>
+                <b className="small">{t('กล้องสแกน QR การจองที่จอลูกค้า')}</b>
+                <div className="seg">
+                  {[{ v: 'user', l: 'กล้องหน้า (ฝั่งลูกค้า)' }, { v: 'environment', l: 'กล้องหลัง' }].map((o) => (
+                    <button key={o.v} type="button" className={(settings?.general?.displayCameraFacing || 'user') === o.v ? 'on' : ''} onClick={async () => { await api.put('/settings/general', { ...settings.general, displayCameraFacing: o.v }); loadSettings(); }}>{t(o.l)}</button>
+                  ))}
+                </div>
+                <div className="xs muted">{t('หน้าจอลูกค้าเปิดกล้องค้างไว้ระหว่างลูกค้าแต่ละคน จึงขออนุญาตกล้องแค่ครั้งแรก · ให้อนุญาตถาวร: iPad → การตั้งค่า > Safari > กล้อง > อนุญาต · Android/Chrome → แตะไอคอนแม่กุญแจข้างที่อยู่เว็บ > กล้อง > อนุญาต')}</div>
+              </div>
+            )}
           </div>
         </div>
       </div>

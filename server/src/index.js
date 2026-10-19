@@ -36,6 +36,7 @@ import publicRoutes from './routes/public.js';
 import fontRoutes, { serveFont } from './routes/fonts.js';
 import integrationRoutes, { terminalPublic } from './routes/integrations.js';
 import roomServiceRoutes, { publicRoom } from './routes/roomService.js';
+import floorRoutes, { publicGuide } from './routes/floors.js';
 import smartRoutes from './routes/smart.js';
 
 export function createApp() {
@@ -74,6 +75,7 @@ export function createApp() {
 
   app.use('/api/platform', platformRoutes);
   app.use('/api/public', publicRoom);
+  app.use('/api/public', publicGuide);
   app.use('/api/public', terminalPublic);
   app.use('/api/public', publicRoutes);
   app.use('/api/auth', authRoutes);
@@ -94,6 +96,7 @@ export function createApp() {
   app.use('/api', integrationRoutes);
   app.use('/api', roomServiceRoutes);
   app.use('/api', smartRoutes);
+  app.use('/api', floorRoutes);
   app.use('/api', (_req, res) => res.status(404).json({ error: 'ไม่พบ API' }));
 
   // Only fonts and promotion slides are public uploads — payment slips stay private (served through an authenticated endpoint)

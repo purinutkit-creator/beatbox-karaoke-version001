@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ShoppingCart, Trash2, Plus, Minus, CreditCard, DoorOpen, User, Percent, StickyNote, X } from 'lucide-react';
+import { ShoppingCart, Trash2, Plus, Minus, CreditCard, DoorOpen, User, Percent, StickyNote, X, ScanLine, MonitorSmartphone } from 'lucide-react';
 import { Button, Modal, Badge, Empty, money, useToast, useDialog, Field, Input, Seg } from '../../components/ui.jsx';
 import { setUnsavedWork } from '../../lib/version.jsx';
 import { ProductCatalog } from '../../components/ProductCatalog.jsx';
@@ -10,6 +10,9 @@ import { api, uid } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive } from '../../lib/socket.js';
 import { pushDisplay, idleDisplay } from '../../lib/display.js';
+import { useScannerWedge } from '../../lib/scanner.js';
+import { BookingCard, bookingCardData } from '../../components/BookingCard.jsx';
+import { ReservationDrawer } from '../../components/ReservationParts.jsx';
 import { calculateBill } from '@beatbox/shared/calc.js';
 
 export default function Pos() {
@@ -100,6 +103,24 @@ export default function Pos() {
     }
   };
 
+  // a booking QR / barcode scanned at the POS (search box or anywhere on the page) → the booking, at a glance
+  const [found, setFound] = useState(null); // { code, rows }
+  const [bookingId, setBookingId] = useState(null);
+  const findBooking = async (code) => {
+    try {
+      const rows = await api.get(`/reservations/lookup?q=${encodeURIComponent(code)}`);
+      if (!rows.length) return toast.warning(`${t('ไม่พบสินค้าหรือการจองของรหัส')} ${code}`);
+      setFound({ code, rows: rows.slice(0, 4) });
+    } catch (e) {
+      toast.error(e);
+    }
+  };
+  useScannerWedge(findBooking, !checkoutId);
+  const showOnDisplay = (rv) => {
+    pushDisplay({ mode: 'CHECKIN_RESULT', found: true, booking: bookingCardData(rv) });
+    setTimeout(() => idleDisplay(), 20000);
+  };
+
   const itemDiscount = async (x) => {
     const v = await prompt({ title: `${t('ส่วนลด')}: ${x.product.name}`, message: 'ใส่จำนวนเงิน หรือเปอร์เซ็นต์ เช่น 20 หรือ 10%', required: false, defaultValue: x.discountValue ? `${x.discountValue}${x.discountType === 'PERCENT' ? '%' : ''}` : '' });
     if (v == null) return;
@@ -108,7 +129,7 @@ export default function Pos() {
 
   return (
     <div className="pos">
-      <ProductCatalog onAdd={add} />
+      <ProductCatalog onAdd={add} onOtherCode={findBooking} />
       {cart.length > 0 && (
         <button type="button" className="pos-cartbar" onClick={() => document.getElementById('pos-cart')?.scrollIntoView({ behavior: 'smooth' })}>
           <span className="row nowrap"><ShoppingCart size={18} /> {t('ตะกร้า')} ({cart.reduce((s, x) => s + x.qty, 0)})</span>
@@ -189,6 +210,25 @@ export default function Pos() {
         </Modal>
       )}
       {modal === 'disc' && <BillDiscount value={billDisc} onClose={() => setModal(null)} onSave={(v) => { setBillDisc(v); setModal(null); }} />}
+      {found && (
+        <Modal title={<span className="row nowrap"><ScanLine size={20} /> {t('พบการจอง')}</span>} size="wide" onClose={() => setFound(null)}>
+          <div className="col" style={{ gap: 14 }}>
+            {found.rows.map((rv) => (
+              <BookingCard
+                key={rv.id}
+                b={bookingCardData(rv)}
+                footer={
+                  <div className="row">
+                    <Button variant="primary" icon={DoorOpen} onClick={() => { setBookingId(rv.id); setFound(null); }}>{t('ดูรายละเอียด / เช็คอิน')}</Button>
+                    <Button icon={MonitorSmartphone} onClick={() => showOnDisplay(rv)}>{t('แสดงที่จอลูกค้า')}</Button>
+                  </div>
+                }
+              />
+            ))}
+          </div>
+        </Modal>
+      )}
+      {bookingId && <ReservationDrawer id={bookingId} onClose={() => setBookingId(null)} onChanged={() => {}} />}
     </div>
   );
 }

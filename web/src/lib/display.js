@@ -29,6 +29,32 @@ export function idleDisplay() {
   pushDisplay({ mode: 'IDLE' });
 }
 
+/**
+ * The room of a session for the customer display: picture, type, floor, START → END and the link to the room's
+ * guide page (floor plan with the room blinking). Null when it cannot be loaded (the display then shows no room).
+ */
+export async function roomForDisplay(session) {
+  if (!session?.room_id) return null;
+  try {
+    const c = await api.get(`/floors/room-card/${session.room_id}`, { passive: true });
+    const startAt = session.started_at || null;
+    const endAt = session.scheduled_end_at || null;
+    return {
+      name: c.name,
+      number: c.number,
+      typeName: c.type_name,
+      imageUrl: c.image_url,
+      floorName: c.floor_name,
+      startAt,
+      endAt,
+      minutes: startAt && endAt ? Math.round((new Date(endAt) - new Date(startAt)) / 60000) : 0,
+      guideUrl: c.guide_token ? `${window.location.origin}/guide/${c.guide_token}` : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Map a computed order (from /orders/:id) to a display payload. */
 export function orderToDisplay(o, extra = {}) {
   if (!o?.calc) return { mode: 'IDLE' };

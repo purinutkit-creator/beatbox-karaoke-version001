@@ -647,3 +647,124 @@ html, body { overflow-x: hidden; }
 .style-pick .sp-btn { height: 14px; border-radius: 99px; align-self: end; width: 60%; }
 .style-pick .sp-name { padding: 8px 10px; font-weight: 800; }
 .style-pick .sp-desc { padding: 0 10px 10px; font-size: 0.8rem; color: var(--muted); }
+
+/* ── Booking card (scan / search result) ── */
+.bk-card { border-radius: 18px; overflow: hidden; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25); }
+.bk-card.clickable { cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; }
+.bk-card.clickable:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.35); }
+.bk-hero { position: relative; height: 150px; background: linear-gradient(135deg, var(--bk-color), #1f1236); }
+.bk-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bk-hero-fallback { position: absolute; inset: 0; background: radial-gradient(circle at 20% 20%, color-mix(in srgb, var(--bk-color) 70%, #fff) 0, transparent 45%), linear-gradient(135deg, var(--bk-color), #120b24); }
+.bk-hero-text { position: absolute; inset: auto 0 0 0; padding: 14px 16px 12px; background: linear-gradient(transparent, rgba(0, 0, 0, 0.82)); color: #fff; }
+.bk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.bk-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: 99px; background: rgba(255, 255, 255, 0.18); backdrop-filter: blur(6px); font-size: 0.8rem; font-weight: 700; }
+.bk-room { font-size: 1.7rem; font-weight: 800; line-height: 1.1; text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5); }
+.bk-body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.bk-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.bk-no { font-weight: 800; letter-spacing: 0.04em; color: var(--muted); font-size: 0.85rem; }
+.bk-name { font-size: 1.15rem; font-weight: 700; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.bk-phone { font-size: 0.85rem; font-weight: 500; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.bk-status { color: #fff; padding: 4px 12px; border-radius: 99px; font-weight: 700; font-size: 0.8rem; white-space: nowrap; }
+.bk-date { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.bk-time { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; text-align: center; padding: 10px; border-radius: 14px; background: color-mix(in srgb, var(--bk-color) 16%, var(--surface-2)); border: 1px solid color-mix(in srgb, var(--bk-color) 40%, transparent); }
+.bk-time small { display: block; color: var(--muted); font-weight: 600; font-size: 0.8rem; }
+.bk-time b { font-size: 2rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.bk-arrow { font-size: 1.6rem; opacity: 0.6; padding: 0 8px; }
+.bk-facts { display: flex; flex-wrap: wrap; gap: 8px; }
+.bk-facts span { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 10px; background: var(--surface-2); font-weight: 600; font-size: 0.9rem; }
+/* large, on the customer display */
+.cd .bk-card.bk-display { width: min(92vw, 760px); background: #15102a; border-color: #ffffff22; color: #fff; text-align: left; }
+.cd .bk-display .bk-hero { height: clamp(140px, 26vh, 300px); }
+.cd .bk-display .bk-room { font-size: clamp(28px, 4.4vw, 64px); }
+.cd .bk-display .bk-body { padding: clamp(14px, 2.4vh, 28px) clamp(16px, 2.4vw, 32px); gap: clamp(8px, 1.6vh, 18px); }
+.cd .bk-display .bk-name { font-size: clamp(20px, 2.4vw, 36px); }
+.cd .bk-display .bk-no, .cd .bk-display .bk-time small { color: #c4b5fd; }
+.cd .bk-display .bk-date { font-size: clamp(16px, 2vw, 30px); }
+.cd .bk-display .bk-time { background: #ffffff10; border-color: #ffffff2a; }
+.cd .bk-display .bk-time b { font-size: clamp(34px, 6vw, 92px); }
+.cd .bk-display .bk-facts span { background: #ffffff14; font-size: clamp(14px, 1.6vw, 24px); padding: 0.4em 0.9em; }
+.cd .bk-display .bk-status { font-size: clamp(13px, 1.4vw, 20px); }
+.cd video.mirror { transform: scaleX(-1); }
+@media (max-width: 560px) { .bk-time b { font-size: 1.6rem; } .bk-room { font-size: 1.4rem; } }
+
+/* ── Customer display: the room after paying / opening ── */
+.cd-room-wrap { overflow-y: auto; justify-content: center; padding: 3vh 3vw; }
+.cd-room { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: clamp(14px, 2vw, 32px); width: min(94vw, 1300px); align-items: stretch; text-align: left; }
+.cd-room-pic { position: relative; border-radius: 22px; overflow: hidden; min-height: clamp(180px, 34vh, 420px); background: #1d1438; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45); }
+.cd-room-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cd-room-name { position: absolute; inset: auto 0 0 0; padding: clamp(14px, 2vh, 28px) clamp(16px, 2vw, 28px); background: linear-gradient(transparent, rgba(0, 0, 0, 0.85)); font-size: clamp(30px, 4.6vw, 72px); font-weight: 800; line-height: 1.05; }
+.cd-room-name .bk-chip { font-size: clamp(13px, 1.4vw, 20px); }
+.cd-room-info { display: flex; flex-direction: column; justify-content: center; gap: clamp(8px, 1.6vh, 18px); padding: clamp(14px, 2vh, 28px) clamp(16px, 2vw, 28px); border-radius: 22px; background: #ffffff10; border: 1px solid #ffffff22; }
+.cd-room-day { font-size: clamp(16px, 2vw, 30px); opacity: 0.85; font-weight: 600; }
+.cd-room-time { display: flex; align-items: center; gap: 0.4em; font-size: clamp(38px, 6.4vw, 104px); font-variant-numeric: tabular-nums; line-height: 1; }
+.cd-room-time b { font-weight: 800; }
+.cd-room-time span { opacity: 0.5; font-size: 0.6em; }
+.cd-room-len { align-self: flex-start; padding: 0.3em 0.9em; border-radius: 99px; background: #facc15; color: #1a1300; font-weight: 800; font-size: clamp(16px, 2vw, 30px); }
+.cd-room-guide { display: flex; align-items: center; gap: clamp(10px, 1.4vw, 22px); margin-top: auto; font-size: clamp(15px, 1.7vw, 26px); }
+.cd-room-guide .cd-room-qr { width: clamp(110px, 17vh, 220px); height: clamp(110px, 17vh, 220px); background: #fff; border-radius: 14px; padding: 8px; flex: none; }
+.cd-success-room { justify-content: flex-start; overflow-y: auto; padding: 2vh 3vw; }
+.cd-success-room .check-anim { width: clamp(70px, 11vh, 130px); height: clamp(70px, 11vh, 130px); }
+.cd-success-room .huge { font-size: clamp(28px, 4.4vw, 70px); }
+@media (orientation: portrait) { .cd-room { grid-template-columns: 1fr; } }
+
+/* ── Floor plan ── */
+.fp { position: relative; width: 100%; border-radius: 16px; overflow: hidden; background: #0f0b1e; border: 1px solid var(--border); touch-action: none; user-select: none; }
+.fp-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0.9; pointer-events: none; }
+.fp-grid { position: absolute; inset: 0; background-image: linear-gradient(#ffffff0d 1px, transparent 1px), linear-gradient(90deg, #ffffff0d 1px, transparent 1px); background-size: 5% 8%; }
+.fp-room { position: absolute; display: grid; place-items: center; border-radius: 10px; background: color-mix(in srgb, var(--primary) 26%, #1a1430); border: 2px solid color-mix(in srgb, var(--primary) 60%, transparent); color: #fff; font-weight: 800; text-align: center; padding: 2px; overflow: hidden; }
+.fp-room-name { font-size: clamp(9px, 1.6vw, 16px); line-height: 1.1; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7); }
+.fp-dim { opacity: 0.45; }
+.fp-target { z-index: 2; overflow: visible; background: #f59e0b; border-color: #fff; color: #1a1000; animation: fp-blink 1s ease-in-out infinite; }
+.fp-target .fp-room-name { text-shadow: none; font-size: clamp(11px, 2vw, 20px); }
+.fp-pin { position: absolute; bottom: 100%; left: 50%; margin-left: -0.5em; font-size: clamp(16px, 2.8vw, 28px); line-height: 1; animation: fp-bounce 1s ease-in-out infinite; }
+@keyframes fp-blink { 0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.9), 0 0 24px 6px rgba(245, 158, 11, 0.6); filter: brightness(1.15); } 50% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0), 0 0 6px 2px rgba(245, 158, 11, 0.3); filter: brightness(0.85); } }
+@keyframes fp-bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+.fp-marker { position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 1px; z-index: 3; pointer-events: auto; }
+.fp-marker-icon { font-size: clamp(16px, 2.8vw, 28px); line-height: 1; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6)); }
+.fp-marker-label { font-size: clamp(8px, 1.3vw, 13px); font-weight: 700; color: #fff; background: rgba(0, 0, 0, 0.6); padding: 1px 6px; border-radius: 6px; white-space: nowrap; }
+.fp-edit .fp-room, .fp-edit .fp-marker { cursor: grab; }
+.fp-edit .fp-room:active, .fp-edit .fp-marker:active { cursor: grabbing; }
+.fp-sel { outline: 3px solid #22d3ee; outline-offset: 2px; }
+.fp-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; background: #22d3ee; border-top-left-radius: 6px; cursor: nwse-resize; }
+
+/* ── Room guide page (customer's phone) ── */
+.rg { min-height: 100vh; max-width: 760px; margin: 0 auto; padding: 16px 16px 40px; display: flex; flex-direction: column; gap: 14px; background: var(--bg); color: var(--text); }
+.rg-head { display: flex; align-items: center; gap: 12px; }
+.rg-head img, .rg-head .brand-logo { width: 48px; height: 48px; border-radius: 12px; object-fit: cover; flex: none; }
+.rg-store { font-weight: 800; font-size: 1.15rem; }
+.rg-muted { color: var(--muted); font-size: 0.9rem; }
+.rg-card { padding: 14px; border-radius: 18px; background: var(--surface); border: 1px solid var(--border); }
+.rg-hero { position: relative; height: 190px; border-radius: 20px; overflow: hidden; background: linear-gradient(135deg, var(--bk-color), #120b24); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35); }
+.rg-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rg-hero-text { position: absolute; inset: auto 0 0 0; padding: 14px 16px; color: #fff; background: linear-gradient(transparent, rgba(0, 0, 0, 0.85)); }
+.rg-room { font-size: 2rem; font-weight: 800; line-height: 1.05; }
+.rg-floor { display: flex; align-items: center; gap: 8px; font-size: 1.25rem; padding: 10px 14px; border-radius: 14px; background: color-mix(in srgb, #f59e0b 18%, var(--surface)); border: 1px solid #f59e0b66; }
+.rg-floor b { color: #f59e0b; font-size: 1.4rem; }
+.rg-plan { padding: 8px; }
+.rg-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 0.85rem; color: var(--muted); }
+.rg-dot { display: inline-block; width: 12px; height: 12px; border-radius: 4px; background: #f59e0b; vertical-align: -1px; animation: fp-blink 1s infinite; }
+.rg-gps { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.rg-gps-title { font-weight: 800; font-size: 1.1rem; display: flex; align-items: center; gap: 8px; }
+.rg-btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 22px; border: 0; border-radius: 14px; background: var(--primary); color: #fff; font-weight: 800; font-size: 1.05rem; cursor: pointer; }
+.rg-warn { color: #f87171; font-size: 0.9rem; }
+.rg-compass { position: relative; width: 170px; height: 170px; border-radius: 50%; display: grid; place-items: center; background: radial-gradient(circle, color-mix(in srgb, var(--primary) 25%, var(--surface-2)) 0, var(--surface-2) 70%); border: 3px solid color-mix(in srgb, var(--primary) 50%, transparent); }
+.rg-arrow { color: var(--primary); transition: transform 0.3s; filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.4)); }
+.rg-north { position: absolute; inset: 6px; text-align: center; font-weight: 800; color: #ef4444; transition: transform 0.3s; transform-origin: 50% 50%; line-height: 1; }
+.rg-dist { font-size: 2.6rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.rg-note { font-size: 0.75rem; color: var(--muted); }
+.rg-arrived { border-color: #16a34a; background: color-mix(in srgb, #16a34a 18%, var(--surface)); }
+.rg-arrived-box { display: flex; flex-direction: column; align-items: center; gap: 4px; color: #4ade80; font-size: 1.2rem; font-weight: 700; animation: pop 0.4s; }
+.rg-arrived-title { font-size: 2.2rem; font-weight: 800; }
+/* images inside the display's promo area are otherwise forced full-size / static by the slide rules */
+.cd .promo .overlay .bk-hero img, .cd .promo .overlay .cd-room-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 1; }
+.cd .promo .overlay .cd-room-guide .cd-room-qr, .cd .cd-room-guide .cd-room-qr { position: static; width: clamp(110px, min(17vh, 22vw), 220px); height: clamp(110px, min(17vh, 22vw), 220px); max-width: none; }
+.cd-room-pic { --bk-color: var(--primary); }
+.cd-room-time { font-size: clamp(30px, min(4.4vw, 9vh), 96px); flex-wrap: wrap; }
+/* booking found on the display: fit one screen */
+.cd-checkin:has(.bk-display) { gap: 1vh; }
+.cd .bk-display .bk-hero { height: clamp(100px, 18vh, 240px); }
+.cd .bk-display .bk-time b { font-size: clamp(30px, min(5vw, 8vh), 84px); }
+.cd .bk-display .bk-time { padding: 0.6vh 1vw; }
+.cd .bk-display .bk-body { gap: clamp(6px, 1.1vh, 14px); padding: clamp(10px, 1.6vh, 22px) clamp(14px, 2vw, 28px); }
+.cd .promo .overlay:has(.bk-display) { justify-content: flex-start; overflow-y: auto; padding-top: 2vh; }
+@media (orientation: portrait) { .cd-room-time { font-size: clamp(36px, 10vw, 120px); } }

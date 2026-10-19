@@ -189,12 +189,13 @@ const MEDIA_TOTAL_MAX = 500 * 1024 * 1024; // all uploaded slides together (the 
 const CHUNK = 512 * 1024;
 const mediaFileId = (url) => /^\/uploads\/media\/([0-9a-f-]{36})\.\w+$/i.exec(url || '')?.[1] || null;
 
-/** Remove uploaded slide files no slide of any store uses any more (a replaced / deleted slide, an unfinished upload). */
+/** Remove uploaded pictures / videos nothing uses any more (slides, floor plans — a replaced / deleted one, an unfinished upload). */
 async function cleanupMedia(graceMinutes = 60) {
   await runAsPlatform(() =>
     pool.query(
       `DELETE FROM stored_files f WHERE f.kind = 'PROMO_MEDIA' AND f.created_at < now() - make_interval(mins => $1)
-       AND NOT EXISTS (SELECT 1 FROM promotion_images p WHERE p.image_url LIKE '/uploads/media/' || f.id || '.%')`,
+       AND NOT EXISTS (SELECT 1 FROM promotion_images p WHERE p.image_url LIKE '/uploads/media/' || f.id || '.%')
+       AND NOT EXISTS (SELECT 1 FROM floors fl WHERE fl.plan_image_url LIKE '/uploads/media/' || f.id || '.%')`,
       [graceMinutes],
     ),
   );

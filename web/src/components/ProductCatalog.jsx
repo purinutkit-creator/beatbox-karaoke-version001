@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { Search, ScanLine } from 'lucide-react';
 import { Input, Img, Modal, Button, Field, Textarea, money, useToast, Loading } from './ui.jsx';
 import { useT } from '../lib/i18n.jsx';
+import { isBookingCode } from '../lib/scanner.js';
 import { api } from '../lib/api.js';
 import { useLive } from '../lib/socket.js';
 
@@ -13,7 +14,7 @@ const initials = (name = '') => {
 };
 
 /** Product grid with category filter, name/code search and barcode-scanner support (keyboard wedge). */
-export function ProductCatalog({ onAdd, compact }) {
+export function ProductCatalog({ onAdd, compact, onOtherCode }) {
   const { t } = useT();
   const toast = useToast();
   const { data: products, loading } = useLive(() => api.get('/products'), ['products'], []);
@@ -39,8 +40,14 @@ export function ProductCatalog({ onAdd, compact }) {
     else onAdd(p, 1, [], '');
   };
   // barcode scanners type quickly then press Enter
+  // a code that is not a product (e.g. a booking QR / barcode) goes to onOtherCode
   const onEnter = async (e) => {
     if (e.key !== 'Enter' || !q.trim()) return;
+    if (onOtherCode && isBookingCode(q)) {
+      onOtherCode(q.trim());
+      setQ('');
+      return;
+    }
     const exact = (products || []).find((p) => p.barcode === q.trim() || p.sku.toLowerCase() === q.trim().toLowerCase());
     if (exact) {
       pick(exact);
@@ -54,6 +61,9 @@ export function ProductCatalog({ onAdd, compact }) {
     } catch {
       if (list.length === 1) {
         pick(list[0]);
+        setQ('');
+      } else if (onOtherCode && !list.length) {
+        onOtherCode(q.trim());
         setQ('');
       }
     }
