@@ -125,7 +125,8 @@ export default function CustomerDisplay() {
 
   useEffect(() => {
     clearTimeout(successTimer.current);
-    if (state.mode === 'SUCCESS') successTimer.current = setTimeout(() => setState({ mode: 'IDLE' }), 15000);
+    // a plain "paid" screen goes back by itself; the room screen (way to the room) waits for staff ("เสร็จสิ้น")
+    if (state.mode === 'SUCCESS' && !state.room) successTimer.current = setTimeout(() => setState({ mode: 'IDLE' }), 15000);
   }, [state]);
 
   const store = publicSettings?.store;
