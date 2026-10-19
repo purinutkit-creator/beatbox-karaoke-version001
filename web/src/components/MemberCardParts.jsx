@@ -2,13 +2,13 @@
 // "ออกบัตรใหม่" (a new number, the old card stops working) and "ซิงค์บัตร" (tap / scan an existing card so its number
 // becomes the member number, then print the card again).
 import { useEffect, useRef, useState } from 'react';
-import { CreditCard, Printer, RefreshCcw, Nfc, Sparkles, CheckCircle2, AlertTriangle } from 'lucide-react';
-import { Button, Modal, Input, Badge, useToast, useDialog } from './ui.jsx';
+import { CreditCard, Printer, RefreshCcw, Nfc, Sparkles, CheckCircle2, AlertTriangle, FileDown } from 'lucide-react';
+import { Button, Modal, Input, Badge, Field, Select, useToast, useDialog } from './ui.jsx';
 import { useT } from '../lib/i18n.jsx';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/store.jsx';
 import { useLive } from '../lib/socket.js';
-import { CardFront, CardBack, printCards, groupNo } from './MemberCard.jsx';
+import { CardFront, CardBack, printCards, cardsPdf, savePdf, groupNo } from './MemberCard.jsx';
 import { useCardReader, cleanCardNo, readerConfig, nfcSupported, startNfc } from '../lib/cardReader.js';
 import { fmtDateTime } from '@beatbox/shared/format.js';
 
@@ -27,50 +27,123 @@ export function CardPreview({ member, tiers, zoom = 1, side = 'BOTH' }) {
   );
 }
 
+/** A small drawing of how the cards sit on the paper. */
+function LayoutPic({ layout }) {
+  const box = (key, label, extra = {}) => <span key={key} className="lp-card" style={extra}>{label}</span>;
+  if (layout === 'SAME_SIDE')
+    return (
+      <div className="lp"><div className="lp-sheet lp-same">{[0, 1, 2].map((i) => [box(`f${i}`, 'หน้า'), box(`b${i}`, 'หลัง', { background: '#64748b' })])}</div></div>
+    );
+  return (
+    <div className="lp">
+      <div className="lp-sheet">{[0, 1, 2, 3].map((i) => box(i, 'หน้า'))}</div>
+      <span className="lp-arrow">⟲</span>
+      <div className="lp-sheet">{[0, 1, 2, 3].map((i) => box(i, 'หลัง', { background: '#64748b' }))}</div>
+    </div>
+  );
+}
+
 /** Print the cards of these members (first card issued on the way). */
 export function PrintCardsModal({ memberIds, onClose, onPrinted }) {
   const { t } = useT();
   const toast = useToast();
   const { settings } = useAuth();
   const { data: tiers } = useLive(() => api.get('/member-tiers'), [], []);
-  const [side, setSide] = useState('BOTH');
-  const [busy, setBusy] = useState(false);
   const cfg = settings?.memberCard || {};
   const card = cfg.print?.paper === 'CARD';
-  const go = async () => {
-    setBusy(true);
+  const [layout, setLayout] = useState(cfg.print?.layout || 'DUPLEX');
+  const [side, setSide] = useState('BOTH');
+  const [flip, setFlip] = useState(cfg.print?.flip || 'LONG');
+  const [busy, setBusy] = useState(null);
+  const go = async (out) => {
+    setBusy(out);
     try {
       const rows = await api.post('/members/cards/print', { memberIds });
-      await printCards(rows, { tiers, cfg, store: settings.store, side });
+      const opts = { tiers, cfg, store: settings.store, side: layout === 'SAME_SIDE' ? 'BOTH' : side, layout, flip };
+      if (out === 'PDF') {
+        const blob = await cardsPdf(rows, opts);
+        const name = rows.length === 1 ? `member-card-${rows[0].member_code}.pdf` : `member-cards-${rows.length}.pdf`;
+        savePdf(blob, name);
+        toast.success(`${t('บันทึกไฟล์แล้ว')} ${name}`);
+      } else await printCards(rows, opts);
       onPrinted?.(rows);
       onClose();
     } catch (e) {
       toast.error(e);
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
-  const sheets = card ? memberIds.length : Math.ceil(memberIds.length / 10);
-  const opts = [
+  const perSheet = card ? 1 : layout === 'SAME_SIDE' ? 5 : 10;
+  const sheets = Math.ceil(memberIds.length / perSheet);
+  const layouts = [
+    { v: 'DUPLEX', label: 'หน้า-หลัง คนละด้านกระดาษ', hint: 'ด้านหลังพิมพ์ตรงตำแหน่งเดียวกับด้านหน้าบนอีกด้านของกระดาษ (เครื่องพิมพ์สองหน้า หรือกลับกระดาษใส่ใหม่)' },
+    { v: 'SAME_SIDE', label: 'หน้า-หลัง อยู่ด้านเดียวกันของกระดาษ', hint: 'ด้านหน้าและด้านหลังวางคู่กัน พิมพ์หน้าเดียว ตัดตามเส้น แล้วพับตรงกลาง (หรือตัดแล้วประกบกัน) แล้วเคลือบ — 5 ใบต่อแผ่น' },
+  ];
+  const sides = [
     { v: 'BOTH', label: 'ทั้งสองด้าน', hint: card ? 'หน้า/หลังสลับกัน สำหรับเครื่องพิมพ์บัตรที่พิมพ์สองด้าน' : 'หน้าแรกด้านหน้า หน้าถัดไปด้านหลัง — ตั้งเครื่องพิมพ์ให้พิมพ์สองหน้า' },
     { v: 'FRONT', label: 'เฉพาะด้านหน้า', hint: 'เครื่องพิมพ์หน้าเดียว: พิมพ์ด้านหน้าก่อน' },
     { v: 'BACK', label: 'เฉพาะด้านหลัง', hint: 'แล้วใส่กระดาษแผ่นเดิมกลับเข้าไปโดยพลิกด้าน แล้วพิมพ์ด้านหลัง' },
   ];
   return (
-    <Modal title={<span className="row nowrap"><Printer size={20} /> {t('พิมพ์บัตรสมาชิก')} ({memberIds.length})</span>} onClose={onClose} footer={<Button variant="primary" icon={Printer} loading={busy} onClick={go}>{t('พิมพ์')}</Button>}>
+    <Modal
+      title={<span className="row nowrap"><Printer size={20} /> {t('พิมพ์บัตรสมาชิก')} ({memberIds.length})</span>}
+      size="wide"
+      onClose={onClose}
+      footer={
+        <>
+          <Button icon={Printer} loading={busy === 'PRINT'} disabled={!!busy} onClick={() => go('PRINT')}>{t('เปิดหน้าต่างพิมพ์')}</Button>
+          <Button variant="primary" icon={FileDown} loading={busy === 'PDF'} disabled={!!busy} onClick={() => go('PDF')}>{t('ดาวน์โหลด PDF สำหรับพิมพ์')}</Button>
+        </>
+      }
+    >
       <div className="col">
+        {!card && (
+          <>
+            <b>{t('วางบัตรบนกระดาษแบบไหน')}</b>
+            <div className="grid grid-2">
+              {layouts.map((o) => (
+                <label key={o.v} className={`card flat clickable ${layout === o.v ? 'selected' : ''}`} style={{ padding: 12 }}>
+                  <div className="row nowrap"><input type="radio" checked={layout === o.v} onChange={() => setLayout(o.v)} /><b>{t(o.label)}</b></div>
+                  <LayoutPic layout={o.v} />
+                  <div className="xs muted">{t(o.hint)}</div>
+                </label>
+              ))}
+            </div>
+          </>
+        )}
+        {!card && layout === 'DUPLEX' && (
+          <Field label="ตำแหน่งด้านหลัง">
+            <Select
+              value={flip}
+              onChange={(e) => setFlip(e.target.value)}
+              options={[
+                { value: 'LONG', label: 'ตรงหลังด้านหน้าพอดี เมื่อพลิกกระดาษด้านยาว (ค่าปกติของเครื่องพิมพ์สองหน้า)' },
+                { value: 'SHORT', label: 'ตรงหลังด้านหน้าพอดี เมื่อพลิกกระดาษด้านสั้น' },
+                { value: 'NONE', label: 'ตำแหน่งเดียวกับด้านหน้าในไฟล์ (ไม่กลับด้าน)' },
+              ]}
+            />
+          </Field>
+        )}
+        {(card || layout === 'DUPLEX') && (
+          <div className="grid grid-3">
+            {sides.map((o) => (
+              <label key={o.v} className={`card flat row clickable ${side === o.v ? 'selected' : ''}`} style={{ padding: 10, alignItems: 'flex-start', flexWrap: 'nowrap' }}>
+                <input type="radio" checked={side === o.v} onChange={() => setSide(o.v)} />
+                <div><b>{t(o.label)}</b><div className="xs muted">{t(o.hint)}</div></div>
+              </label>
+            ))}
+          </div>
+        )}
         <div className="small muted">
-          {card ? `${t('เครื่องพิมพ์บัตร: 1 บัตรต่อหน้า')} (85.5 × 54 ${t('มม.')})` : `${t('กระดาษ A4: 10 ใบต่อแผ่น')} · ${sheets} ${t('แผ่น')}`}
+          {card ? `${t('เครื่องพิมพ์บัตร: 1 บัตรต่อหน้า')} (85.5 × 54 ${t('มม.')})` : `${t('กระดาษ A4')} · ${perSheet} ${t('ใบต่อแผ่น')} · ${sheets} ${t('แผ่น')}`}
         </div>
-        {opts.map((o) => (
-          <label key={o.v} className={`card flat row nowrap clickable ${side === o.v ? 'selected' : ''}`} style={{ padding: 10, alignItems: 'flex-start' }}>
-            <input type="radio" checked={side === o.v} onChange={() => setSide(o.v)} />
-            <div><b>{t(o.label)}</b><div className="xs muted">{t(o.hint)}</div></div>
-          </label>
-        ))}
-        <div className="xs muted">
-          {t('ในหน้าต่างพิมพ์: เลือกขนาดกระดาษให้ตรง, ขนาด 100% (Actual size / ไม่ย่อให้พอดี), ไม่มีขอบ (Margins: None) และเปิด "กราฟิกพื้นหลัง" (Background graphics)')}
-          {!card && side === 'BOTH' && ` ${t('พิมพ์สองหน้าแบบพลิกด้าน')}${cfg.print?.flip === 'SHORT' ? t('สั้น') : t('ยาว')}`}
+        <div className="alert">
+          <FileDown size={18} style={{ flex: 'none' }} />
+          <span className="small">
+            {t('แนะนำ "ดาวน์โหลด PDF": ได้ไฟล์บัตรขนาดจริง เปิดแล้วสั่งพิมพ์ไปที่เครื่องพิมพ์ A4 / เครื่องพิมพ์บัตร โดยเลือกขนาด 100% (Actual size) — ใช้ได้แม้เครื่องนี้ตั้งให้พิมพ์อัตโนมัติไปเครื่องพิมพ์ใบเสร็จ')}
+            {' '}{t('ถ้ากด "เปิดหน้าต่างพิมพ์" ให้เลือกเครื่องพิมพ์ A4 (ไม่ใช่เครื่องพิมพ์ใบเสร็จ), ขนาด 100%, ขอบ None และเปิด Background graphics')}
+          </span>
         </div>
       </div>
     </Modal>

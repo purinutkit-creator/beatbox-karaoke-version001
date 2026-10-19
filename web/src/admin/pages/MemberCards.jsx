@@ -8,7 +8,7 @@ import { useT } from '../../lib/i18n.jsx';
 import { api } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive } from '../../lib/socket.js';
-import { CARD_THEMES, CardFront, CardBack, tierLook, printCards } from '../../components/MemberCard.jsx';
+import { CARD_THEMES, CardFront, CardBack, tierLook, cardsPdf, savePdf } from '../../components/MemberCard.jsx';
 import { readerConfig, setReaderConfig, pairSerialReader, serialSupported, nfcSupported, startNfc, useCardReader } from '../../lib/cardReader.js';
 
 const SAMPLE = { first_name: 'สมชาย', last_name: 'ใจดี', member_code: '482915736051', created_at: new Date().toISOString(), photo_url: '' };
@@ -119,18 +119,22 @@ export default function MemberCards() {
     }
   };
   // a full sheet of sample cards (each tier in turn) to check the colours and the front / back alignment
-  const testSheet = () => {
-    const per = f.print?.paper === 'CARD' ? Math.min(2, tiers.length) : 10;
+  const testSheet = async () => {
+    const per = f.print?.paper === 'CARD' ? Math.min(2, tiers.length) : f.print?.layout === 'SAME_SIDE' ? 5 : 10;
     const ms = Array.from({ length: per }, (_, i) => {
       const tr = tiers[i % tiers.length];
       return { ...SAMPLE, member_code: String(482915736051 + i), tier_id: tr.id, tier_name: tr.name };
     });
-    printCards(ms, { tiers, cfg: f, store: settings.store });
+    try {
+      savePdf(await cardsPdf(ms, { tiers, cfg: f, store: settings.store }), 'member-card-test.pdf');
+    } catch (e) {
+      toast.error(e);
+    }
   };
   return (
     <div>
       <PageHead icon={CreditCard} title="บัตรสมาชิก">
-        <Button icon={Printer} onClick={testSheet}>{t('พิมพ์หน้าทดสอบ')}</Button>
+        <Button icon={Printer} onClick={testSheet}>{t('PDF หน้าทดสอบ')}</Button>
         <Button variant="primary" icon={Save} loading={busy} onClick={save}>{t('บันทึก')}</Button>
       </PageHead>
       <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.05fr)', alignItems: 'start', gap: 16 }}>
@@ -203,8 +207,11 @@ export default function MemberCards() {
               </Field>
               {f.print?.paper !== 'CARD' && (
                 <>
+                  <Field label="ค่าเริ่มต้น: วางหน้า-หลังบัตร">
+                    <Select value={f.print?.layout || 'DUPLEX'} onChange={(e) => setPrint('layout', e.target.value)} options={[{ value: 'DUPLEX', label: 'คนละด้านกระดาษ — ด้านหลังตรงตำแหน่งเดียวกับด้านหน้า (10 ใบ/แผ่น)' }, { value: 'SAME_SIDE', label: 'ด้านเดียวกันของกระดาษ — หน้าและหลังวางคู่กัน ตัดแล้วพับ (5 ใบ/แผ่น)' }]} />
+                  </Field>
                   <Field label="การพลิกกระดาษเมื่อพิมพ์สองหน้า">
-                    <Select value={f.print?.flip || 'LONG'} onChange={(e) => setPrint('flip', e.target.value)} options={[{ value: 'LONG', label: 'พลิกด้านยาว (ค่าปกติ)' }, { value: 'SHORT', label: 'พลิกด้านสั้น' }]} />
+                    <Select value={f.print?.flip || 'LONG'} onChange={(e) => setPrint('flip', e.target.value)} options={[{ value: 'LONG', label: 'พลิกด้านยาว (ค่าปกติ)' }, { value: 'SHORT', label: 'พลิกด้านสั้น' }, { value: 'NONE', label: 'ไม่กลับด้าน — ด้านหลังตำแหน่งเดียวกับด้านหน้าในไฟล์' }]} />
                   </Field>
                   <div className="grid grid-2">
                     <Field label="เลื่อนด้านหลัง แนวนอน (มม.)"><Input type="number" step="0.5" value={f.print?.offsetX ?? 0} onChange={(e) => setPrint('offsetX', Number(e.target.value))} /></Field>
@@ -214,7 +221,7 @@ export default function MemberCards() {
                 </>
               )}
               <div className="xs muted">
-                {t('บัตรขนาด 85.5 × 54 มม. (ขนาดบัตรมาตรฐาน หนา 0.83 มม. เมื่อเคลือบ/ใช้บัตร PVC) · พิมพ์หน้าทดสอบ แล้วส่องกับไฟดูว่าด้านหลังตรงกับด้านหน้าไหม ถ้าเลื่อน ให้ปรับ "เลื่อนด้านหลัง" ทีละ 0.5 มม.')}
+                {t('บัตรขนาด 85.5 × 54 มม. (ขนาดบัตรมาตรฐาน หนา 0.83 มม. เมื่อเคลือบ/ใช้บัตร PVC) · พิมพ์ PDF หน้าทดสอบ (ขนาด 100%) แล้วส่องกับไฟดูว่าด้านหลังตรงกับด้านหน้าไหม ถ้าเลื่อน ให้ปรับ "เลื่อนด้านหลัง" ทีละ 0.5 มม.')}
               </div>
               <div className="xs muted">{t('ในหน้าต่างพิมพ์: ขนาด 100% (Actual size), ขอบกระดาษ None, เปิด Background graphics')}</div>
             </div>

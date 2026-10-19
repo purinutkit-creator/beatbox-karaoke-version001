@@ -4,6 +4,8 @@
 // QR codes and barcodes are drawn at once (no waiting), so printing never catches them half drawn.
 import QRCodeLib from 'qrcode';
 import JsBarcode from 'jsbarcode';
+import { createRoot } from 'react-dom/client';
+import { flushSync } from 'react-dom';
 import { browserPrint } from '../lib/print.jsx';
 
 export const CARD_W = 85.5;
@@ -79,17 +81,17 @@ export function BarcodeSvg({ value, width = 46, height = 8 }) {
   );
 }
 
-function Pattern({ kind }) {
+function Pattern({ kind, color }) {
   if (kind === 'lines')
     return (
       <svg className="mc-pattern" viewBox="0 0 855 540" preserveAspectRatio="none">
-        {Array.from({ length: 16 }, (_, i) => <line key={i} x1={i * 70 - 300} y1="540" x2={i * 70 + 240} y2="0" stroke="currentColor" strokeWidth="1.4" opacity="0.14" />)}
+        {Array.from({ length: 16 }, (_, i) => <line key={i} x1={i * 70 - 300} y1="540" x2={i * 70 + 240} y2="0" stroke={color} strokeWidth="1.4" opacity="0.14" />)}
       </svg>
     );
   if (kind === 'dots')
     return (
       <svg className="mc-pattern" viewBox="0 0 855 540" preserveAspectRatio="none">
-        {Array.from({ length: 9 * 14 }, (_, i) => <circle key={i} cx={500 + (i % 14) * 26} cy={20 + Math.floor(i / 14) * 26} r={3 + (i % 14) * 0.45} fill="currentColor" opacity="0.13" />)}
+        {Array.from({ length: 9 * 14 }, (_, i) => <circle key={i} cx={500 + (i % 14) * 26} cy={20 + Math.floor(i / 14) * 26} r={3 + (i % 14) * 0.45} fill={color} opacity="0.13" />)}
       </svg>
     );
   if (kind === 'shine')
@@ -97,14 +99,14 @@ function Pattern({ kind }) {
       <svg className="mc-pattern" viewBox="0 0 855 540" preserveAspectRatio="none">
         <path d="M-50 400 L380 -40 L520 -40 L90 400 Z" fill="#fff" opacity="0.28" />
         <path d="M140 560 L600 -40 L650 -40 L190 560 Z" fill="#fff" opacity="0.2" />
-        <circle cx="760" cy="80" r="220" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.1" />
+        <circle cx="760" cy="80" r="220" fill="none" stroke={color} strokeWidth="2" opacity="0.1" />
       </svg>
     );
   return (
     <svg className="mc-pattern" viewBox="0 0 855 540" preserveAspectRatio="none">
-      <path d="M0 400 C 200 300, 400 520, 855 330 L855 540 L0 540 Z" fill="currentColor" opacity="0.1" />
-      <path d="M0 460 C 260 360, 520 560, 855 420 L855 540 L0 540 Z" fill="currentColor" opacity="0.1" />
-      <circle cx="760" cy="60" r="200" fill="currentColor" opacity="0.07" />
+      <path d="M0 400 C 200 300, 400 520, 855 330 L855 540 L0 540 Z" fill={color} opacity="0.1" />
+      <path d="M0 460 C 260 360, 520 560, 855 420 L855 540 L0 540 Z" fill={color} opacity="0.1" />
+      <circle cx="760" cy="60" r="200" fill={color} opacity="0.07" />
     </svg>
   );
 }
@@ -139,7 +141,7 @@ export function CardFront({ member, tier, cfg = {}, store = {}, print = false })
   return (
     <div className={`mc mc-front ${print ? 'mc-print' : ''}`} style={bgStyle(look)}>
       {look.imageUrl && <img className="mc-bgimg" src={look.imageUrl} alt="" />}
-      <Pattern kind={look.pattern} />
+      <Pattern kind={look.pattern} color={look.textColor} />
       <div className="mc-top">
         <div className="mc-brand">
           {cfg.showLogo !== false && store.logoUrl && <img className="mc-logo" src={store.logoUrl} alt="" />}
@@ -173,7 +175,7 @@ export function CardBack({ tier, cfg = {}, store = {}, print = false }) {
   const qr = links.length <= 1 ? 17 : links.length === 2 ? 14 : 11.5;
   return (
     <div className={`mc mc-back ${print ? 'mc-print' : ''}`} style={bgStyle(look)}>
-      <Pattern kind={look.pattern} />
+      <Pattern kind={look.pattern} color={look.textColor} />
       <div className="mc-band" />
       <div className="mc-back-body">
         <div className="mc-back-text">
@@ -226,24 +228,36 @@ function slot(i, back, p) {
   let col = i % A4.cols;
   let row = Math.floor(i / A4.cols);
   if (back && p.flip === 'SHORT') row = A4.rows - 1 - row;
-  else if (back) col = A4.cols - 1 - col;
+  else if (back && p.flip !== 'NONE') col = A4.cols - 1 - col; // NONE: the same spot on both pages, as the file shows
   const dx = back ? Number(p.offsetX) || 0 : 0;
   const dy = back ? Number(p.offsetY) || 0 : 0;
   return { left: `${MX + col * CARD_W + dx}mm`, top: `${MY + row * CARD_H + dy}mm` };
 }
 
+/** Same side: each row is one card, front on the left and back on the right, sharing the middle line. */
+function pairSlot(i, back) {
+  return { left: `${MX + (back ? CARD_W : 0)}mm`, top: `${MY + i * CARD_H}mm` };
+}
+
 /**
- * The pages to print. side: BOTH (front page, then back page — set the printer to print on both sides) | FRONT | BACK
- * (for printers without duplex: print the fronts, put the sheet back in turned over, print the backs).
+ * The pages to print.
+ * layout DUPLEX: fronts on one page, backs on the next, each back exactly behind its front once the sheet is printed on
+ *   both sides. side: BOTH | FRONT | BACK (printers without duplex: print the fronts, put the sheet back in turned
+ *   over, print the backs).
+ * layout SAME_SIDE: front and back next to each other on one side of the paper (5 cards a sheet): cut out along the
+ *   outside lines, fold on the middle line (or cut it and stick the two halves back to back) and laminate.
  */
-export function CardSheets({ members, tiers, cfg, store, side = 'BOTH' }) {
-  const p = cfg?.print || {};
+export function CardSheets({ members, tiers, cfg, store, side = 'BOTH', layout, flip }) {
+  const p = { ...(cfg?.print || {}), ...(flip ? { flip } : {}) };
+  const lay = layout || p.layout || 'DUPLEX';
   const tierOf = (m) => (tiers || []).find((t) => t.id === m.tier_id) || { id: m.tier_id, name: m.tier_name, code: m.tier_code, sort_order: m.tier_sort };
+  const front = (m) => <CardFront member={m} tier={tierOf(m)} cfg={cfg} store={store} print />;
+  const backOf = (m) => <CardBack tier={tierOf(m)} cfg={cfg} store={store} print />;
   const pages = [];
   if (p.paper === 'CARD') {
     members.forEach((m, i) => {
-      if (side !== 'BACK') pages.push(<div key={`f${i}`} className="print-page mc-cardpage"><CardFront member={m} tier={tierOf(m)} cfg={cfg} store={store} print /></div>);
-      if (side !== 'FRONT') pages.push(<div key={`b${i}`} className="print-page mc-cardpage"><CardBack tier={tierOf(m)} cfg={cfg} store={store} print /></div>);
+      if (side !== 'BACK') pages.push(<div key={`f${i}`} className="print-page mc-cardpage">{front(m)}</div>);
+      if (side !== 'FRONT') pages.push(<div key={`b${i}`} className="print-page mc-cardpage">{backOf(m)}</div>);
     });
     return (
       <>
@@ -252,22 +266,38 @@ export function CardSheets({ members, tiers, cfg, store, side = 'BOTH' }) {
       </>
     );
   }
-  const per = A4.cols * A4.rows;
-  for (let s = 0; s * per < members.length; s++) {
-    const chunk = members.slice(s * per, s * per + per);
-    if (side !== 'BACK')
+  if (lay === 'SAME_SIDE') {
+    for (let s = 0; s * A4.rows < members.length; s++) {
+      const chunk = members.slice(s * A4.rows, s * A4.rows + A4.rows);
       pages.push(
-        <div key={`f${s}`} className="print-page mc-sheet">
+        <div key={`p${s}`} className="print-page mc-sheet">
           {p.cutMarks !== false && <CutMarks />}
-          {chunk.map((m, i) => <div key={i} className="mc-slot" style={slot(i, false, p)}><CardFront member={m} tier={tierOf(m)} cfg={cfg} store={store} print /></div>)}
+          <i className="mc-fold" style={{ left: `${MX + CARD_W}mm`, top: `${MY - 9}mm` }}>✂ / พับ</i>
+          {chunk.map((m, i) => [
+            <div key={`f${i}`} className="mc-slot" style={pairSlot(i, false)}>{front(m)}</div>,
+            <div key={`b${i}`} className="mc-slot" style={pairSlot(i, true)}>{backOf(m)}</div>,
+          ])}
         </div>,
       );
-    if (side !== 'FRONT')
-      pages.push(
-        <div key={`b${s}`} className="print-page mc-sheet">
-          {chunk.map((m, i) => <div key={i} className="mc-slot" style={slot(i, true, p)}><CardBack tier={tierOf(m)} cfg={cfg} store={store} print /></div>)}
-        </div>,
-      );
+    }
+  } else {
+    const per = A4.cols * A4.rows;
+    for (let s = 0; s * per < members.length; s++) {
+      const chunk = members.slice(s * per, s * per + per);
+      if (side !== 'BACK')
+        pages.push(
+          <div key={`f${s}`} className="print-page mc-sheet">
+            {p.cutMarks !== false && <CutMarks />}
+            {chunk.map((m, i) => <div key={i} className="mc-slot" style={slot(i, false, p)}>{front(m)}</div>)}
+          </div>,
+        );
+      if (side !== 'FRONT')
+        pages.push(
+          <div key={`b${s}`} className="print-page mc-sheet">
+            {chunk.map((m, i) => <div key={i} className="mc-slot" style={slot(i, true, p)}>{backOf(m)}</div>)}
+          </div>,
+        );
+    }
   }
   return (
     <>
@@ -277,6 +307,88 @@ export function CardSheets({ members, tiers, cfg, store, side = 'BOTH' }) {
   );
 }
 
-export function printCards(members, { tiers, cfg, store, side = 'BOTH' }) {
-  return browserPrint(<CardSheets members={members} tiers={tiers} cfg={cfg} store={store} side={side} />);
+/** Through the browser's print window (the printer chosen there). */
+export function printCards(members, { tiers, cfg, store, side = 'BOTH', layout, flip }) {
+  return browserPrint(<CardSheets members={members} tiers={tiers} cfg={cfg} store={store} side={side} layout={layout} flip={flip} />);
+}
+
+/** JPEG pictures → a PDF, one picture filling each page of the given size (mm). */
+function jpegPdf(pages) {
+  const enc = new TextEncoder();
+  const chunks = [];
+  const offsets = [];
+  let len = 0;
+  const push = (d) => {
+    const b = typeof d === 'string' ? enc.encode(d) : d;
+    chunks.push(b);
+    len += b.length;
+  };
+  const obj = (id, body) => {
+    offsets[id] = len;
+    push(`${id} 0 obj\n`);
+    body();
+    push('\nendobj\n');
+  };
+  const pt = (mm) => ((mm * 72) / 25.4).toFixed(2);
+  push('%PDF-1.4\n');
+  obj(1, () => push('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2, () => push(`<< /Type /Pages /Count ${pages.length} /Kids [${pages.map((_, i) => `${3 + 3 * i} 0 R`).join(' ')}] >>`));
+  pages.forEach((pg, i) => {
+    const W = pt(pg.wMm);
+    const H = pt(pg.hMm);
+    const draw = `q ${W} 0 0 ${H} 0 0 cm /Im${i} Do Q`;
+    obj(3 + 3 * i, () => push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Contents ${4 + 3 * i} 0 R /Resources << /XObject << /Im${i} ${5 + 3 * i} 0 R >> >> >>`));
+    obj(4 + 3 * i, () => push(`<< /Length ${draw.length} >>\nstream\n${draw}\nendstream`));
+    obj(5 + 3 * i, () => {
+      push(`<< /Type /XObject /Subtype /Image /Width ${pg.w} /Height ${pg.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${pg.jpeg.length} >>\nstream\n`);
+      push(pg.jpeg);
+      push('\nendstream');
+    });
+  });
+  const size = 3 + 3 * pages.length;
+  const xref = len;
+  push(`xref\n0 ${size}\n0000000000 65535 f \n`);
+  for (let id = 1; id < size; id++) push(`${String(offsets[id]).padStart(10, '0')} 00000 n \n`);
+  push(`trailer\n<< /Size ${size} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
+  return new Blob(chunks, { type: 'application/pdf' });
+}
+
+/**
+ * The cards as a PDF at their real size (300 dpi): it prints the same on any printer — also on a computer whose
+ * browser prints straight to the receipt printer (--kiosk-printing) — as long as it is printed at 100 % / actual size.
+ */
+export async function cardsPdf(members, { tiers, cfg, store, side = 'BOTH', layout, flip }) {
+  const { default: html2canvas } = await import('html2canvas');
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:-30000px;top:0;background:#fff;';
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<CardSheets members={members} tiers={tiers} cfg={cfg} store={store} side={side} layout={layout} flip={flip} />));
+  try {
+    await document.fonts?.ready;
+    const imgs = [...host.querySelectorAll('img')].filter((i) => !i.complete);
+    await Promise.race([Promise.all(imgs.map((i) => new Promise((r) => { i.onload = i.onerror = r; }))), new Promise((r) => setTimeout(r, 5000))]);
+    const card = cfg?.print?.paper === 'CARD';
+    const out = [];
+    for (const el of host.querySelectorAll('.print-page')) {
+      const canvas = await html2canvas(el, { scale: 300 / 96, backgroundColor: '#ffffff', useCORS: true, logging: false });
+      const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.95));
+      out.push({ jpeg: new Uint8Array(await blob.arrayBuffer()), w: canvas.width, h: canvas.height, wMm: card ? CARD_W : A4.w, hMm: card ? CARD_H : A4.h });
+    }
+    return jpegPdf(out);
+  } finally {
+    root.unmount();
+    host.remove();
+  }
+}
+
+export function savePdf(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }

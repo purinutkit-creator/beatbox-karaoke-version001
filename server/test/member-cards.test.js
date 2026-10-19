@@ -115,4 +115,8 @@ test('card settings: digits used for new numbers, links validated', async () => 
   assert.match(m.body.member_code, /^[1-9]\d{7}$/);
   const bad = await api('PUT', '/settings/memberCard', { ...s, numberDigits: 3 });
   assert.equal(bad.status, 400);
+  const lay = await api('PUT', '/settings/memberCard', { ...s, print: { ...s.print, layout: 'SAME_SIDE', flip: 'NONE' } });
+  assert.equal(lay.status, 200, JSON.stringify(lay.body));
+  assert.equal(lay.body.memberCard.print.layout, 'SAME_SIDE');
+  assert.equal((await api('PUT', '/settings/memberCard', { ...s, print: { ...s.print, layout: 'SIDEWAYS' } })).status, 400);
 });

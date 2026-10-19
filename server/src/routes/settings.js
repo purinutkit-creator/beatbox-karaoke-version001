@@ -83,7 +83,7 @@ r.put('/settings/:section', can('settings.manage'), async (req, res) => {
         title: z.string().max(40).optional().nullable(),
         tiers: z.record(z.string(), look).optional(),
         back: z.object({ heading: z.string().max(60).optional().nullable(), text: z.string().max(600).optional().nullable(), imageUrl: zUrl, links: z.array(link).max(4).optional(), terms: z.string().max(400).optional().nullable() }).passthrough(),
-        print: z.object({ paper: z.enum(['A4', 'CARD']), flip: z.enum(['LONG', 'SHORT']), offsetX: z.coerce.number().min(-10).max(10), offsetY: z.coerce.number().min(-10).max(10) }).passthrough(),
+        print: z.object({ paper: z.enum(['A4', 'CARD']), layout: z.enum(['DUPLEX', 'SAME_SIDE']).optional(), flip: z.enum(['LONG', 'SHORT', 'NONE']), offsetX: z.coerce.number().min(-10).max(10), offsetY: z.coerce.number().min(-10).max(10) }).passthrough(),
       }).passthrough(),
       value,
     );

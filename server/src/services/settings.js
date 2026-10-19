@@ -182,6 +182,7 @@ export const DEFAULT_SETTINGS = {
     },
     print: {
       paper: 'A4', // A4 = 10 cards a sheet (front page then back page) | CARD = a card printer, one card a page
+      layout: 'DUPLEX', // A4: DUPLEX = back on the other side of the paper, behind its front | SAME_SIDE = front and back side by side on one side
       flip: 'LONG', // duplex: LONG = flip on the long edge (usual) | SHORT = short edge
       offsetX: 0, // mm, moves the back page to line up with the front
       offsetY: 0,
