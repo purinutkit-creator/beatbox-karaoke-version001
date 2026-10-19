@@ -3,12 +3,13 @@ import { Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'reac
 import {
   LayoutDashboard, ShoppingCart, DoorOpen, CalendarDays, ClipboardList, Users, Package, Tags, Boxes, LayoutGrid, Timer, BadgePercent, Wallet,
   Receipt, Clock, BarChart3, UserCog, MonitorSmartphone, Printer, Settings, History, Bell, Sun, Moon, LogOut, Menu, Wifi, WifiOff, Globe, ScanLine,
-  Gift, AlertTriangle, VolumeX, Plus, CreditCard, X, Mic2, Lock, KeyRound, Store, Shield, FileText, Cpu, Search, Map as MapIcon,
+  Gift, AlertTriangle, VolumeX, Plus, CreditCard, X, Mic2, Lock, KeyRound, Store, Shield, FileText, Cpu, Search, Map as MapIcon, CheckCircle2,
 } from 'lucide-react';
 import { useAuth, useApp } from '../lib/store.jsx';
 import { useT } from '../lib/i18n.jsx';
 import { api, offlineQueue } from '../lib/api.js';
 import { useServerNow, useSocketEvent, useSync, getSocket } from '../lib/socket.js';
+import { onDisplayHold, releaseDisplay } from '../lib/display.js';
 import { Button, Modal, Loading, PinPad, useToast, useDialog, Badge, Field, Input } from '../components/ui.jsx';
 import { LicenseWidget, ExpiredScreen, SuperOwnerBanner } from '../components/License.jsx';
 import { PrintProvider, usePrint } from '../components/PrintPreview.jsx';
@@ -405,6 +406,21 @@ function RoomServiceAlerts() {
   );
 }
 
+/** While the customer display holds the room screen (way to the room), "เสร็จสิ้น" puts it back to normal. */
+function DisplayHoldBar() {
+  const { t } = useT();
+  const [held, setHeld] = useState(null);
+  useEffect(() => onDisplayHold(setHeld), []);
+  if (!held) return null;
+  return (
+    <div className="hold-bar">
+      <MonitorSmartphone size={18} />
+      <span>{t('จอลูกค้ากำลังแสดงทางไปห้อง')} <b>{typeof held === 'string' ? held : ''}</b></span>
+      <Button size="sm" variant="primary" icon={CheckCircle2} onClick={releaseDisplay}>{t('เสร็จสิ้น')}</Button>
+    </div>
+  );
+}
+
 /** Prints kitchen tickets of in-room QR orders. Every POS can print; a server-side claim makes sure each job prints once. */
 function QueuedPrintWorker() {
   const { print } = usePrint();
@@ -614,6 +630,7 @@ function Layout() {
       <AlertCenter />
       <RoomServiceAlerts />
       <QueuedPrintWorker />
+      <DisplayHoldBar />
       <IdleGuard />
     </div>
   );

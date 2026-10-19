@@ -18,15 +18,45 @@ export function getPairCode() {
   return code;
 }
 
-export function pushDisplay(state) {
+// A screen the customer needs time with (their room and the QR to the way there) is "held": it stays until staff
+// press "เสร็จสิ้น" (releaseDisplay). Automatic returns to idle are ignored meanwhile; anything else pushed for the next
+// customer (a cart, a payment …) replaces it.
+let held = null;
+const holdListeners = new Set();
+const setHeld = (v) => {
+  held = v;
+  holdListeners.forEach((f) => f(held));
+};
+/** Keep the current room screen on the customer display until releaseDisplay(); label = what the POS bar shows. */
+export function holdDisplay(label) {
+  setHeld(label || true);
+}
+/** "เสร็จสิ้น": back to the normal (promotion) screen. */
+export function releaseDisplay() {
+  if (!held) return;
+  setHeld(null);
+  idleDisplay({ force: true });
+}
+export function onDisplayHold(fn) {
+  holdListeners.add(fn);
+  fn(held);
+  return () => holdListeners.delete(fn);
+}
+
+/** opts.passive: a background refresh (e.g. a room's bill reloading) that must not replace a held room screen. */
+export function pushDisplay(state, { passive = false } = {}) {
+  if (held && passive) return;
+  const roomScreen = state.mode === 'ROOM_READY' || (state.mode === 'SUCCESS' && state.room);
+  if (held && !roomScreen && !(state.mode === 'IDLE' && state.force)) setHeld(null);
   last = { ...state, at: Date.now() };
   const s = getSocket();
   if (!code) ensurePairCode().then(() => s?.emit('display:state', { code, state: last })).catch(() => {});
   else s?.emit('display:state', { code, state: last });
 }
 
-export function idleDisplay() {
-  pushDisplay({ mode: 'IDLE' });
+export function idleDisplay({ force = false } = {}) {
+  if (held && !force) return; // a held room screen waits for "เสร็จสิ้น"
+  pushDisplay({ mode: 'IDLE', force });
 }
 
 /**

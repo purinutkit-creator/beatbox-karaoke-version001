@@ -16,7 +16,7 @@ import { useT } from '../../lib/i18n.jsx';
 import { api, uid } from '../../lib/api.js';
 import { useAuth } from '../../lib/store.jsx';
 import { useLive, useServerNow, serverNow } from '../../lib/socket.js';
-import { pushDisplay, orderToDisplay, idleDisplay, roomForDisplay } from '../../lib/display.js';
+import { pushDisplay, orderToDisplay, roomForDisplay, holdDisplay } from '../../lib/display.js';
 import { ROOM_STATUS_LABEL, ROOM_STATUS_COLOR, RESERVATION_STATUS_LABEL } from '@beatbox/shared/constants.js';
 import { round2 } from '@beatbox/shared/money.js';
 import { sessionTiming, computeSessionCharges, formatMinutesShort, priceForMinutes } from '@beatbox/shared/roomPricing.js';
@@ -167,12 +167,13 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
   const [detail, setDetail] = useState(null);
   const [tab, setTab] = useState(initialTab || 'bill');
   const printTickets = usePrintRoomTickets();
-  // room opened (pay later): the customer display shows the room, its times and the QR to the way there
+  // room opened (pay later): the customer display shows the room, its times and the QR to the way there, until
+  // staff press "เสร็จสิ้น" on the bar at the bottom of the screen
   const showRoomReady = async (session) => {
     const room = await roomForDisplay(session);
     if (!room) return;
     pushDisplay({ mode: 'ROOM_READY', room });
-    setTimeout(() => idleDisplay(), 30000);
+    holdDisplay(room.name);
   };
   const { data: rsState, reload: reloadRs } = useLive(() => api.get('/room-service', { passive: true }), ['room-service', 'rooms'], []);
   const prepays = (rsState?.payments || []).filter((p) => p.room_id === room.id);
@@ -188,7 +189,7 @@ function RoomDrawer({ room, rooms, onClose, reload, openCheckout, initialTab }) 
     loadDetail();
   }, [s?.id, s?.version, room.live?.itemCount, room.live?.productTotal]);
   useEffect(() => {
-    if (detail?.order) pushDisplay(orderToDisplay(detail.order));
+    if (detail?.order) pushDisplay(orderToDisplay(detail.order), { passive: true });
   }, [detail]);
   const act = async (fn, msg) => {
     try {

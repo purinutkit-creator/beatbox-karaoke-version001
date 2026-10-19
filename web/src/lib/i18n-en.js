@@ -2751,4 +2751,5 @@ export const EN = {
   "ไม่พบห้องนี้": "Room not found",
   "ตำแหน่งไม่ครบ": "Incomplete position",
   "บันทึกตำแหน่งห้องแล้ว": "Room position saved",
+  "จอลูกค้ากำลังแสดงทางไปห้อง": "Customer display is showing the way to room",
 };

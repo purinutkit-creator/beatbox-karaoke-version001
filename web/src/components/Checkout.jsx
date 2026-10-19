@@ -10,7 +10,7 @@ import { usePrint } from './PrintPreview.jsx';
 import { useT } from '../lib/i18n.jsx';
 import { api, uid } from '../lib/api.js';
 import { useAuth } from '../lib/store.jsx';
-import { pushDisplay, orderToDisplay, idleDisplay, roomForDisplay } from '../lib/display.js';
+import { pushDisplay, orderToDisplay, idleDisplay, roomForDisplay, holdDisplay, releaseDisplay } from '../lib/display.js';
 import { openDrawer } from '../lib/print.jsx';
 import { cashQuickAmounts } from '@beatbox/shared/calc.js';
 import { promptPayPayload } from '@beatbox/shared/promptpay.js';
@@ -267,6 +267,15 @@ export default function Checkout({ orderId: billId, prepaySession = null, onClos
     setRef('');
   };
 
+  // "เสร็จสิ้น" after paying for a room: the customer display goes back to its normal screen only now
+  const finishedRef = useRef(false);
+  const finishPrepay = () => {
+    finishedRef.current = true;
+    releaseDisplay();
+    idleDisplay();
+    onClose();
+  };
+
   const confirm = async (finalTenders) => {
     if (busy) return;
     setBusy(true);
@@ -277,9 +286,14 @@ export default function Checkout({ orderId: billId, prepaySession = null, onClos
         setDone({ prepay: true, amount: net, change: r.change || 0 });
         const paidShown = { mode: 'SUCCESS', total: net, paid: round2(finalTenders.reduce((a, x) => a + Number(x.received ?? x.amount), 0)), change: r.change || 0 };
         pushDisplay(paidShown);
-        // paid to enter: the customer display then also shows the room, its times and the QR to the way there
-        roomForDisplay(r.session || data.session).then((room) => room && pushDisplay({ ...paidShown, room }));
-        setTimeout(() => idleDisplay(), 30000);
+        // paid to enter: the customer display then also shows the room, its times and the QR to the way there,
+        // and keeps it until the cashier presses "เสร็จสิ้น"
+        roomForDisplay(r.session || data.session).then((room) => {
+          if (finishedRef.current) return;
+          if (!room) return setTimeout(() => idleDisplay(), 12000);
+          pushDisplay({ ...paidShown, room });
+          holdDisplay(room.name);
+        });
         toast.success(`${t('ชำระค่าห้องแล้ว เริ่มเวลา')} ${data.session?.room_name || ''}${r.change > 0 ? ` · ${t('เงินทอน')} ฿${money(r.change)}` : ''}`);
         const printer = printerFor('RECEIPT');
         if (finalTenders.some((x) => x.method === 'CASH') && printer?.open_drawer) openDrawer(printer);
@@ -367,14 +381,14 @@ export default function Checkout({ orderId: billId, prepaySession = null, onClos
 
   if (done?.prepay) {
     return (
-      <Modal title={t('ชำระค่าห้องเรียบร้อย')} onClose={onClose}>
+      <Modal title={t('ชำระค่าห้องเรียบร้อย')} onClose={finishPrepay}>
         <div className="center">
           <CheckCircle2 size={110} color="var(--ok)" />
           <h1>{t('ชำระค่าห้องแล้ว เริ่มเวลา')}</h1>
           <div className="sum-line total"><span>{t('ยอดที่ชำระ')}</span><span>฿{money(done.amount)}</span></div>
           {done.change > 0 && <div className="sum-line total" style={{ color: 'var(--ok)' }}><span>{t('เงินทอน')}</span><span className="big-money">฿{money(done.change)}</span></div>}
           <div className="small muted">{t('ใบเปิดห้องพิมพ์อัตโนมัติ · ใบเสร็จฉบับเต็มพิมพ์ตอนปิดห้อง')}</div>
-          <Button className="mt" size="lg" variant="primary" onClick={onClose}>{t('เสร็จสิ้น')}</Button>
+          <Button className="mt" size="lg" variant="primary" onClick={finishPrepay}>{t('เสร็จสิ้น')}</Button>
         </div>
       </Modal>
     );
