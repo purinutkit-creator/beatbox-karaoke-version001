@@ -1,8 +1,13 @@
 // The app version people see (corner tag, "new version" pop-up). Every release that goes live adds 0.1 (2.0 → 2.1 →
 // 2.2 …) with a line or two of what changed at the top of CHANGELOG; the screen shows what is new once per version.
-export const APP_VERSION = '2.0';
+export const APP_VERSION = '2.1';
 
 export const CHANGELOG = [
+  {
+    version: '2.1',
+    date: '2026-10-31',
+    items: ['ตั้งค่าการเชื่อมต่อ: กดลบรหัส (Secret / Token) ผิด กด "ไม่ลบ (ใช้ค่าเดิม)" ได้ก่อนบันทึก'],
+  },
   {
     version: '2.0',
     date: '2026-10-31',

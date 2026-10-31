@@ -2936,4 +2936,6 @@ export const EN = {
   "ชำระเงินแล้วส่งใบเสร็จออนไลน์เข้า LINE พร้อมปุ่มสะสมแต้มของบิลนั้น": "After paying, the online receipt goes to LINE with a collect-points button for that bill",
   "บัตรสมาชิก: ออกแบบตามระดับ พิมพ์ A4 / เครื่องพิมพ์บัตร ออกบัตรใหม่ ซิงค์บัตร และเครื่องอ่านบัตร": "Member cards: a design per tier, A4 / card printer printing, issue new, sync card and card readers",
   "แก้ระบบล่มจากการสำรองข้อมูลตอนตี 4": "Fixed the outage caused by the 4 AM backup",
+  "ไม่ลบ (ใช้ค่าเดิม)": "Keep (use the saved value)",
+  "ตั้งค่าการเชื่อมต่อ: กดลบรหัส (Secret / Token) ผิด กด \"ไม่ลบ (ใช้ค่าเดิม)\" ได้ก่อนบันทึก": "Integrations: a secret / token deleted by mistake can be kept with \"Keep (use the saved value)\" before saving",
 };

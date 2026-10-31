@@ -1,6 +1,6 @@
 // Admin → ตั้งค่าร้าน → การเชื่อมต่อ: LINE, SMS, slip verification, payment terminal (EDC / Beam Bolt).
 // Secrets are write-only: the server only tells whether a key is set (and its last 4 characters).
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Save, PlugZap, KeyRound, Trash2, Upload, MessageCircle, MessageSquare, ShieldCheck, CreditCard, CheckCircle2, XCircle, Plus, Copy } from 'lucide-react';
 import { Button, Field, Input, Select, Switch, Textarea, Badge, Seg, Loading, useToast } from '../../components/ui.jsx';
 import { useT } from '../../lib/i18n.jsx';
@@ -11,13 +11,21 @@ export function Secret({ label, value, onChange, hint }) {
   const { t } = useT();
   const set = value && typeof value === 'object' ? value : null;
   const typed = typeof value === 'string' ? value : '';
+  // the saved value as it was, so a delete pressed by mistake can be taken back before saving
+  const saved = useRef(set);
+  if (set) saved.current = set;
   return (
     <Field label={label} hint={hint}>
       <div className="row nowrap">
         <Input type="password" autoComplete="new-password" value={typed} placeholder={set?.set ? `${t('ตั้งค่าแล้ว')} •••• ${set.last4} — ${t('กรอกเพื่อเปลี่ยน')}` : t('ยังไม่ได้ตั้งค่า')} onChange={(e) => onChange(e.target.value)} />
         {set?.set && <Button variant="ghost" icon={Trash2} title={t('ลบค่า')} onClick={() => onChange(null)} />}
       </div>
-      {value === null && <div className="xs" style={{ color: 'var(--danger)' }}>{t('จะลบค่านี้เมื่อกดบันทึก')}</div>}
+      {value === null && (
+        <div className="xs row nowrap" style={{ color: 'var(--danger)', gap: 8 }}>
+          {t('จะลบค่านี้เมื่อกดบันทึก')}
+          {saved.current?.set && <button type="button" className="link-btn" onClick={() => onChange(saved.current)}>{t('ไม่ลบ (ใช้ค่าเดิม)')}</button>}
+        </div>
+      )}
     </Field>
   );
 }
