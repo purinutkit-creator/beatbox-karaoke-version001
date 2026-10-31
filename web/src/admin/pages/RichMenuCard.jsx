@@ -1,5 +1,5 @@
 // LINE rich menu (the menu under the chat): three buttons — จองห้อง (the booking website), ตรวจสอบการจอง (the chat
-// asks for the phone number) and สมาชิก (member card, or linking the member account) — on a picture drawn here in the
+// asks for the phone number) and สมาชิก (the member page of the website) — on a picture drawn here in the
 // store's colours, or the store's own picture (2500 × 843 in three equal columns).
 import { useEffect, useRef, useState } from 'react';
 import { LayoutPanelTop, Upload, Trash2, Send } from 'lucide-react';
@@ -100,7 +100,7 @@ export function RichMenuCard({ ready, current, onChanged }) {
     tiles: [
       { title: 'จองห้อง', sub: 'เว็บไซต์จองห้อง' },
       { title: 'ตรวจสอบการจอง', sub: 'พิมพ์เบอร์โทรในแชท' },
-      { title: 'สมาชิก', sub: 'บัตร · แต้มสะสม' },
+      { title: 'สมาชิก', sub: 'หน้าสมาชิก · แต้มสะสม' },
     ],
   });
   const [own, setOwn] = useState(null); // a picture of the store's own
@@ -145,7 +145,7 @@ export function RichMenuCard({ ready, current, onChanged }) {
         <b className="row nowrap"><LayoutPanelTop size={18} /> {t('ริชเมนู LINE OA')}</b>
         {current ? <Badge color="#16a34a">{t('ใช้งานอยู่')}</Badge> : <Badge color="#6b7280">{t('ยังไม่มีริชเมนู')}</Badge>}
       </div>
-      <div className="small muted">{t('เมนูใต้ช่องแชทของลูกค้า 3 ปุ่ม: จองห้อง (เปิดเว็บไซต์จอง) · ตรวจสอบการจอง (ให้พิมพ์เบอร์โทรในแชท) · สมาชิก (บัตรสมาชิก แต้ม หรือเชื่อมบัญชีกับ LINE)')}</div>
+      <div className="small muted">{t('เมนูใต้ช่องแชทของลูกค้า 3 ปุ่ม: จองห้อง (เปิดเว็บไซต์จอง) · ตรวจสอบการจอง (ให้พิมพ์เบอร์โทรในแชท) · สมาชิก (เปิดหน้าสมาชิกบนเว็บไซต์)')}</div>
       <div className="richmenu-preview mt">
         {own ? <img src={own.url} alt="" /> : <canvas ref={canvas} width={W} height={H} />}
       </div>
@@ -153,7 +153,7 @@ export function RichMenuCard({ ready, current, onChanged }) {
         <div className="grid grid-3 mt">
           {f.tiles.map((tile, i) => (
             <div key={i} className="col" style={{ gap: 6 }}>
-              <Field label={`${t('ปุ่ม')} ${i + 1}: ${t(['เปิดเว็บไซต์จองห้อง', 'ถามเบอร์โทร / แสดงการจอง', 'บัตรสมาชิก / เชื่อมบัญชี'][i])}`}>
+              <Field label={`${t('ปุ่ม')} ${i + 1}: ${t(['เปิดเว็บไซต์จองห้อง', 'ถามเบอร์โทร / แสดงการจอง', 'เปิดหน้าสมาชิกบนเว็บไซต์'][i])}`}>
                 <Input value={tile.title} onChange={(e) => setF((x) => ({ ...x, tiles: x.tiles.map((y, k) => (k === i ? { ...y, title: e.target.value } : y)) }))} />
               </Field>
               <Input value={tile.sub} onChange={(e) => setF((x) => ({ ...x, tiles: x.tiles.map((y, k) => (k === i ? { ...y, sub: e.target.value } : y)) }))} />

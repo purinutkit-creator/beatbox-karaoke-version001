@@ -2979,4 +2979,7 @@ export const EN = {
   "ใช้รูปของร้านเอง (2500 × 843 แบ่ง 3 ช่องเท่ากัน)": "Use the store's own picture (2500 × 843, three equal columns)",
   "เมนูใต้ช่องแชทของลูกค้า 3 ปุ่ม: จองห้อง (เปิดเว็บไซต์จอง) · ตรวจสอบการจอง (ให้พิมพ์เบอร์โทรในแชท) · สมาชิก (บัตรสมาชิก แต้ม หรือเชื่อมบัญชีกับ LINE)": "The menu under the customer's chat, 3 buttons: Book a room (booking website) · Check a booking (type the phone in the chat) · Member (card, points, or link the account with LINE)",
   "ลิงก์เชื่อมบัญชี LINE นี้เป็นของร้านอื่น": "This LINE link belongs to another store",
+  "ริชเมนู: ปุ่ม \"สมาชิก\" เปิดหน้าสมาชิกบนเว็บไซต์ (กด \"อัปเดตริชเมนู\" ในหน้าตั้งค่าการเชื่อมต่อเพื่อใช้)": "Rich menu: the \"Member\" button opens the member page of the website (press \"Update rich menu\" on the integrations page to use it)",
+  "เปิดหน้าสมาชิกบนเว็บไซต์": "opens the member page of the website",
+  "เมนูใต้ช่องแชทของลูกค้า 3 ปุ่ม: จองห้อง (เปิดเว็บไซต์จอง) · ตรวจสอบการจอง (ให้พิมพ์เบอร์โทรในแชท) · สมาชิก (เปิดหน้าสมาชิกบนเว็บไซต์)": "The menu under the customer's chat, 3 buttons: Book a room (booking website) · Check a booking (type the phone in the chat) · Member (the member page of the website)",
 };

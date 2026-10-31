@@ -268,13 +268,14 @@ test('rich menu "booking website": picture checked, created, made the default, t
   assert.equal((await api('GET', '/integrations')).body.line.richMenuId, r2.richMenuId);
 });
 
-test('rich menu has three buttons: booking website | check a booking | member', async () => {
+test('rich menu has three buttons: booking website | check a booking | the member page', async () => {
   const create = lineCalls.filter((c) => c.method === 'POST' && /\/v2\/bot\/richmenu$/.test(c.url)).at(-1);
   const areas = JSON.parse(create.body).areas;
   assert.equal(areas.length, 3);
   assert.equal(areas[0].action.type, 'uri');
   assert.equal(areas[1].action.data, 'a=check');
-  assert.equal(areas[2].action.data, 'a=member');
+  assert.equal(areas[2].action.type, 'uri');
+  assert.match(areas[2].action.uri, /\/book\/account\?store=/);
   assert.equal(areas.reduce((w, a) => w + a.bounds.width, 0), 2500);
 });
 
