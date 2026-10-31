@@ -515,7 +515,7 @@ r.post('/auth/signup', async (req, res) => {
     z.object({
       phone: z.string().min(9).max(20),
       firstName: z.string().trim().min(1, 'กรุณากรอกชื่อ').max(100),
-      lastName: z.string().trim().min(1, 'กรุณากรอกนามสกุล').max(100),
+      lastName: z.string().trim().max(100).optional().default(''),
       extra: z.record(z.string(), z.any()).default({}),
       consent: z.boolean().default(false),
       linkToken: z.string().optional().nullable(),
@@ -532,18 +532,21 @@ r.post('/auth/signup', async (req, res) => {
     if (!empty) extra[f.key] = String(v).trim().slice(0, 300);
   }
   const line = b.linkToken ? verifyToken(b.linkToken) : null;
+  const viaLine = line?.typ === 'line-link';
+  if (!viaLine && !b.lastName) throw badRequest('กรุณากรอกนามสกุล');
   const m = await tx(async (c) => {
     const ex = (await c.query('SELECT id FROM members WHERE phone = $1 AND deleted_at IS NULL', [phone])).rows[0];
     if (ex) throw conflict('เบอร์โทรศัพท์นี้เป็นสมาชิกของร้านแล้ว กรุณาเข้าสู่ระบบ', 'MEMBER_EXISTS', { login: true });
     const birthday = /^\d{4}-\d{2}-\d{2}$/.test(extra.birthday || '') ? extra.birthday : null;
     const member = await createMember(c, { firstName: b.firstName, lastName: b.lastName, phone, source: line?.typ === 'line-link' ? 'LINE' : 'SIGNUP', birthday, email: extra.email || null });
-    await c.query('UPDATE members SET extra_fields = $2, marketing_consent = $3, must_change_password = true WHERE id = $1', [member.id, extra, b.consent]);
-    if (line?.typ === 'line-link') await attachLine(c, member.id, { ...line, consent: b.consent });
-    await logActivity(c, actor('MEMBER'), 'MEMBER_SIGNUP', 'member', member.id, { source: 'SELF', fields: Object.keys(extra) });
-    return member;
+    // signed up from LINE: LINE is how they sign in, so no password to change (they can set one later)
+    await c.query('UPDATE members SET extra_fields = $2, marketing_consent = $3, must_change_password = $4 WHERE id = $1', [member.id, extra, b.consent, !viaLine]);
+    if (viaLine) await attachLine(c, member.id, { ...line, consent: b.consent });
+    await logActivity(c, actor('MEMBER'), 'MEMBER_SIGNUP', 'member', member.id, { source: viaLine ? 'LINE' : 'SELF', fields: Object.keys(extra) });
+    return { ...member, token: viaLine ? await createMemberSession(c, member.id, { via: 'line' }) : null };
   });
   emitSync('members');
-  res.json({ ok: true, memberCode: m.member_code, firstName: m.first_name, message: SIGNUP_DONE });
+  res.json({ ok: true, memberCode: m.member_code, firstName: m.first_name, message: viaLine ? 'สมัครสมาชิกและเชื่อม LINE เรียบร้อย ครั้งต่อไปเข้าสู่ระบบด้วย LINE ได้เลย' : SIGNUP_DONE, token: m.token });
 });
 
 /** Phone + password login. 5 wrong passwords → locked for 15 minutes. */
@@ -566,7 +569,8 @@ r.post('/auth/login', async (req, res) => {
     await c.query('UPDATE members SET login_failed_attempts = 0, login_locked_until = NULL, last_login_at = now() WHERE id = $1', [m.id]);
     await c.query(`UPDATE member_auth_identities SET last_login_at = now() WHERE member_id = $1 AND provider = 'PHONE' AND status = 'ACTIVE'`, [m.id]);
     await logActivity(c, actor('MEMBER'), line ? 'MEMBER_LINE_LINK' : 'MEMBER_LOGIN', 'member', m.id, { method: 'PASSWORD' });
-    return { token: await createMemberSession(c, m.id), mustChangePassword: !m.password_hash || m.must_change_password, member: { id: m.id, firstName: m.first_name, memberCode: m.member_code } };
+    const linked = line?.typ === 'line-link';
+    return { token: await createMemberSession(c, m.id, linked ? { via: 'line' } : {}), mustChangePassword: !linked && (!m.password_hash || m.must_change_password), member: { id: m.id, firstName: m.first_name, memberCode: m.member_code } };
   });
   if (out.fail === 'locked') throw new AppError(429, `เข้าสู่ระบบผิดหลายครั้ง ระบบพักการเข้าสู่ระบบ ${out.minutes} นาที`, 'LOCKED');
   if (out.fail) throw unauthorized(out.left > 0 && out.left <= 2 ? `เบอร์โทรศัพท์หรือรหัสผ่านไม่ถูกต้อง (เหลืออีก ${out.left} ครั้ง)` : 'เบอร์โทรศัพท์หรือรหัสผ่านไม่ถูกต้อง');
@@ -727,12 +731,14 @@ async function handleLineProfile(profile, redirect) {
     if (ident) {
       await c.query(`UPDATE member_auth_identities SET last_login_at = now(), display_name = $2, picture_url = $3 WHERE id = $1`, [ident.id, profile.displayName, profile.pictureUrl]);
       await c.query(`UPDATE line_connections SET last_login_at = now(), display_name = $2, picture_url = $3 WHERE line_user_id = $1 AND status = 'CONNECTED'`, [profile.lineUserId, profile.displayName, profile.pictureUrl]);
-      const token = await createMemberSession(c, ident.member_id);
-      return `${redirect.startsWith('/') ? redirect : '/book/account'}${redirect.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+      const token = await createMemberSession(c, ident.member_id, { via: 'line' });
+      const slug = (await getSettings()).store.slug || '';
+      return `${redirect.startsWith('/') ? redirect : '/book/account'}${redirect.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}&store=${encodeURIComponent(slug)}`;
     }
     // first LINE login: never auto-merge by name — require phone OTP to link to an existing member or create one
     const link = signToken({ typ: 'line-link', ...profile, st: currentStoreId() }, '20m');
-    return `/book/line-link?link=${encodeURIComponent(link)}&name=${encodeURIComponent(profile.displayName || '')}&redirect=${encodeURIComponent(redirect)}`;
+    const slug = (await getSettings()).store.slug || '';
+    return `/book/line-link?link=${encodeURIComponent(link)}&name=${encodeURIComponent(profile.displayName || '')}&redirect=${encodeURIComponent(redirect)}&store=${encodeURIComponent(slug)}`;
   });
 }
 
@@ -769,7 +775,7 @@ r.get('/me', requireMember, async (req, res) => {
   );
   const nextTier = await one(`SELECT * FROM member_tiers WHERE is_active AND sort_order > COALESCE((SELECT sort_order FROM member_tiers WHERE id = $1), -1) ORDER BY sort_order LIMIT 1`, [m.tier_id]);
   const line = await one(`SELECT line_user_id, display_name, picture_url, messaging_consent, linked_at, last_login_at, status FROM line_connections WHERE member_id = $1 AND status = 'CONNECTED' ORDER BY id DESC LIMIT 1`, [m.id]);
-  res.json({ ...m, nextTier, line, lineLoginEnabled: (await lineLogin.enabled()) || !config.isProd, mustChangePassword: !req.member.password_hash || !!req.member.must_change_password, passwordChangedAt: req.member.password_changed_at });
+  res.json({ ...m, nextTier, line, lineLoginEnabled: (await lineLogin.enabled()) || !config.isProd, mustChangePassword: req.memberVia !== 'line' && (!req.member.password_hash || !!req.member.must_change_password), signedInWithLine: req.memberVia === 'line', passwordChangedAt: req.member.password_changed_at });
 });
 
 r.put('/me', requireMember, async (req, res) => {

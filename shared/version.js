@@ -1,8 +1,17 @@
 // The app version people see (corner tag, "new version" pop-up). Every release that goes live adds 0.1 (2.0 → 2.1 →
 // 2.2 …) with a line or two of what changed at the top of CHANGELOG; the screen shows what is new once per version.
-export const APP_VERSION = '2.9';
+export const APP_VERSION = '3.0';
 
 export const CHANGELOG = [
+  {
+    version: '3.0',
+    date: '2026-10-31',
+    items: [
+      'สมาชิกที่เชื่อม LINE แล้ว เปิดหน้าสมาชิกจาก LINE เข้าสู่ระบบให้อัตโนมัติ ไม่ต้องใส่รหัสผ่าน',
+      'สมัครสมาชิกด้วย LINE กรอกแค่ชื่อและเบอร์โทรครั้งเดียว ไม่ต้องตั้งรหัสผ่าน',
+      'ปุ่ม "สมาชิก" ในริชเมนูเข้าสู่ระบบด้วย LINE ทันที (กด "อัปเดตริชเมนู" อีกครั้งเพื่อใช้)',
+    ],
+  },
   {
     version: '2.9',
     date: '2026-10-31',

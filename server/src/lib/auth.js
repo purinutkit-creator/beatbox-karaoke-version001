@@ -176,8 +176,10 @@ export async function requireMember(req, _res, next) {
   if (!s.rows[0]) throw unauthorized('กรุณาเข้าสู่ระบบสมาชิก');
   req.member = s.rows[0];
   req.memberSessionId = p.sid;
-  // still on the default password (first login or reset by staff) → only the profile header, password change and logout
-  const mustChange = !req.member.password_hash || req.member.must_change_password;
+  req.memberVia = p.via || null;
+  // still on the default password (first login or reset by staff) → only the profile header, password change and logout;
+  // signed in with LINE: LINE is the key, no password needed
+  const mustChange = p.via !== 'line' && (!req.member.password_hash || req.member.must_change_password);
   const allowed = (req.method === 'GET' && req.path === '/me') || req.path === '/me/password' || req.path === '/me/logout';
   if (mustChange && !allowed) throw new AppError(403, 'กรุณาเปลี่ยนรหัสผ่านก่อนใช้งาน', 'PASSWORD_CHANGE_REQUIRED');
   next();
@@ -197,7 +199,8 @@ export async function optionalMember(req, _res, next) {
   next();
 }
 
-export async function createMemberSession(client, memberId) {
+/** via: 'line' when LINE vouched for the person (LINE Login, or sign-up from a LINE link) — no password asked then. */
+export async function createMemberSession(client, memberId, { via = null } = {}) {
   const r = await client.query(`INSERT INTO member_sessions(member_id, expires_at) VALUES ($1, now() + interval '30 days') RETURNING id`, [memberId]);
-  return signToken({ typ: 'member', sid: r.rows[0].id, mid: memberId, st: currentStoreId() }, '30d');
+  return signToken({ typ: 'member', sid: r.rows[0].id, mid: memberId, st: currentStoreId(), ...(via ? { via } : {}) }, '30d');
 }

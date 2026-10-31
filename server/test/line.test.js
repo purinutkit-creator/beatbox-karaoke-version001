@@ -322,3 +322,20 @@ test('SMS delivery-report webhook: store key required, a failure report marks th
   const tw = await (await fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'To=%2B66891112233&MessageStatus=delivered&MessageSid=SM1' })).json();
   assert.equal(tw.matched, 1);
 });
+
+test('sign up from LINE: phone only, no password, signed in with LINE (no password change asked)', async () => {
+  const link = await tap('Ufff', 'a=member');
+  const token = decodeURIComponent(allText(link.reply).match(/\/book\/line-link\?link=([^&"]+)/)[1]);
+  const r = await api('POST', '/public/auth/signup?store=beatbox1', { phone: '0896660001', firstName: 'ไลน์ใหม่', linkToken: token, consent: true }, { auth: false });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(r.body.token, 'signed in at once');
+  const me = (await api('GET', '/public/me', null, { bearer: r.body.token })).body;
+  assert.equal(me.mustChangePassword, false);
+  assert.equal(me.signedInWithLine, true);
+  assert.equal((await api('GET', '/public/me/points', null, { bearer: r.body.token })).status, 200, 'member pages open without a password');
+  // a sign-up without LINE still needs the last name and gets no session
+  const plain = await api('POST', '/public/auth/signup?store=beatbox1', { phone: '0896660002', firstName: 'ธรรมดา' }, { auth: false });
+  assert.equal(plain.status, 400);
+  // the LINE user is now this member in the chat
+  assert.match(allText((await say('Ufff', 'สมาชิก')).reply), /ไลน์ใหม่/);
+});

@@ -111,7 +111,10 @@ r.post('/integrations/line/richmenu', can('settings.manage'), express.raw({ type
   const integ = await getIntegrations();
   const label = 'จองห้อง';
   const uri = `${config.publicUrl}/book?store=${encodeURIComponent(s.store.slug || '')}`;
-  const memberUri = `${config.publicUrl}/book/account?store=${encodeURIComponent(s.store.slug || '')}`;
+  // member page: straight through LINE Login when it is set up (one tap in LINE, no password)
+  const memberUri = (await lineLogin.enabled())
+    ? `${config.publicUrl}/api/public/auth/line/start?store=${encodeURIComponent(s.store.slug || '')}&redirect=${encodeURIComponent('/book/account')}`
+    : `${config.publicUrl}/book/account?store=${encodeURIComponent(s.store.slug || '')}`;
   const menu = {
     size: { width: 2500, height: size.height },
     selected: true,

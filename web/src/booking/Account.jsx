@@ -153,16 +153,36 @@ export function CheckBookingPage() {
   );
 }
 
+/** Opened inside the LINE app: LINE Login is one tap (or none), so member pages sign in with it on their own. */
+const inLineApp = () => /\bLine\//i.test(navigator.userAgent || '');
+const lineStart = (redirect, slug) => `/api/public/auth/line/start?redirect=${encodeURIComponent(redirect)}${slug ? `&store=${encodeURIComponent(slug)}` : ''}`;
+
 function RequireMember({ children }) {
   const { me, ready } = useMember();
+  const { publicSettings } = useApp();
   const { t } = useT();
-  if (!ready) return <Loading />;
+  const lineOn = !!publicSettings?.runtime?.lineLoginEnabled;
+  const here = window.location.pathname + window.location.search;
+  const auto = ready && !me && lineOn && inLineApp() && (() => {
+    try {
+      if (sessionStorage.getItem('bb_line_auto')) return false; // once per visit (a cancelled LINE sign-in must not loop)
+      sessionStorage.setItem('bb_line_auto', '1');
+    } catch {
+      return false;
+    }
+    return true;
+  })();
+  useEffect(() => {
+    if (auto) window.location.href = lineStart(here, publicSettings?.store?.slug);
+  }, [auto]);
+  if (!ready || auto) return <Loading />;
   if (!me)
     return (
       <div className="card center" style={{ maxWidth: 480, margin: '0 auto' }}>
         <User size={48} />
         <h2>{t('กรุณาเข้าสู่ระบบสมาชิก')}</h2>
-        <Link className="btn primary" to={`/book/login?redirect=${encodeURIComponent(window.location.pathname)}`}>{t('เข้าสู่ระบบ')}</Link>
+        {lineOn && <a className="btn block" style={{ background: '#06c755', color: '#fff' }} href={lineStart(here, publicSettings?.store?.slug)}><MessageCircle size={18} /> {t('เข้าสู่ระบบด้วย LINE')}</a>}
+        <Link className="btn primary mt" to={`/book/login?redirect=${encodeURIComponent(window.location.pathname)}`}>{t('เข้าสู่ระบบ')}</Link>
         <p className="small muted mt">{t('หรือ')} <Link to="/book/check">{t('ตรวจสอบการจองด้วยเลขที่จองและเบอร์โทร')}</Link></p>
       </div>
     );
@@ -369,9 +389,11 @@ export function SignupPage() {
   const nav = useNavigate();
   const [params] = useSearchParams();
   const { publicSettings } = useApp();
+  const { login } = useMember();
   const ms = publicSettings?.memberSignup || {};
   const extraFields = ms.extraFields || [];
   const link = params.get('link');
+  const redirect = params.get('redirect') || '/book/account';
   const [f, setF] = useState({ phone: params.get('phone') || '', firstName: params.get('name') || '', lastName: '', consent: true, extra: {} });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -382,9 +404,16 @@ export function SignupPage() {
     setErr('');
     try {
       const r = await api.post('/public/auth/signup', { ...f, linkToken: link || null }, { auth: false });
+      // from LINE: signed in already (LINE is the key) — no password
+      if (r.token) {
+        await login(r.token);
+        return nav(redirect, { replace: true });
+      }
       setDone(r);
     } catch (er) {
-      if (er.code === 'MEMBER_EXISTS') return nav(`/book/login?phone=${encodeURIComponent(f.phone)}&exists=1&redirect=${encodeURIComponent(params.get('redirect') || '/book/account')}`, { replace: true });
+      // the phone is a member already: link it with the password once (from LINE), or just sign in
+      if (er.code === 'MEMBER_EXISTS' && link) return nav(`/book/line-link?link=${encodeURIComponent(link)}&name=${encodeURIComponent(params.get('name') || '')}&phone=${encodeURIComponent(f.phone)}&exists=1&redirect=${encodeURIComponent(redirect)}`, { replace: true });
+      if (er.code === 'MEMBER_EXISTS') return nav(`/book/login?phone=${encodeURIComponent(f.phone)}&exists=1&redirect=${encodeURIComponent(redirect)}`, { replace: true });
       setErr(er.message);
     } finally {
       setBusy(false);
@@ -406,12 +435,12 @@ export function SignupPage() {
   return (
     <div className="card" style={{ maxWidth: 480, margin: '0 auto' }}>
       <h1>{t('สมัครสมาชิก')}{publicSettings?.store?.name ? ` · ${publicSettings.store.name}` : ''}</h1>
-      <p className="muted small">{t('สมัครฟรี ไม่ต้องใช้รหัส OTP · รหัสผ่านเริ่มต้นคือเลข 4 ตัวท้ายของเบอร์โทรศัพท์ และเปลี่ยนได้หลังเข้าสู่ระบบ')}</p>
+      <p className="muted small">{link ? t('สมัครด้วย LINE: กรอกเบอร์โทรครั้งเดียว ไม่ต้องตั้งรหัสผ่าน ครั้งต่อไปเข้าสู่ระบบด้วย LINE ได้เลย') : t('สมัครฟรี ไม่ต้องใช้รหัส OTP · รหัสผ่านเริ่มต้นคือเลข 4 ตัวท้ายของเบอร์โทรศัพท์ และเปลี่ยนได้หลังเข้าสู่ระบบ')}</p>
       <form className="col" onSubmit={submit}>
         <Field label="เบอร์โทรศัพท์ *"><Input type="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} placeholder="08xxxxxxxx" required /></Field>
         <div className="grid grid-2">
           <Field label="ชื่อ *"><Input value={f.firstName} onChange={(e) => setF({ ...f, firstName: e.target.value })} required /></Field>
-          <Field label="นามสกุล *"><Input value={f.lastName} onChange={(e) => setF({ ...f, lastName: e.target.value })} required /></Field>
+          <Field label={link ? 'นามสกุล' : 'นามสกุล *'}><Input value={f.lastName} onChange={(e) => setF({ ...f, lastName: e.target.value })} required={!link} /></Field>
         </div>
         {extraFields.map((x) => (
           <Field key={x.key} label={`${x.label}${x.required ? ' *' : ''}`}>
@@ -472,6 +501,10 @@ export function SetPasswordPage() {
 }
 
 /** First LINE login: link to an existing member (phone + password) or sign up — never merged by name. */
+/**
+ * First LINE sign-in on this store: a new customer signs up with the phone number only (no password — LINE is how they
+ * sign in from now on); someone who is already a member confirms with their password once to link LINE.
+ */
 export function LineLinkPage() {
   const { t } = useT();
   const toast = useToast();
@@ -479,8 +512,10 @@ export function LineLinkPage() {
   const [params] = useSearchParams();
   const { login } = useMember();
   const link = params.get('link');
+  const name = params.get('name') || '';
   const redirect = params.get('redirect') || '/book/account';
-  const [phone, setPhone] = useState('');
+  const [mode, setMode] = useState(params.get('exists') ? 'member' : 'new');
+  const [phone, setPhone] = useState(params.get('phone') || '');
   const [password, setPassword] = useState('');
   const [consent, setConsent] = useState(true);
   const submit = async (e) => {
@@ -488,23 +523,36 @@ export function LineLinkPage() {
     try {
       const r = await api.post('/public/auth/login', { phone, password, linkToken: link, consent }, { auth: false });
       await login(r.token);
-      toast.success('เชื่อมบัญชี LINE เรียบร้อย');
-      if (!r.mustChangePassword) nav(redirect, { replace: true });
+      toast.success('เชื่อมบัญชี LINE เรียบร้อย ครั้งต่อไปเข้าสู่ระบบด้วย LINE ได้เลย');
+      nav(redirect, { replace: true });
     } catch (er) {
       toast.error(er);
     }
   };
+  const signupUrl = `/book/signup?link=${encodeURIComponent(link || '')}&name=${encodeURIComponent(name)}&redirect=${encodeURIComponent(redirect)}`;
   return (
     <div className="card" style={{ maxWidth: 460, margin: '0 auto' }}>
       <h1><Link2 size={22} /> {t('เชื่อมบัญชี LINE')}</h1>
-      <p>{t('สวัสดี')} <b>{params.get('name')}</b> — {t('เข้าสู่ระบบสมาชิกเพื่อเชื่อมกับบัญชี LINE หรือสมัครสมาชิกใหม่')}</p>
-      <form className="col" onSubmit={submit}>
-        <Field label="เบอร์โทรศัพท์"><Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} required /></Field>
-        <Field label="รหัสผ่าน"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
-        <Switch checked={consent} onChange={setConsent} label="ยินยอมรับข้อความแจ้งเตือนการจองทาง LINE" />
-        <Button type="submit" variant="primary">{t('ยืนยันและเชื่อมบัญชี')}</Button>
-      </form>
-      <div className="center mt small">{t('ยังไม่เป็นสมาชิก?')} <Link to={`/book/signup?link=${encodeURIComponent(link || '')}&name=${encodeURIComponent(params.get('name') || '')}&redirect=${encodeURIComponent(redirect)}`}>{t('สมัครสมาชิกใหม่และเชื่อม LINE')}</Link></div>
+      <p>{t('สวัสดี')} <b>{name}</b></p>
+      <div className="seg-tabs">
+        <button type="button" className={mode === 'new' ? 'on' : ''} onClick={() => setMode('new')}>{t('ยังไม่เป็นสมาชิก')}</button>
+        <button type="button" className={mode === 'member' ? 'on' : ''} onClick={() => setMode('member')}>{t('เป็นสมาชิกอยู่แล้ว')}</button>
+      </div>
+      {mode === 'new' ? (
+        <div className="col mt">
+          <p className="small">{t('สมัครสมาชิกด้วย LINE: กรอกเบอร์โทรครั้งเดียว ไม่ต้องตั้งรหัสผ่าน ครั้งต่อไปเปิดจาก LINE ก็เข้าสู่ระบบให้เลย')}</p>
+          <Link className="btn primary block" to={signupUrl}>{t('สมัครสมาชิกด้วย LINE')}</Link>
+        </div>
+      ) : (
+        <form className="col mt" onSubmit={submit}>
+          <p className="small muted">{t('ยืนยันว่าเป็นเจ้าของบัญชีด้วยรหัสผ่านครั้งเดียว หลังจากนี้เข้าสู่ระบบด้วย LINE ได้โดยไม่ต้องใส่รหัสผ่าน')}</p>
+          {params.get('exists') && <div className="small" style={{ color: 'var(--warn, #f97316)' }}>{t('เบอร์นี้เป็นสมาชิกของร้านแล้ว')}</div>}
+          <Field label="เบอร์โทรศัพท์"><Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} required /></Field>
+          <Field label="รหัสผ่าน"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder={t('รหัสผ่านเริ่มต้น = เลข 4 ตัวท้ายของเบอร์โทร')} /></Field>
+          <Switch checked={consent} onChange={setConsent} label="ยินยอมรับข้อความแจ้งเตือนการจองทาง LINE" />
+          <Button type="submit" variant="primary">{t('ยืนยันและเชื่อมบัญชี')}</Button>
+        </form>
+      )}
     </div>
   );
 }
