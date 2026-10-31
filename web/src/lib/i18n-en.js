@@ -3000,4 +3000,5 @@ export const EN = {
   "ค่าเริ่มต้น": "Defaults",
   "ร้านยังตั้งค่าเข้าสู่ระบบด้วย LINE ไม่ครบ — เข้าสู่ระบบด้วยเบอร์โทรได้ตามปกติ": "The store has not finished setting up LINE login — sign in with your phone number as usual",
   "ทดสอบการเชื่อมต่อ LINE Login ตรวจหน้าเข้าสู่ระบบจริง และบอกว่า Channel ID หรือ Callback URL ผิด": "The LINE Login connection test opens the real login page and says whether the Channel ID or Callback URL is wrong",
+  "หน้านโยบายความเป็นส่วนตัวสำหรับ LINE Official Account: /privacy-policy-lineofficialaccount (ไทย / English)": "Privacy policy page for the LINE Official Account: /privacy-policy-lineofficialaccount (Thai / English)",
 };
