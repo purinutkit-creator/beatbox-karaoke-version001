@@ -1,5 +1,6 @@
 // Admin → การเชื่อมต่อ: LINE, SMS, slip verification and payment terminal credentials + "test" buttons,
 // and the POS endpoints that push a payment to the terminal (EDC / Beam Bolt).
+import crypto from 'node:crypto';
 import express, { Router } from 'express';
 import { config } from '../config.js';
 import multer from 'multer';
@@ -159,6 +160,17 @@ function imageSize(buf, type) {
   return null;
 }
 
+/** SMS delivery-report address of this store (the key is made the first time). */
+r.get('/integrations/sms/webhook', can('settings.manage'), async (req, res) => {
+  let key = (await getIntegrations()).sms.callbackKey;
+  if (!key) {
+    key = crypto.randomBytes(18).toString('base64url');
+    await tx((c) => saveIntegration(c, 'sms', { callbackKey: key }, req.employee.id));
+  }
+  const s = await getSettings();
+  res.json({ url: `${config.publicUrl}/api/public/sms/webhook?store=${encodeURIComponent(s.store.slug || '')}&key=${key}` });
+});
+
 r.post('/integrations/:section/test', can('settings.manage'), async (req, res) => {
   const section = req.params.section;
   let out;
@@ -285,6 +297,37 @@ terminalPublic.post('/terminal/beam/webhook', async (req, res) => {
   }
   res.json({ received: true });
 });
+
+/**
+ * SMS delivery reports (DLR): the provider calls this address after each SMS (POST JSON / form, or GET). The random key
+ * in the address proves the call is for this store. The report is kept on the matching SMS (same phone, last 2 days):
+ * delivered stays SENT, a failure turns it FAILED with the provider's reason.
+ */
+const pick = (o, keys) => keys.map((k) => o?.[k]).find((v) => v != null && v !== '');
+async function smsReport(req, res) {
+  const integ = await getIntegrations();
+  const key = String(req.query.key || '');
+  const want = integ.sms.callbackKey || '';
+  if (!want || key.length !== want.length || !crypto.timingSafeEqual(Buffer.from(key), Buffer.from(want))) return res.status(401).json({ error: 'bad key' });
+  const items = Array.isArray(req.body) ? req.body : Array.isArray(req.body?.data) ? req.body.data : [{ ...req.query, ...(req.body || {}) }];
+  let matched = 0;
+  for (const it of items.slice(0, 100)) {
+    const raw = String(pick(it, ['msisdn', 'to', 'To', 'phone', 'number', 'destination', 'recipient', 'mobile']) || '').replace(/\D/g, '');
+    if (raw.length < 9) continue;
+    const phone = raw.startsWith('66') ? `0${raw.slice(2)}` : raw;
+    const status = String(pick(it, ['status', 'Status', 'MessageStatus', 'SmsStatus', 'delivery_status', 'dlr_status', 'state']) || 'unknown');
+    const failed = /fail|undeliv|reject|expired|error|invalid|blocked/i.test(status);
+    const n = await one(
+      `UPDATE notifications SET data = data || $2::jsonb, status = CASE WHEN $3 THEN 'FAILED' ELSE status END, error = CASE WHEN $3 THEN $4 ELSE error END
+       WHERE id = (SELECT id FROM notifications WHERE channel = 'SMS' AND data->>'phone' = $1 AND created_at > now() - interval '2 days' ORDER BY id DESC LIMIT 1) RETURNING id`,
+      [phone, JSON.stringify({ delivery: { status, at: new Date().toISOString(), id: pick(it, ['id', 'message_id', 'MessageSid', 'messageId', 'sms_id']) || null } }), failed, `ผู้ให้บริการ SMS แจ้ง: ${status}`],
+    );
+    if (n) matched++;
+  }
+  res.json({ ok: true, matched });
+}
+terminalPublic.post('/sms/webhook', express.urlencoded({ extended: false, limit: '256kb' }), smsReport);
+terminalPublic.get('/sms/webhook', smsReport);
 
 export { refreshTerminal };
 export default r;

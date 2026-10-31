@@ -33,6 +33,7 @@ export const INTEGRATION_FIELDS = {
     sendReminder: { def: false },
     reminderTemplate: { def: '{store} แจ้งเตือน: การจอง {booking} ห้อง {room} เวลา {time} วันนี้' },
     otpDebug: { def: () => config.otpDebug },
+    callbackKey: { def: '' }, // random key in the delivery-report webhook address given to the SMS provider
   },
   slip: {
     mode: { def: () => config.paymentMode || 'DEMO' }, // DEMO | PRODUCTION

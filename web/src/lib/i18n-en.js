@@ -3002,4 +3002,6 @@ export const EN = {
   "ทดสอบการเชื่อมต่อ LINE Login ตรวจหน้าเข้าสู่ระบบจริง และบอกว่า Channel ID หรือ Callback URL ผิด": "The LINE Login connection test opens the real login page and says whether the Channel ID or Callback URL is wrong",
   "หน้านโยบายความเป็นส่วนตัวสำหรับ LINE Official Account: /privacy-policy-lineofficialaccount (ไทย / English)": "Privacy policy page for the LINE Official Account: /privacy-policy-lineofficialaccount (Thai / English)",
   "หน้าข้อกำหนดการใช้งานสำหรับ LINE Official Account: /terms-of-use-lineofficialaccount (ไทย / English) ใช้เงื่อนไขการจองและการยกเลิกของร้าน": "Terms of use page for the LINE Official Account: /terms-of-use-lineofficialaccount (Thai / English), with the store's booking and cancellation rules",
+  "ใส่ในหน้าตั้งค่าของผู้ให้บริการ SMS ช่อง Webhook / Callback / Delivery report URL — ระบบจะบันทึกว่า SMS แต่ละข้อความส่งถึงหรือไม่ (ลิงก์มีรหัสเฉพาะร้าน ห้ามเผยแพร่)": "Paste into the SMS provider's Webhook / Callback / Delivery report URL setting — the system records whether each SMS was delivered (the link has the store's own key; do not share it)",
+  "ผู้ให้บริการ SMS รายงานผลการส่งกลับมาที่ระบบได้: คัดลอก Webhook URL ในการ์ด SMS ไปใส่ที่ผู้ให้บริการ": "SMS providers can report delivery back to the system: copy the Webhook URL in the SMS card into the provider",
 };

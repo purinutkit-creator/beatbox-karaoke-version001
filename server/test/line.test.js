@@ -304,3 +304,21 @@ test('"ตรวจสอบการจอง" asks for the phone number; "ส�
   await api('POST', '/reservations', { roomId: 8, startAt: start.toISOString(), durationMinutes: 60, customerName: 'ไลน์เมมเบอร์', phone: '0897771234', guestCount: 3 });
   assert.match(allText((await tap('Ueee', 'a=check')).reply), /ไลน์เมมเบอร์/);
 });
+
+test('SMS delivery-report webhook: store key required, a failure report marks the SMS failed', async () => {
+  const { url } = (await api('GET', '/integrations/sms/webhook')).body;
+  assert.match(url, /\/api\/public\/sms\/webhook\?store=.+&key=[\w-]{20,}/);
+  assert.equal((await api('GET', '/integrations/sms/webhook')).body.url, url, 'the same address every time');
+  const path = url.replace(/^https?:\/\/[^/]+\/api/, '');
+  await db(`INSERT INTO notifications(store_id, channel, type, title, message, data, status) VALUES (1, 'SMS', 'BOOKING_REMINDER', 't', 'm', '{"phone":"0891112233"}', 'SENT')`);
+  const bad = await fetch(`${base}${path.replace(/key=[^&]+/, 'key=wrong')}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msisdn: '66891112233', status: 'FAILED' }) });
+  assert.equal(bad.status, 401);
+  const ok = await (await fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msisdn: '66891112233', status: 'UNDELIVERED' }) })).json();
+  assert.equal(ok.matched, 1);
+  const row = (await db(`SELECT status, error, data FROM notifications WHERE channel = 'SMS' AND data->>'phone' = '0891112233'`))[0];
+  assert.equal(row.status, 'FAILED');
+  assert.equal(row.data.delivery.status, 'UNDELIVERED');
+  // Twilio style: form post
+  const tw = await (await fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'To=%2B66891112233&MessageStatus=delivered&MessageSid=SM1' })).json();
+  assert.equal(tw.matched, 1);
+});

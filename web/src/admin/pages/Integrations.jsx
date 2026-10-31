@@ -157,11 +157,21 @@ function SmsCard({ all, setAll }) {
   const { t } = useT();
   const s = useIntegration('sms', all, setAll);
   const [phone, setPhone] = useState('');
+  const [hook, setHook] = useState(null);
+  useEffect(() => {
+    api.get('/integrations/sms/webhook').then((r) => setHook(r.url)).catch(() => {});
+  }, []);
   const v = s.v;
   const p = v.provider;
   return (
     <div className="card">
       <h3 className="row nowrap"><MessageSquare size={20} /> SMS</h3>
+      {hook && (
+        <>
+          <CopyLine label="Webhook URL (รายงานผลการส่ง SMS / Delivery report)" value={hook} />
+          <div className="xs muted mb">{t('ใส่ในหน้าตั้งค่าของผู้ให้บริการ SMS ช่อง Webhook / Callback / Delivery report URL — ระบบจะบันทึกว่า SMS แต่ละข้อความส่งถึงหรือไม่ (ลิงก์มีรหัสเฉพาะร้าน ห้ามเผยแพร่)')}</div>
+        </>
+      )}
       <div className="grid grid-2">
         <Field label="การส่ง SMS"><Switch checked={!!v.enabled} onChange={(x) => s.set('enabled', x)} label={t('เปิดใช้งาน SMS')} /></Field>
         <Field label="ผู้ให้บริการ SMS"><Select value={p} onChange={(e) => s.set('provider', e.target.value)} options={SMS_PROVIDERS} /></Field>
