@@ -1,8 +1,17 @@
 // The app version people see (corner tag, "new version" pop-up). Every release that goes live adds 0.1 (2.0 → 2.1 →
 // 2.2 …) with a line or two of what changed at the top of CHANGELOG; the screen shows what is new once per version.
-export const APP_VERSION = '2.1';
+export const APP_VERSION = '2.2';
 
 export const CHANGELOG = [
+  {
+    version: '2.2',
+    date: '2026-10-31',
+    items: [
+      'LINE: ยืนยันการจองแล้วได้บัตร QR/บาร์โค้ดข้อความเดียว (ไม่ส่งซ้ำ) พร้อมบอกเวลาที่เหลือ',
+      'หน้านับถอยหลังแบบสด วัน ชั่วโมง นาที วินาที ถึงเวลาจอง พร้อม QR การจอง',
+      'สร้างริชเมนู LINE OA "เว็บไซต์จองห้อง" ได้จากหน้าตั้งค่าการเชื่อมต่อ',
+    ],
+  },
   {
     version: '2.1',
     date: '2026-10-31',

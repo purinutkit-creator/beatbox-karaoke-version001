@@ -1,6 +1,6 @@
 // Admin → การเชื่อมต่อ: LINE, SMS, slip verification and payment terminal credentials + "test" buttons,
 // and the POS endpoints that push a payment to the terminal (EDC / Beam Bolt).
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { config } from '../config.js';
 import multer from 'multer';
 import { pool, tx, one } from '../db/index.js';
@@ -11,7 +11,7 @@ import { notFound, badRequest, conflict } from '../lib/errors.js';
 import { emitSync } from '../lib/realtime.js';
 import { useStoreOf } from '../lib/tenant.js';
 import { getSettings, invalidateSettings } from '../services/settings.js';
-import { maskedIntegrations, saveIntegration, INTEGRATION_FIELDS, fillTemplate } from '../services/integrations.js';
+import { maskedIntegrations, saveIntegration, INTEGRATION_FIELDS, fillTemplate, getIntegrations } from '../services/integrations.js';
 import { tuyaTest } from '../providers/tuya.js';
 import { lineLogin, lineMessaging } from '../providers/line.js';
 import { webhookInfo } from './line.js';
@@ -96,6 +96,62 @@ r.get('/integrations/line/webhook', can('settings.manage'), async (_req, res) =>
   const s = await getSettings();
   res.json(await webhookInfo(config.publicUrl, s.store.slug));
 });
+
+/**
+ * LINE rich menu "เว็บไซต์จองห้อง": the picture (made on the settings page, or the store's own) is sent as the body;
+ * the whole menu opens the booking website.
+ */
+r.post('/integrations/line/richmenu', can('settings.manage'), express.raw({ type: ['image/jpeg', 'image/png'], limit: '1mb' }), async (req, res) => {
+  const type = String(req.headers['content-type'] || '').split(';')[0];
+  if (!Buffer.isBuffer(req.body) || !req.body.length || !['image/jpeg', 'image/png'].includes(type)) throw badRequest('กรุณาเลือกรูป JPG หรือ PNG ขนาดไม่เกิน 1 MB');
+  const size = imageSize(req.body, type);
+  if (!size || size.width !== 2500 || ![843, 1686].includes(size.height)) throw badRequest('รูปริชเมนูต้องมีขนาด 2500 × 843 หรือ 2500 × 1686 พิกเซล');
+  const s = await getSettings();
+  const integ = await getIntegrations();
+  const label = String(req.query.label || 'เว็บไซต์จองห้อง').slice(0, 20);
+  const uri = `${config.publicUrl}/book?store=${encodeURIComponent(s.store.slug || '')}`;
+  const menu = {
+    size: { width: 2500, height: size.height },
+    selected: true,
+    name: `${s.store.name} booking`.slice(0, 300),
+    chatBarText: String(req.query.bar || 'จองห้อง').slice(0, 14),
+    areas: [{ bounds: { x: 0, y: 0, width: 2500, height: size.height }, action: { type: 'uri', label, uri } }],
+  };
+  let id;
+  try {
+    id = await lineMessaging.publishRichMenu({ menu, image: req.body, contentType: type, replaces: integ.line.richMenuId || null });
+  } catch (e) {
+    throw badRequest(e.message);
+  }
+  await tx(async (c) => {
+    await saveIntegration(c, 'line', { richMenuId: id }, req.employee.id);
+    await logActivity(c, req, 'LINE_RICHMENU', 'integration', 'line', { richMenuId: id, uri });
+  });
+  res.json({ ok: true, richMenuId: id, uri });
+});
+
+r.delete('/integrations/line/richmenu', can('settings.manage'), async (req, res) => {
+  const integ = await getIntegrations();
+  await lineMessaging.removeRichMenu(integ.line.richMenuId);
+  await tx(async (c) => {
+    await saveIntegration(c, 'line', { richMenuId: '' }, req.employee.id);
+    await logActivity(c, req, 'LINE_RICHMENU_REMOVE', 'integration', 'line', {});
+  });
+  res.json({ ok: true });
+});
+
+/** Width / height of a PNG or JPEG (enough to check a rich menu picture before LINE does). */
+function imageSize(buf, type) {
+  if (type === 'image/png') return buf.length > 24 ? { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) } : null;
+  for (let i = 2; i < buf.length - 9; ) {
+    if (buf[i] !== 0xff) return null;
+    const marker = buf[i + 1];
+    const len = buf.readUInt16BE(i + 2);
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+    i += 2 + len;
+  }
+  return null;
+}
 
 r.post('/integrations/:section/test', can('settings.manage'), async (req, res) => {
   const section = req.params.section;

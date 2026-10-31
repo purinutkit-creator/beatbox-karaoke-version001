@@ -77,6 +77,37 @@ export const lineMessaging = {
     if (!r.ok) throw new Error(`LINE ${kind} failed (${r.status}): ${(await r.text()).slice(0, 300)}`);
     return true;
   },
+  /**
+   * Rich menu (the menu under the chat): create it, upload its picture, make it everyone's menu, and drop the one it
+   * replaces. Returns the new rich menu id.
+   */
+  async publishRichMenu({ menu, image, contentType, replaces = null }) {
+    const token = (await cfg()).messagingAccessToken;
+    if (!token) throw new Error('LINE Messaging API ยังไม่ได้ตั้งค่า Channel Access Token');
+    const auth = { Authorization: `Bearer ${token}` };
+    const call = async (url, opts, what) => {
+      const r = await fetch(url, { ...opts, headers: { ...auth, ...(opts.headers || {}) } });
+      if (!r.ok) throw new Error(`LINE ${what} (${r.status}): ${(await r.text()).slice(0, 300)}`);
+      return r.json().catch(() => ({}));
+    };
+    const { richMenuId } = await call('https://api.line.me/v2/bot/richmenu', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(menu) }, 'สร้างริชเมนูไม่สำเร็จ');
+    try {
+      await call(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, { method: 'POST', headers: { 'Content-Type': contentType }, body: image }, 'อัปโหลดรูปริชเมนูไม่สำเร็จ');
+      await call(`https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}`, { method: 'POST' }, 'ตั้งเป็นเมนูหลักไม่สำเร็จ');
+    } catch (e) {
+      await fetch(`https://api.line.me/v2/bot/richmenu/${richMenuId}`, { method: 'DELETE', headers: auth }).catch(() => {});
+      throw e;
+    }
+    if (replaces && replaces !== richMenuId) await fetch(`https://api.line.me/v2/bot/richmenu/${replaces}`, { method: 'DELETE', headers: auth }).catch(() => {});
+    return richMenuId;
+  },
+  async removeRichMenu(id) {
+    const token = (await cfg()).messagingAccessToken;
+    if (!token || !id) return;
+    const auth = { Authorization: `Bearer ${token}` };
+    await fetch('https://api.line.me/v2/bot/user/all/richmenu', { method: 'DELETE', headers: auth }).catch(() => {});
+    await fetch(`https://api.line.me/v2/bot/richmenu/${id}`, { method: 'DELETE', headers: auth }).catch(() => {});
+  },
   /** The webhook really comes from LINE: HMAC-SHA256 of the raw body with the channel secret. */
   async verifySignature(rawBody, signature) {
     const secret = (await cfg()).messagingChannelSecret;

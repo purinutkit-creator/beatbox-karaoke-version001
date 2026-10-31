@@ -14,7 +14,7 @@ import { notify } from '../services/notifications.js';
 import { lineMessaging } from '../providers/line.js';
 import { cancelOnline, cancelPreview, canCancelOnline } from '../services/booking.js';
 import { bookingCodePng } from '../services/bookingCode.js';
-import { bookingsMessage, passMessages, helpMessage, ACTIVE_BOOKING } from '../services/lineFlex.js';
+import { bookingsMessage, passMessages, helpMessage, mapsUrl, ACTIVE_BOOKING } from '../services/lineFlex.js';
 import { normalizePhone, maskPhone } from '@beatbox/shared/format.js';
 
 export const MAX_LOOKUPS = 8; // phone look-ups per LINE user …
@@ -34,6 +34,29 @@ r.get('/line/pass/:token.png', async (req, res) => {
   const rv = await one('SELECT booking_no, check_in_token FROM reservations WHERE check_in_token = $1', [token]);
   if (!rv) throw notFound();
   res.set('Content-Type', 'image/png').set('Cache-Control', 'public, max-age=86400').send(bookingCodePng(`CHECKIN:${rv.check_in_token}`, rv.booking_no));
+});
+
+/** The booking pass page (link in LINE): live countdown, QR / barcode, room, store contacts. The token is the key. */
+r.get('/line/booking/:token', async (req, res) => {
+  const token = String(req.params.token);
+  if (!(await useStoreOf('reservations', 'check_in_token', token))) throw notFound('ไม่พบการจอง');
+  const rv = await one(`${BOOKING_ROWS} WHERE rv.check_in_token = $1`, [token]);
+  if (!rv) throw notFound('ไม่พบการจอง');
+  const s = await getSettings();
+  const usable = [...ACTIVE_BOOKING, 'ARRIVED', 'IN_USE'].includes(rv.status);
+  res.json({
+    bookingNo: rv.booking_no,
+    status: rv.status,
+    confirmed: !!rv.customer_confirmed_at,
+    customerName: rv.customer_name,
+    phone: maskPhone(rv.phone),
+    guests: rv.guest_count,
+    room: { name: rv.room_name, image: rv.room_image, type: rv.type_name, floor: rv.floor_name },
+    startAt: rv.start_at,
+    endAt: rv.end_at,
+    qr: usable ? `CHECKIN:${rv.check_in_token}` : null,
+    store: { name: s.store.name, logoUrl: s.store.logoUrl, phone: s.store.phone, address: s.store.address, slug: s.store.slug, mapUrl: mapsUrl(s) },
+  });
 });
 
 r.post('/line/webhook', async (req, res) => {
@@ -115,7 +138,8 @@ async function onPostback(ev, userId, settings) {
       });
       emitSync(['reservations', 'notifications']);
     }
-    return reply(ev, [textMsg(`✅ ยืนยันการจองเรียบร้อย แล้วพบกันนะคะ\nแสดง QR หรือบาร์โค้ดด้านล่างที่เคาน์เตอร์เมื่อมาถึง`, settings), ...passMessages(rv, settings, codeUrl)]);
+    // one message: the pass card (QR + barcode, time left, live countdown) says it is confirmed
+    return reply(ev, passMessages(rv, settings, codeUrl, { justConfirmed: true }));
   }
   if (a === 'pass') {
     if (![...ACTIVE_BOOKING, 'ARRIVED'].includes(rv.status)) return reply(ev, textMsg(`การจอง ${rv.booking_no} ใช้งานไม่ได้แล้ว`, settings));

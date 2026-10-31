@@ -17,6 +17,7 @@ export const INTEGRATION_FIELDS = {
     messagingAccessToken: { secret: true, def: () => config.lineMessagingToken },
     messagingChannelSecret: { secret: true, def: () => env.LINE_MESSAGING_CHANNEL_SECRET || '' }, // checks that webhook calls come from LINE
     oaBasicId: { def: '' },
+    richMenuId: { def: '' }, // the rich menu this system put on the LINE OA (replaced / removed from the settings page)
   },
   sms: {
     enabled: { def: () => !!config.smsProvider },

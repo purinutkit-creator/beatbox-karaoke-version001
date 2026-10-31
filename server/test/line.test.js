@@ -20,6 +20,7 @@ let base;
 let token;
 let deviceId;
 const sent = []; // what the server sent to LINE: { kind, body }
+const lineCalls = []; // other LINE API calls (rich menu)
 
 async function api(method, url, body, { headers = {}, auth = true, bearer } = {}) {
   const res = await fetch(base + url, {
@@ -60,11 +61,15 @@ before(async () => {
   await admin.end();
   // LINE's API is recorded instead of called
   const realFetch = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
+  globalThis.fetch = async (url, opts = {}) => {
     const m = String(url).match(/^https:\/\/api\.line\.me\/v2\/bot\/message\/(push|reply)$/);
     if (m) {
       sent.push({ kind: m[1], body: JSON.parse(opts.body) });
       return new Response('{}', { status: 200 });
+    }
+    if (/^https:\/\/api(-data)?\.line\.me\//.test(String(url))) {
+      lineCalls.push({ method: opts.method || 'GET', url: String(url), type: opts.headers?.['Content-Type'], body: opts.body });
+      return new Response(/\/richmenu$/.test(String(url)) ? JSON.stringify({ richMenuId: `richmenu-${lineCalls.length}` }) : '{}', { status: 200 });
     }
     return realFetch(url, opts);
   };
@@ -125,8 +130,16 @@ test('confirm → booking pass (QR + barcode picture); only the tied LINE user c
   assert.match(allText((await tap('Ubbb', `a=confirm&r=${rv.id}`)).reply), /ไม่พบการจองนี้/);
   const { reply } = await tap('Uaaa', `a=confirm&r=${rv.id}`);
   const text = allText(reply);
+  assert.equal(reply.messages.length, 1, 'one message: the pass card (the QR is not sent twice)');
   assert.match(text, /ยืนยันการจองเรียบร้อย/);
-  assert.match(text, new RegExp(`/api/public/line/pass/${rv.check_in_token}\\.png`));
+  assert.match(text, /อีก \d+ นาที/);
+  assert.match(text, new RegExp(`/pass/${rv.check_in_token}`));
+  const page = await api('GET', `/public/line/booking/${rv.check_in_token}`, null, { auth: false });
+  assert.equal(page.status, 200);
+  assert.equal(page.body.qr, `CHECKIN:${rv.check_in_token}`);
+  assert.equal(page.body.confirmed, true);
+  assert.match(page.body.phone, /x|\*/i, 'the phone is masked on the public page');
+  // (the QR picture is the card's top image once the server has an https address; this test server is http)
   const png = await fetch(`${base}/public/line/pass/${rv.check_in_token}.png`);
   assert.equal(png.headers.get('content-type'), 'image/png');
   assert.ok((await png.arrayBuffer()).byteLength > 1000);
@@ -204,4 +217,25 @@ test('cancel from LINE asks first, then cancels', async () => {
   assert.equal((await api('GET', `/reservations/${r2.id}`)).body.status, r2.status, 'not cancelled before the second tap');
   assert.match(allText((await tap('Uccc', `a=cancel_yes&r=${r2.id}`)).reply), /ยกเลิกการจอง .* แล้ว/s);
   assert.equal((await api('GET', `/reservations/${r2.id}`)).body.status, 'CANCELLED');
+});
+
+test('rich menu "booking website": picture checked, created, made the default, the old one replaced', async () => {
+  const { PNG } = await import('pngjs');
+  const png = (w, h) => PNG.sync.write(new PNG({ width: w, height: h }));
+  const post = (buf) => fetch(`${base}/integrations/line/richmenu?bar=${encodeURIComponent('จองห้อง')}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'image/png' }, body: buf });
+  assert.equal((await post(png(800, 300))).status, 400, 'wrong size refused');
+  const r1 = await post(png(2500, 843));
+  const b1 = await r1.json();
+  assert.equal(r1.status, 200, JSON.stringify(b1));
+  assert.match(b1.uri, /\/book\?store=/);
+  const create = lineCalls.find((c) => c.method === 'POST' && /\/v2\/bot\/richmenu$/.test(c.url));
+  const menu = JSON.parse(create.body);
+  assert.equal(menu.areas[0].action.type, 'uri');
+  assert.equal(menu.areas[0].action.uri, b1.uri);
+  assert.equal(menu.chatBarText, 'จองห้อง');
+  assert.ok(lineCalls.some((c) => c.url.includes(`api-data.line.me/v2/bot/richmenu/${b1.richMenuId}/content`) && c.type === 'image/png'));
+  assert.ok(lineCalls.some((c) => c.url.endsWith(`/v2/bot/user/all/richmenu/${b1.richMenuId}`)));
+  const r2 = await (await post(png(2500, 843))).json();
+  assert.ok(lineCalls.some((c) => c.method === 'DELETE' && c.url.endsWith(`/richmenu/${b1.richMenuId}`)), 'the old menu is removed');
+  assert.equal((await api('GET', '/integrations')).body.line.richMenuId, r2.richMenuId);
 });

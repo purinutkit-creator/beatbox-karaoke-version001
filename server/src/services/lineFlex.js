@@ -44,7 +44,7 @@ const hero = (url, ratio = '20:13', mode = 'cover') => {
   return u ? { type: 'image', url: u, size: 'full', aspectRatio: ratio, aspectMode: mode, ...(mode === 'fit' ? { backgroundColor: '#ffffff' } : {}) } : undefined;
 };
 const bubble = ({ heroUrl, heroRatio, heroMode, body, buttons }) => {
-  const b = { type: 'bubble', size: 'mega', body: { type: 'box', layout: 'vertical', spacing: 'md', contents: body } };
+  const b = { type: 'bubble', size: 'mega', body: { type: 'box', layout: 'vertical', spacing: 'md', contents: body.filter(Boolean) } };
   const h = hero(heroUrl, heroRatio, heroMode);
   if (h) b.hero = h;
   const f = buttons?.filter(Boolean);
@@ -82,6 +82,7 @@ export function bookingBubble(rv, settings) {
       sep(),
       txt(longDate(rv.start_at), { size: 'sm', color: '#444444', margin: 'lg' }),
       txt(timeRange(rv), { size: 'xl', weight: 'bold', color: PURPLE }),
+      txt(`⏳ ${timeUntil(rv.start_at)}`, { size: 'sm', color: '#ea580c', weight: 'bold' }),
       { type: 'box', layout: 'vertical', spacing: 'sm', margin: 'md', contents: [row('ระยะเวลา', minutesText(minutes)), row('จำนวน', `${rv.guest_count || 1} คน`), row('ชื่อผู้จอง', rv.customer_name), row('เบอร์โทร', rv.phone), row('เลขที่จอง', rv.booking_no)] },
     ],
     buttons: [
@@ -101,24 +102,51 @@ export function bookingsMessage(rows, settings) {
 }
 
 /** The booking pass after confirming: the picture to save and a card with the details. */
-export function passMessages(rv, settings, codeUrl) {
+/** "อีก 2 วัน 3 ชม. 15 นาที" until the booking starts, as it is when the message is sent. */
+export function timeUntil(at, now = Date.now()) {
+  let m = Math.max(0, Math.ceil((new Date(at) - now) / 60000));
+  if (m <= 0) return 'ถึงเวลาแล้ว';
+  const d = Math.floor(m / 1440);
+  m -= d * 1440;
+  const h = Math.floor(m / 60);
+  m -= h * 60;
+  return `อีก ${[d && `${d} วัน`, h && `${h} ชม.`, m && `${m} นาที`].filter(Boolean).join(' ')}`;
+}
+/** The live countdown page (days, hours, minutes, seconds) with the booking QR / barcode. */
+export const passPage = (rv) => link(`/pass/${rv.check_in_token}`);
+
+const countdownBox = (rv) => ({
+  type: 'box',
+  layout: 'vertical',
+  backgroundColor: '#f5f3ff',
+  cornerRadius: 'lg',
+  paddingAll: 'md',
+  contents: [txt('⏳ นับถอยหลังถึงเวลาของคุณ', { size: 'xs', color: MUTED, align: 'center' }), txt(timeUntil(rv.start_at), { size: 'xl', weight: 'bold', color: PURPLE, align: 'center' })],
+});
+
+/** The booking pass after confirming: one card — the QR + barcode picture, the time left and the live countdown. */
+export function passMessages(rv, settings, codeUrl, { justConfirmed = false } = {}) {
   const img = httpsUrl(codeUrl);
   const card = bubble({
     heroUrl: img,
     heroRatio: '4:5',
     heroMode: 'fit', // the whole QR and barcode, never cropped
     body: [
+      justConfirmed ? txt('✅ ยืนยันการจองเรียบร้อย แล้วพบกันนะคะ', { size: 'sm', color: '#16a34a', weight: 'bold' }) : null,
       txt('บัตรเข้าใช้ห้อง', { size: 'xs', color: PURPLE, weight: 'bold' }),
       txt(`${rv.room_name} · ${timeRange(rv)}`, { size: 'lg', weight: 'bold' }),
       txt(longDate(rv.start_at), { size: 'sm', color: '#444444' }),
+      countdownBox(rv),
       txt(`แสดง QR หรือบาร์โค้ดนี้ที่เคาน์เตอร์ · ${rv.booking_no}`, { size: 'sm', color: MUTED }),
     ],
-    buttons: [img ? uriBtn('🔍 เปิดรูปเต็ม', img, 'primary', PURPLE) : uriBtn('🔍 เปิด QR การจอง', link(codeUrl), 'primary', PURPLE), uriBtn('🗺️ นำทาง Google Maps', mapsUrl(settings)), uriBtn('📞 โทรหาร้าน', telUrl(settings.store?.phone))],
+    buttons: [
+      uriBtn('⏱️ นับถอยหลังแบบสด + QR', passPage(rv), 'primary', PURPLE),
+      img ? uriBtn('🔍 เปิดรูป QR เต็ม (บันทึกรูป)', img) : null,
+      uriBtn('🗺️ นำทาง Google Maps', mapsUrl(settings)),
+      uriBtn('📞 โทรหาร้าน', telUrl(settings.store?.phone)),
+    ],
   });
-  const out = [];
-  if (img) out.push({ type: 'image', originalContentUrl: img, previewImageUrl: img });
-  out.push(flex(`บัตรเข้าใช้ห้อง ${rv.booking_no}`, card));
-  return out;
+  return [flex(`บัตรเข้าใช้ห้อง ${rv.booking_no} ${timeUntil(rv.start_at)}`, card)];
 }
 
 export function reminderMessage(rv, minutes, settings, codeUrl) {
@@ -133,7 +161,7 @@ export function reminderMessage(rv, minutes, settings, codeUrl) {
         txt(`${rv.customer_name} · ${rv.guest_count || 1} คน · ${rv.booking_no}`, { size: 'sm', color: MUTED }),
         txt('แสดง QR การจองที่เคาน์เตอร์เมื่อมาถึง', { size: 'sm', color: '#444444' }),
       ],
-      buttons: [postBtn('🎫 แสดง QR การจอง', `a=pass&r=${rv.id}`, 'ขอ QR การจอง', 'primary', PURPLE), uriBtn('🗺️ นำทาง Google Maps', mapsUrl(settings)), uriBtn('📞 โทรหาร้าน', telUrl(settings.store?.phone))],
+      buttons: [uriBtn('⏱️ นับถอยหลัง + QR การจอง', passPage(rv), 'primary', PURPLE), uriBtn('🗺️ นำทาง Google Maps', mapsUrl(settings)), uriBtn('📞 โทรหาร้าน', telUrl(settings.store?.phone))],
     }),
   );
 }

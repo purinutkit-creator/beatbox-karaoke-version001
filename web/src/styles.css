@@ -859,3 +859,18 @@ label.card.selected { border-color: var(--primary); box-shadow: 0 0 0 2px color-
 .whats-new-head { display: flex; align-items: center; gap: 8px; }
 .version-pill { background: var(--primary); color: #fff; border-radius: 99px; padding: 2px 10px; font-weight: 800; font-size: 0.85rem; }
 @media print { .version-corner { display: none; } }
+
+/* Booking pass (link from LINE): live countdown + QR */
+.bp-count { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0 14px; }
+.bp-unit { background: color-mix(in srgb, var(--primary) 14%, transparent); border-radius: 14px; padding: 10px 4px; display: flex; flex-direction: column; align-items: center; }
+.bp-unit b { font-size: 2.2rem; line-height: 1.1; font-variant-numeric: tabular-nums; color: var(--primary); }
+.bp-unit span { font-size: 0.78rem; color: var(--muted); }
+.bp-now { font-size: 1.8rem; font-weight: 900; color: var(--primary); margin: 10px 0 14px; }
+.bp-when { display: flex; gap: 6px; align-items: center; justify-content: center; font-size: 0.95rem; }
+.bp-time { font-size: 1.9rem; font-weight: 900; margin: 2px 0 6px; }
+.bp-code { background: #fff; color: #333; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.bp-code svg { max-width: 100%; }
+.bp-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.bp-actions .btn { justify-content: center; }
+.richmenu-preview { border-radius: 12px; overflow: hidden; border: 1px solid var(--border); line-height: 0; }
+.richmenu-preview canvas, .richmenu-preview img { width: 100%; height: auto; display: block; }

@@ -5,6 +5,7 @@ import { Save, PlugZap, KeyRound, Trash2, Upload, MessageCircle, MessageSquare, 
 import { Button, Field, Input, Select, Switch, Textarea, Badge, Seg, Loading, useToast } from '../../components/ui.jsx';
 import { useT } from '../../lib/i18n.jsx';
 import { api } from '../../lib/api.js';
+import { RichMenuCard } from './RichMenuCard.jsx';
 import { useAuth } from '../../lib/store.jsx';
 
 export function Secret({ label, value, onChange, hint }) {
@@ -133,6 +134,7 @@ function LineCard({ all, setAll }) {
           </ol>
         </div>
       )}
+      <RichMenuCard ready={!!(v.messagingAccessToken?.set)} current={v.richMenuId} onChanged={() => api.get('/integrations').then(setAll)} />
       <div className="small muted mt">{t('เลือกประเภทข้อความที่จะส่งได้ที่แท็บ "LINE"')}</div>
       <Results out={s.test} />
       <Bar s={s}>

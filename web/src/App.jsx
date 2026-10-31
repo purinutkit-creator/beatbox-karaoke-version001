@@ -11,6 +11,7 @@ const BookingApp = lazy(() => import('./booking/BookingApp.jsx'));
 const RoomOrderApp = lazy(() => import('./order/RoomOrderApp.jsx'));
 const RoomGuide = lazy(() => import('./guide/RoomGuide.jsx'));
 const OnlineReceipt = lazy(() => import('./receipt/OnlineReceipt.jsx'));
+const BookingPass = lazy(() => import('./guide/BookingPass.jsx'));
 
 function LangBoot({ children }) {
   return children;
@@ -47,6 +48,7 @@ export default function App() {
                     <Route path="/order/:token" element={<RoomOrderApp />} />
                     <Route path="/guide/:token" element={<RoomGuide />} />
                     <Route path="/r/:token" element={<OnlineReceipt />} />
+                    <Route path="/pass/:token" element={<BookingPass />} />
                     <Route
                       path="/*"
                       element={

@@ -157,7 +157,7 @@ export async function request(method, url, body, opts = {}) {
   let payload;
   if (body instanceof FormData) payload = body;
   else if (body instanceof Blob) {
-    headers['Content-Type'] = 'application/octet-stream';
+    headers['Content-Type'] = opts.contentType || 'application/octet-stream';
     payload = body;
   } else if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
