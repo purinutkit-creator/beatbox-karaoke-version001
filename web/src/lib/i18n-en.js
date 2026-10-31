@@ -3017,4 +3017,10 @@ export const EN = {
   "รหัสผ่านเริ่มต้น = เลข 4 ตัวท้ายของเบอร์โทร": "Default password = last 4 digits of the phone",
   "เชื่อมบัญชี LINE เรียบร้อย ครั้งต่อไปเข้าสู่ระบบด้วย LINE ได้เลย": "LINE linked — next time sign in with LINE",
   "สมัครสมาชิกและเชื่อม LINE เรียบร้อย ครั้งต่อไปเข้าสู่ระบบด้วย LINE ได้เลย": "Signed up and linked with LINE — next time sign in with LINE",
+  "หน้าสมาชิก: บัตรสมาชิกแบบเดียวกับบัตรจริงตามระดับ พอดีจอมือถือ แตะเพื่อพลิกดูด้านหลัง และปุ่ม QR สมาชิกขนาดใหญ่": "Member page: the member card in the tier design of the printed card, fits the phone, tap to turn it over, and a large member QR button",
+  "แตะเพื่อพลิกบัตร": "Tap to turn the card over",
+  "QR สมาชิก": "Member QR",
+  "แตะบัตรเพื่อพลิกดูด้านหลัง": "Tap the card to see the back",
+  "แสดง QR นี้ที่เคาน์เตอร์": "Show this QR at the counter",
+  "เลขสมาชิก": "Member number",
 };

@@ -769,7 +769,7 @@ r.post('/auth/line/demo', async (req, res) => {
 r.get('/me', requireMember, async (req, res) => {
   const m = await one(
     `SELECT m.id, m.member_code, m.first_name, m.last_name, m.nickname, m.phone, m.birthday, m.gender, m.email, m.photo_url, m.points_balance, m.total_spending, m.visit_count,
-            m.total_minutes, m.created_at, m.marketing_consent, t.id AS tier_id, t.name AS tier_name, t.color AS tier_color, t.point_multiplier, t.room_discount_percent, t.product_discount_percent, t.benefits
+            m.total_minutes, m.created_at, m.marketing_consent, t.id AS tier_id, t.name AS tier_name, t.color AS tier_color, t.code AS tier_code, t.sort_order AS tier_sort, t.point_multiplier, t.room_discount_percent, t.product_discount_percent, t.benefits
      FROM members m LEFT JOIN member_tiers t ON t.id = m.tier_id WHERE m.id = $1`,
     [req.member.id],
   );

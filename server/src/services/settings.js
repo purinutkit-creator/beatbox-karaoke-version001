@@ -328,6 +328,8 @@ export function publicSettings(s) {
     queue: { prefix: s.queue.prefix },
     receipt: { slogan: s.receipt.slogan, thankYou: s.receipt.thankYou },
     memberSignup: { enabled: s.memberSignup.enabled, passwordNote: s.memberSignup.passwordNote, extraFields: s.memberSignup.extraFields },
+    // the look of the member card (shown to the member on the website, like the printed card)
+    memberCard: { title: s.memberCard?.title, showLogo: s.memberCard?.showLogo, showTier: s.memberCard?.showTier, showSince: s.memberCard?.showSince, showPhoto: s.memberCard?.showPhoto, tiers: s.memberCard?.tiers || {}, back: s.memberCard?.back || {} },
     runtime: { paymentMode: s.runtime.paymentMode, lineLoginEnabled: s.runtime.lineLoginEnabled },
   };
 }

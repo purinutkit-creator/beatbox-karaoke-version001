@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, CalendarPlus, Phone, MessageCircle, XCircle, Search, LogOut, Crown, Gift, Coins, Smartphone, Link2, Unlink, QrCode, User } from 'lucide-react';
 import { useT } from '../lib/i18n.jsx';
@@ -6,6 +6,7 @@ import { useApp } from '../lib/store.jsx';
 import { api, uid, download } from '../lib/api.js';
 import { Button, Field, Input, Modal, Badge, Loading, Empty, QRCode, Barcode, Tabs, Switch, money, useToast, useDialog, Img } from '../components/ui.jsx';
 import { useMember } from './BookingApp.jsx';
+import { CardFront, CardBack } from '../components/MemberCard.jsx';
 import { fmtDate, fmtTime, fmtDateTime } from '@beatbox/shared/format.js';
 import { formatMinutesShort } from '@beatbox/shared/roomPricing.js';
 import { RESERVATION_STATUS_LABEL, RESERVATION_STATUS_COLOR, REWARD_TYPES } from '@beatbox/shared/constants.js';
@@ -156,6 +157,55 @@ export function CheckBookingPage() {
 /** Opened inside the LINE app: LINE Login is one tap (or none), so member pages sign in with it on their own. */
 const inLineApp = () => /\bLine\//i.test(navigator.userAgent || '');
 const lineStart = (redirect, slug) => `/api/public/auth/line/start?redirect=${encodeURIComponent(redirect)}${slug ? `&store=${encodeURIComponent(slug)}` : ''}`;
+
+/**
+ * The member's card, like the printed one (tier design from the store): fits the screen width, tap to turn it over
+ * (back: the store's details and QR links), and a large QR to scan at the counter.
+ */
+function MemberWallet({ me }) {
+  const { t } = useT();
+  const { publicSettings } = useApp();
+  const box = useRef(null);
+  const [zoom, setZoom] = useState(1);
+  const [back, setBack] = useState(false);
+  const [qr, setQr] = useState(false);
+  useEffect(() => {
+    const fit = () => setZoom(Math.min(1.6, (box.current?.clientWidth || 323) / 323.2)); // 85.5 mm = 323 px
+    fit();
+    const ro = new ResizeObserver(fit);
+    if (box.current) ro.observe(box.current);
+    return () => ro.disconnect();
+  }, []);
+  const cfg = publicSettings?.memberCard || {};
+  const tier = { id: me.tier_id, name: me.tier_name, code: me.tier_code, sort_order: me.tier_sort };
+  const member = { ...me, photo_url: me.photo_url || me.line?.picture_url };
+  return (
+    <div className="mw">
+      <div className="mw-card" ref={box} onClick={() => setBack((x) => !x)} title={t('แตะเพื่อพลิกบัตร')}>
+        <div className="mc-zoom" style={{ zoom }}>
+          {back ? <CardBack tier={tier} cfg={cfg} store={publicSettings?.store} /> : <CardFront member={member} tier={tier} cfg={cfg} store={publicSettings?.store} />}
+        </div>
+      </div>
+      <div className="mw-row">
+        <div className="mw-info">
+          <b>{me.first_name} {me.last_name || ''}</b>
+          <span><Crown size={14} /> {me.tier_name} · ×{Number(me.point_multiplier || 1)} {t('คะแนน')} · {me.phone}</span>
+        </div>
+        <Button size="sm" icon={QrCode} onClick={() => setQr(true)}>{t('QR สมาชิก')}</Button>
+      </div>
+      <div className="xs muted center">{t('แตะบัตรเพื่อพลิกดูด้านหลัง')}</div>
+      {qr && (
+        <Modal title={t('แสดง QR นี้ที่เคาน์เตอร์')} onClose={() => setQr(false)}>
+          <div className="col center" style={{ alignItems: 'center' }}>
+            <QRCode value={`MEMBER:${me.member_code}`} size={240} />
+            <Barcode value={me.member_code} height={60} />
+            <div className="small muted">{t('เลขสมาชิก')} {me.member_code}</div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
 
 function RequireMember({ children }) {
   const { me, ready } = useMember();
@@ -609,16 +659,8 @@ function Account() {
   const next = me.nextTier;
   return (
     <div className="col" style={{ maxWidth: 860, margin: '0 auto' }}>
-      <div className="card row nowrap" style={{ background: `linear-gradient(135deg, ${me.tier_color || '#8b5cf6'}cc, var(--accent))`, color: '#fff' }}>
-        <Img src={me.photo_url || me.line?.picture_url} style={{ width: 84, height: 84, borderRadius: 99, objectFit: 'cover' }} />
-        <div className="grow">
-          <h2 style={{ margin: 0 }}>{me.first_name} {me.last_name || ''}</h2>
-          <div>Member ID: <b>{me.member_code}</b> · {me.phone}</div>
-          <div><Crown size={16} /> {me.tier_name} · ×{Number(me.point_multiplier || 1)} {t('คะแนน')}</div>
-        </div>
-        <QRCode value={`MEMBER:${me.member_code}`} size={90} />
-      </div>
-      <div className="grid grid-4">
+      <MemberWallet me={me} />
+      <div className="grid grid-4 mw-stats">
         <div className="card kpi"><div className="label">{t('คะแนนปัจจุบัน')}</div><div className="value">{Number(me.points_balance)}</div></div>
         <div className="card kpi"><div className="label">{t('ยอดใช้จ่ายสะสม')}</div><div className="value">฿{money(me.total_spending, 0)}</div></div>
         <div className="card kpi"><div className="label">{t('จำนวนครั้งที่ใช้บริการ')}</div><div className="value">{me.visit_count}</div></div>

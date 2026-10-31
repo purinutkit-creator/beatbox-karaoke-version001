@@ -1,8 +1,13 @@
 // The app version people see (corner tag, "new version" pop-up). Every release that goes live adds 0.1 (2.0 → 2.1 →
 // 2.2 …) with a line or two of what changed at the top of CHANGELOG; the screen shows what is new once per version.
-export const APP_VERSION = '3.0';
+export const APP_VERSION = '3.1';
 
 export const CHANGELOG = [
+  {
+    version: '3.1',
+    date: '2026-11-01',
+    items: ['หน้าสมาชิก: บัตรสมาชิกแบบเดียวกับบัตรจริงตามระดับ พอดีจอมือถือ แตะเพื่อพลิกดูด้านหลัง และปุ่ม QR สมาชิกขนาดใหญ่'],
+  },
   {
     version: '3.0',
     date: '2026-10-31',
