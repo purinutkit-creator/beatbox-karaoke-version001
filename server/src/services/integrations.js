@@ -15,6 +15,7 @@ export const INTEGRATION_FIELDS = {
     loginChannelSecret: { secret: true, def: () => config.lineLoginChannelSecret },
     callbackUrl: { def: () => env.LINE_LOGIN_CALLBACK_URL || '' },
     messagingAccessToken: { secret: true, def: () => config.lineMessagingToken },
+    messagingChannelSecret: { secret: true, def: () => env.LINE_MESSAGING_CHANNEL_SECRET || '' }, // checks that webhook calls come from LINE
     oaBasicId: { def: '' },
   },
   sms: {

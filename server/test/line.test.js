@@ -1,0 +1,207 @@
+// LINE OA chat end to end (LINE's servers are replaced by a recorder): signed webhook only, phone → booking card, a
+// booking tied to the first LINE user, confirm → booking pass, cancel, reminders before the start (once), the room card
+// when the room opens, the receipt with "collect points" after paying, and collecting the bill's points as a member.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import pg from 'pg';
+
+const DB = (process.env.TEST_DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/beatbox_test').replace(/\/[^/]+$/, '/beatbox_test_line');
+process.env.DATABASE_URL = DB;
+process.env.DISABLE_SCHEDULER = 'true';
+process.env.PAYMENT_MODE = 'DEMO';
+process.env.PORT = '4983';
+process.env.SEED_STORE_CODE = 'beatbox1';
+process.env.ADMIN_PASSWORD = 'Admin12345';
+
+const SECRET = 'test-channel-secret';
+let server;
+let base;
+let token;
+let deviceId;
+const sent = []; // what the server sent to LINE: { kind, body }
+
+async function api(method, url, body, { headers = {}, auth = true, bearer } = {}) {
+  const res = await fetch(base + url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(auth && (bearer || token) ? { Authorization: `Bearer ${bearer || token}` } : {}), ...(deviceId ? { 'X-Device-Id': String(deviceId) } : {}), ...headers },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return { status: res.status, body: await res.json().catch(() => ({})), type: res.headers.get('content-type') };
+}
+
+/** A webhook call as LINE makes it (signed), then wait for the reply the server sends back to LINE. */
+async function lineEvent(event, { sign = true } = {}) {
+  const body = JSON.stringify({ destination: 'U0', events: [{ replyToken: `rt-${Math.random()}`, timestamp: Date.now(), mode: 'active', ...event }] });
+  const sig = crypto.createHmac('sha256', sign ? SECRET : 'wrong').update(body).digest('base64');
+  const before = sent.length;
+  const res = await fetch(`${base}/public/line/webhook?store=beatbox1`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body });
+  if (res.status !== 200) return { status: res.status };
+  for (let i = 0; i < 50 && sent.length === before; i++) await new Promise((r) => setTimeout(r, 40));
+  return { status: res.status, reply: sent[sent.length - 1]?.body };
+}
+const say = (userId, text) => lineEvent({ type: 'message', source: { type: 'user', userId }, message: { type: 'text', id: '1', text } });
+const tap = (userId, data) => lineEvent({ type: 'postback', source: { type: 'user', userId }, postback: { data } });
+const allText = (msgs) => JSON.stringify(msgs);
+
+async function tick() {
+  const { runWithStore } = await import('../src/db/index.js');
+  const { reservationTick, roomTick } = await import('../src/services/scheduler.js');
+  await runWithStore(1, () => roomTick());
+  await runWithStore(1, () => reservationTick());
+}
+const pushesTo = (userId) => sent.filter((s) => s.kind === 'push' && s.body.to === userId);
+
+before(async () => {
+  const admin = new pg.Client({ connectionString: DB.replace(/\/[^/]+$/, '/postgres') });
+  await admin.connect();
+  await admin.query('DROP DATABASE IF EXISTS beatbox_test_line WITH (FORCE)');
+  await admin.query('CREATE DATABASE beatbox_test_line');
+  await admin.end();
+  // LINE's API is recorded instead of called
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const m = String(url).match(/^https:\/\/api\.line\.me\/v2\/bot\/message\/(push|reply)$/);
+    if (m) {
+      sent.push({ kind: m[1], body: JSON.parse(opts.body) });
+      return new Response('{}', { status: 200 });
+    }
+    return realFetch(url, opts);
+  };
+  const { start } = await import('../src/index.js');
+  server = await start();
+  base = 'http://localhost:4983/api';
+  const storeSession = (await api('POST', '/auth/store-login', { storeCode: 'beatbox1', login: 'admin', password: 'Admin12345' }, { auth: false })).body.storeSession;
+  token = (await api('POST', '/auth/login', { pin: '1234' }, { headers: { 'X-Store-Session': storeSession }, auth: false })).body.token;
+  deviceId = (await api('POST', '/devices/register', { name: 'POS-LINE', deviceKey: 'test-device-key-line' })).body.id;
+  await api('POST', '/shifts/open', { deviceId, openingCash: 0 });
+  const s = (await api('GET', '/settings')).body;
+  await api('PUT', '/settings/room', { ...s.room, paymentMode: 'POSTPAY' });
+  await api('PUT', '/settings/line', { ...s.line, messagingEnabled: true });
+  await api('PUT', '/integrations/line', { messagingAccessToken: 'test-token', messagingChannelSecret: SECRET });
+});
+
+after(async () => {
+  server?.close();
+  const { pool } = await import('../src/db/index.js');
+  await pool.end();
+  setTimeout(() => process.exit(0), 200).unref();
+});
+
+let rv;
+
+test('the webhook only takes calls signed by LINE; the store gets its webhook address', async () => {
+  assert.equal((await lineEvent({ type: 'follow', source: { type: 'user', userId: 'Uaaa' } }, { sign: false })).status, 401);
+  const follow = await lineEvent({ type: 'follow', source: { type: 'user', userId: 'Uaaa' } });
+  assert.equal(follow.status, 200);
+  assert.match(allText(follow.reply), /พิมพ์เบอร์มือถือ/);
+  const info = (await api('GET', '/integrations/line/webhook')).body;
+  assert.match(info.url, /\/api\/public\/line\/webhook\?store=/);
+  assert.equal(info.ready, true);
+});
+
+test('typing the phone number shows the booking card (room, time, people, name, phone, maps, call, confirm, cancel)', async () => {
+  const start = new Date(Date.now() + 10 * 60000);
+  const r = await api('POST', '/reservations', { roomId: 5, startAt: start.toISOString(), durationMinutes: 60, customerName: 'คุณไลน์', phone: '0891234567', guestCount: 4 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  rv = r.body;
+  const { reply } = await say('Uaaa', '089-123-4567');
+  const text = allText(reply);
+  assert.equal(reply.messages[0].type, 'flex');
+  assert.match(text, /คุณไลน์/);
+  assert.match(text, /4 คน/);
+  assert.match(text, /0891234567/);
+  assert.match(text, new RegExp(rv.booking_no));
+  assert.match(text, /google\.com\/maps/);
+  assert.match(text, /a=confirm&r=/);
+  assert.match(text, /a=cancel&r=/);
+  // a second LINE user typing the same number does not see it
+  const other = await say('Ubbb', '0891234567');
+  assert.match(allText(other.reply), /เชื่อมกับบัญชี LINE อื่นแล้ว/);
+  assert.match(allText((await say('Uaaa', '0800000000')).reply), /ไม่พบการจอง/);
+});
+
+test('confirm → booking pass (QR + barcode picture); only the tied LINE user can act on the booking', async () => {
+  assert.match(allText((await tap('Ubbb', `a=confirm&r=${rv.id}`)).reply), /ไม่พบการจองนี้/);
+  const { reply } = await tap('Uaaa', `a=confirm&r=${rv.id}`);
+  const text = allText(reply);
+  assert.match(text, /ยืนยันการจองเรียบร้อย/);
+  assert.match(text, new RegExp(`/api/public/line/pass/${rv.check_in_token}\\.png`));
+  const png = await fetch(`${base}/public/line/pass/${rv.check_in_token}.png`);
+  assert.equal(png.headers.get('content-type'), 'image/png');
+  assert.ok((await png.arrayBuffer()).byteLength > 1000);
+  const after = (await api('GET', `/reservations/${rv.id}`)).body;
+  assert.ok(after.customer_confirmed_at, 'the staff side sees the customer confirmed');
+});
+
+test('reminder before the start: once, with the real minutes left', async () => {
+  await tick();
+  const p = pushesTo('Uaaa');
+  assert.equal(p.length, 1, allText(sent.map((s) => s.kind)));
+  assert.match(allText(p[0].body), /อีก (9|10) นาที/);
+  await tick();
+  assert.equal(pushesTo('Uaaa').length, 1, 'not sent again');
+});
+
+test('the room opens → room card (end time, live countdown page, order food, report a problem)', async () => {
+  const open = await api('POST', `/reservations/${rv.id}/open`, {});
+  assert.equal(open.status, 200, JSON.stringify(open.body));
+  await tick();
+  const card = pushesTo('Uaaa').at(-1);
+  const text = allText(card.body);
+  assert.match(text, /เปิดแล้ว/);
+  assert.match(text, /\/order\/[\w-]{20,}\?tab=menu/);
+  assert.match(text, /\?issue=1/);
+  rv.sessionId = open.body.session?.id || open.body.id;
+  rv.orderId = open.body.session?.order_id || open.body.order_id;
+});
+
+let receiptToken;
+test('after paying → online receipt with "collect points" for the bill', async () => {
+  const close = await api('POST', `/sessions/${rv.sessionId}/close`);
+  assert.equal(close.status, 200, JSON.stringify(close.body));
+  const net = close.body.order.calc.netTotal;
+  const pay = await api('POST', `/orders/${rv.orderId}/pay`, { payments: [{ method: 'CASH', amount: net, received: net }] }, { headers: { 'Idempotency-Key': 'line-pay-1' } });
+  assert.equal(pay.status, 200, JSON.stringify(pay.body));
+  await tick();
+  const msg = pushesTo('Uaaa').at(-1);
+  const text = allText(msg.body);
+  assert.match(text, /ใบเสร็จ/);
+  receiptToken = text.match(/\/book\/claim\/([0-9a-f]{32})/)?.[1];
+  assert.ok(receiptToken, text);
+  assert.match(text, new RegExp(`/r/${receiptToken}`));
+  const page = await api('GET', `/public/receipts/${receiptToken}`, null, { auth: false });
+  assert.equal(page.status, 200);
+  assert.equal(page.body.claim.state, 'OPEN');
+  assert.ok(page.body.claim.points > 0);
+});
+
+test('collecting the points as a member: once, then the bill is theirs', async () => {
+  await api('POST', '/members', { firstName: 'สะสม', phone: '0897770011' });
+  const login = await api('POST', '/public/auth/login?store=beatbox1', { phone: '0897770011', password: '0011' }, { auth: false });
+  await api('POST', '/public/me/password?store=beatbox1', { current: '0011', password: 'secret99' }, { bearer: login.body.token });
+  const member = login.body.token;
+  const pre = await api('GET', `/public/receipts/${receiptToken}/claim`, null, { bearer: member });
+  assert.equal(pre.body.state, 'OPEN');
+  const c = await api('POST', `/public/receipts/${receiptToken}/claim`, {}, { bearer: member });
+  assert.equal(c.status, 200, JSON.stringify(c.body));
+  assert.equal(c.body.state, 'MINE');
+  assert.equal(c.body.balance, c.body.points);
+  const again = await api('POST', `/public/receipts/${receiptToken}/claim`, {}, { bearer: member });
+  assert.equal(again.body.already, true);
+  assert.equal(again.body.balance, c.body.points, 'no double points');
+  await api('POST', '/members', { firstName: 'คนอื่น', phone: '0897770022' });
+  const l2 = await api('POST', '/public/auth/login?store=beatbox1', { phone: '0897770022', password: '0022' }, { auth: false });
+  await api('POST', '/public/me/password?store=beatbox1', { current: '0022', password: 'secret99' }, { bearer: l2.body.token });
+  assert.equal((await api('POST', `/public/receipts/${receiptToken}/claim`, {}, { bearer: l2.body.token })).status, 409);
+});
+
+test('cancel from LINE asks first, then cancels', async () => {
+  const start = new Date(Date.now() + 3 * 86400000);
+  const r2 = (await api('POST', '/reservations', { roomId: 6, startAt: start.toISOString(), durationMinutes: 60, customerName: 'คุณยกเลิก', phone: '0891239999', guestCount: 2 })).body;
+  await say('Uccc', '0891239999');
+  assert.match(allText((await tap('Uccc', `a=cancel&r=${r2.id}`)).reply), /ยืนยันยกเลิก/);
+  assert.equal((await api('GET', `/reservations/${r2.id}`)).body.status, r2.status, 'not cancelled before the second tap');
+  assert.match(allText((await tap('Uccc', `a=cancel_yes&r=${r2.id}`)).reply), /ยกเลิกการจอง .* แล้ว/s);
+  assert.equal((await api('GET', `/reservations/${r2.id}`)).body.status, 'CANCELLED');
+});

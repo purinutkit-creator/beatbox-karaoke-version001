@@ -17,7 +17,8 @@ import { addPointTx, evaluateTier } from '../services/points.js';
 import { refreshRoomStatuses } from '../services/rooms.js';
 import { queueKitchenTickets } from '../services/roomService.js';
 import { verifySlip, paymentMode } from '../providers/slip.js';
-import { notify } from '../services/notifications.js';
+import { notify, queueLinePush, dispatchPendingMessages } from '../services/notifications.js';
+import { RECEIPT_ROWS, receiptTarget, receiptLine } from '../services/lineFlow.js';
 import { config } from '../config.js';
 import { round2 } from '@beatbox/shared/money.js';
 
@@ -507,14 +508,25 @@ r.post('/receipts/:id/print', async (req, res) => {
 });
 
 r.post('/receipts/:id/send', async (req, res) => {
-  const b = parse(z.object({ channel: z.enum(['LINE', 'SMS', 'EMAIL']), to: z.string().max(200) }), req.body);
-  const rc = await one('SELECT rc.*, o.member_id FROM receipts rc JOIN orders o ON o.id = rc.order_id WHERE rc.id = $1', [req.params.id]);
+  const b = parse(z.object({ channel: z.enum(['LINE', 'SMS', 'EMAIL']), to: z.string().max(200).optional().default('') }), req.body);
+  const rc = await one(`${RECEIPT_ROWS} WHERE rc.id = $1`, [req.params.id]);
   if (!rc) throw notFound();
-  const link = `${config.publicUrl}/r/${rc.receipt_no}`;
-  const n = await one(
-    `INSERT INTO notifications(channel, type, title, message, data, member_id, status, error) VALUES ($1,'RECEIPT','ใบเสร็จรับเงิน',$2,$3,$4,$5,$6) RETURNING *`,
-    [b.channel, `ใบเสร็จ ${rc.receipt_no} ยอดสุทธิ ${rc.snapshot?.totals?.netTotal} บาท ดูได้ที่ ${link}`, { to: b.to, receiptNo: rc.receipt_no }, rc.member_id, b.channel === 'LINE' ? 'PENDING' : 'FAILED', b.channel === 'LINE' ? null : 'ยังไม่ได้เชื่อมต่อผู้ให้บริการ ' + b.channel],
-  );
+  const link = `${config.publicUrl}/r/${rc.public_token}`;
+  let n;
+  if (b.channel === 'LINE') {
+    // the customer's LINE: the booking chat or the member's connected LINE
+    const to = await receiptTarget(rc);
+    if (!to) throw badRequest('ลูกค้ายังไม่ได้เชื่อมต่อ LINE กับร้าน (ลูกค้าต้องพิมพ์เบอร์โทรใน LINE OA ของร้าน หรือเป็นสมาชิกที่เชื่อม LINE)');
+    const settings = await getSettings();
+    const id = await queueLinePush({ lineUserId: to, type: 'RECEIPT', title: `ใบเสร็จ ${rc.receipt_no}`, messages: [await receiptLine(rc, settings)], memberId: rc.member_id, dedupeKey: `receipt-send:${rc.id}:${Date.now()}` });
+    n = await one('SELECT * FROM notifications WHERE id = $1', [id]);
+    dispatchPendingMessages().catch(() => {});
+  } else {
+    n = await one(
+      `INSERT INTO notifications(channel, type, title, message, data, member_id, status, error) VALUES ($1,'RECEIPT','ใบเสร็จรับเงิน',$2,$3,$4,'FAILED',$5) RETURNING *`,
+      [b.channel, `ใบเสร็จ ${rc.receipt_no} ยอดสุทธิ ${rc.snapshot?.totals?.netTotal} บาท ดูได้ที่ ${link}`, { to: b.to, receiptNo: rc.receipt_no }, rc.member_id, 'ยังไม่ได้เชื่อมต่อผู้ให้บริการ ' + b.channel],
+    );
+  }
   await logActivity(null, req, 'RECEIPT_SEND', 'order', rc.order_id, b);
   res.json(n);
 });

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useAuth, useApp } from '../lib/store.jsx';
 import { useT } from '../lib/i18n.jsx';
+import { WhatsNew, VersionTag } from '../lib/version.jsx';
 import { api, offlineQueue } from '../lib/api.js';
 import { useServerNow, useSocketEvent, useSync, getSocket } from '../lib/socket.js';
 import { onDisplayHold, releaseDisplay } from '../lib/display.js';
@@ -163,6 +164,7 @@ function Login() {
   );
   return (
     <div className="login-wrap">
+      <VersionTag className="version-corner" />
       <div className="card login-card">
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Button size="sm" variant="ghost" icon={Globe} onClick={() => setLang(lang === 'th' ? 'en' : 'th')}>
@@ -635,6 +637,8 @@ function Layout() {
       <QueuedPrintWorker />
       <DisplayHoldBar />
       <IdleGuard />
+      <WhatsNew />
+      <VersionTag className="version-corner" />
     </div>
   );
 }

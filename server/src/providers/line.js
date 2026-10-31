@@ -1,5 +1,6 @@
 // LINE Login (OAuth 2.1 / OpenID) + Messaging API adapters.
 // Credentials come from Admin → ตั้งค่าร้าน → การเชื่อมต่อ (encrypted in the DB), falling back to env variables.
+import crypto from 'node:crypto';
 import { getIntegrations } from '../services/integrations.js';
 
 async function cfg() {
@@ -55,15 +56,34 @@ export const lineMessaging = {
     return !!(await cfg()).messagingAccessToken;
   },
   async push(to, text) {
+    return this.send('push', { to, messages: [{ type: 'text', text: String(text).slice(0, 4900) }] });
+  },
+  /** Push any messages (text, image, Flex) to one LINE user. */
+  async pushMessages(to, messages) {
+    return this.send('push', { to, messages: messages.slice(0, 5) });
+  },
+  /** Answer a message the customer just sent (free, but only once and within a minute). */
+  async reply(replyToken, messages) {
+    return this.send('reply', { replyToken, messages: messages.slice(0, 5) });
+  },
+  async send(kind, body) {
     const token = (await cfg()).messagingAccessToken;
     if (!token) throw new Error('LINE Messaging API ยังไม่ได้ตั้งค่า Channel Access Token');
-    const r = await fetch('https://api.line.me/v2/bot/message/push', {
+    const r = await fetch(`https://api.line.me/v2/bot/message/${kind}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ to, messages: [{ type: 'text', text: String(text).slice(0, 4900) }] }),
+      body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error(`LINE push failed (${r.status}): ${(await r.text()).slice(0, 200)}`);
+    if (!r.ok) throw new Error(`LINE ${kind} failed (${r.status}): ${(await r.text()).slice(0, 300)}`);
     return true;
+  },
+  /** The webhook really comes from LINE: HMAC-SHA256 of the raw body with the channel secret. */
+  async verifySignature(rawBody, signature) {
+    const secret = (await cfg()).messagingChannelSecret;
+    if (!secret || !rawBody || !signature) return false;
+    const mac = crypto.createHmac('sha256', secret).update(rawBody).digest();
+    const got = Buffer.from(String(signature), 'base64');
+    return got.length === mac.length && crypto.timingSafeEqual(got, mac);
   },
   async test() {
     const token = (await cfg()).messagingAccessToken;

@@ -14,7 +14,7 @@ import { config } from '../config.js';
 import { getSettings, publicSettings } from '../services/settings.js';
 import { saveFile } from '../services/files.js';
 import { expireStaleHolds, lockRoom, assertRoomFree, searchRooms, suggestAlternatives, withinOpeningHours } from '../services/availability.js';
-import { estimateReservation, confirmOnlineDeposit, assertBookable } from '../services/booking.js';
+import { estimateReservation, confirmOnlineDeposit, assertBookable, cancelOnline } from '../services/booking.js';
 import { nextBookingNo, nextMemberCode, randomToken } from '../services/numbers.js';
 import { refreshRoomStatuses } from '../services/rooms.js';
 import { notify } from '../services/notifications.js';
@@ -466,14 +466,7 @@ r.post('/bookings/:bookingNo/cancel', optionalMember, async (req, res) => {
     const otp = b.otpToken ? verifyToken(b.otpToken) : null;
     const owns = (req.member && (req.member.id === rv.member_id || req.member.phone === rv.phone)) || (otp?.typ === 'otp' && otp.phone === rv.phone);
     if (!owns) throw unauthorized('กรุณาเข้าสู่ระบบสมาชิกด้วยเบอร์โทรที่ใช้จอง');
-    if (!['PENDING', 'CONFIRMED', 'DEPOSIT_PAID'].includes(rv.status) || new Date(rv.start_at) <= new Date()) throw conflict('ไม่สามารถยกเลิกการจองนี้ทางออนไลน์ได้');
-    const held = (await c.query(`SELECT COALESCE(SUM(amount - refunded_amount),0) AS amt FROM deposits WHERE reservation_id = $1 AND status = 'RECEIVED' AND verification_status = 'VERIFIED'`, [rv.id])).rows[0];
-    const preview = calculateCancellationRefund(Number(held.amt), rv.start_at, settings.booking.cancellation);
-    // money must be returned by staff (transfer) → refund request for POS; deposit kept RECEIVED until processed
-    await c.query(`UPDATE reservations SET status = 'CANCELLED', cancelled_at = now(), cancel_reason = $2, updated_at = now() WHERE id = $1`, [rv.id, `${b.reason} | คืนตามนโยบาย ${preview.percent}% = ${preview.amount} บาท`]);
-    if (preview.amount <= 0) await c.query(`UPDATE deposits SET status = 'FORFEITED' WHERE reservation_id = $1 AND status = 'RECEIVED'`, [rv.id]);
-    else await notify({ type: 'REFUND_REQUEST', level: 'warning', title: 'คำขอคืนเงินมัดจำ (ลูกค้ายกเลิกออนไลน์)', message: `${rv.booking_no} ${rv.customer_name} คืน ${preview.amount} บาท (${preview.percent}%)`, reservationId: rv.id, data: { refundAmount: preview.amount } }, c);
-    await logActivity(c, actor('ONLINE'), 'ONLINE_CANCEL', 'reservation', rv.id, { reason: b.reason, preview });
+    const preview = await cancelOnline(c, rv, { reason: b.reason, settings });
     return preview;
   });
   emitSync(['reservations', 'rooms', 'availability']);

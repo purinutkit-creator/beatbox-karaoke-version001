@@ -182,7 +182,11 @@ export default function RoomOrderApp() {
   const toast = useToast();
   const { data, error, reload, now } = useRoom(token);
   const [tick, setTick] = useState(Date.now());
-  const [tab, setTab] = useState('menu');
+  // links from LINE open a tab directly: ?issue=1 → report a problem, ?tab=orders …
+  const [tab, setTab] = useState(() => {
+    const q = new URLSearchParams(window.location.search);
+    return q.get('issue') ? 'help' : ['menu', 'orders', 'help'].includes(q.get('tab')) ? q.get('tab') : 'menu';
+  });
   const [cat, setCat] = useState(null);
   const [pick, setPick] = useState(null);
   const [cart, setCart] = useState([]);

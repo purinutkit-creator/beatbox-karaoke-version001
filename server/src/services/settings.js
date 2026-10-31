@@ -98,6 +98,7 @@ export const DEFAULT_SETTINGS = {
     expiryMonths: 12,
     reverseOnRefund: true,
     pointValue: 1, // baht per point when redeemed as discount
+    claimDays: 7, // a bill paid without a member: its points can be collected (receipt link) within this many days
   },
   discount: {
     approvalAbovePercent: 20,
@@ -214,6 +215,12 @@ export const DEFAULT_SETTINGS = {
     notifyPoints: true,
     notifyRewards: true,
     notifyPromotions: false,
+    // chat with the store's LINE OA (webhook): customers type the phone number they booked with
+    chatBooking: true,
+    remindMinutes: [15, 5], // "time to come" messages before the booking starts
+    notifyRoomOpen: true, // room card (end time, order food, report a problem) when the room opens
+    timeLeftMinutes: 10, // "time almost up" message (0 = off)
+    notifyReceipt: true, // online receipt + "collect points" after paying
   },
 };
 

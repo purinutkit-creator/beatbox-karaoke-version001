@@ -830,3 +830,32 @@ label.card.selected { border-color: var(--primary); box-shadow: 0 0 0 2px color-
 .lp-sheet { width: 62px; height: 86px; background: #fff; border-radius: 4px; padding: 6px 5px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; align-content: center; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
 .lp-card { height: 15px; border-radius: 2px; background: var(--primary); color: #fff; font-size: 8px; display: grid; place-items: center; }
 .lp-arrow { font-size: 1.3rem; color: var(--muted); }
+
+/* Online receipt (link from LINE) and "collect points" */
+.orc-paper { background: #fff; color: #111; }
+.orc-title { text-align: center; font-weight: 800; font-size: 1.2rem; }
+.orc-meta { text-align: center; font-size: 0.85rem; color: #666; margin-bottom: 10px; }
+.orc-void { text-align: center; color: #dc2626; font-weight: 800; border: 2px solid #dc2626; border-radius: 10px; padding: 4px; margin-bottom: 8px; }
+.orc-room { font-size: 0.9rem; padding: 8px 10px; background: #f5f3ff; border-radius: 10px; margin-bottom: 10px; }
+.orc-lines { border-top: 1px dashed #ccc; border-bottom: 1px dashed #ccc; padding: 8px 0; margin-bottom: 8px; }
+.orc-line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; font-size: 0.95rem; }
+.orc-line .muted { color: #777; }
+.orc-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 0.92rem; }
+.orc-row.strong { font-size: 1.25rem; font-weight: 800; color: #6d28d9; border-top: 1px solid #eee; margin-top: 4px; padding-top: 8px; }
+.orc-pay { text-align: right; font-size: 0.8rem; color: #666; }
+.orc-thanks { text-align: center; margin-top: 12px; font-size: 0.9rem; color: #444; }
+.orc-claim { background: #16a34a !important; border-color: #16a34a !important; font-size: 1.05rem; }
+.claim-card { padding: 28px 18px; }
+.claim-star { width: 76px; height: 76px; border-radius: 50%; margin: 0 auto 10px; display: grid; place-items: center; background: color-mix(in srgb, #f59e0b 20%, transparent); color: #f59e0b; }
+.claim-points { font-size: 2.6rem; font-weight: 900; color: #16a34a; margin: 6px 0; }
+.claim-points small { font-size: 1rem; }
+.claim-ok { display: flex; gap: 6px; align-items: center; justify-content: center; color: #16a34a; font-weight: 700; }
+.claim-warn { display: flex; gap: 6px; align-items: center; justify-content: center; color: #dc2626; font-weight: 700; margin-top: 8px; }
+
+/* App version: corner tag and "what's new" */
+.version-tag { font-size: 11px; font-weight: 700; letter-spacing: 0.3px; color: var(--muted); }
+.version-corner { position: fixed; right: 10px; bottom: 6px; z-index: 5; padding: 2px 8px; border-radius: 99px; background: color-mix(in srgb, var(--surface) 80%, transparent); border: 1px solid var(--border); pointer-events: none; opacity: 0.8; }
+.whats-new ul { margin: 8px 0 14px; padding-left: 20px; display: grid; gap: 6px; }
+.whats-new-head { display: flex; align-items: center; gap: 8px; }
+.version-pill { background: var(--primary); color: #fff; border-radius: 99px; padding: 2px 10px; font-weight: 800; font-size: 0.85rem; }
+@media print { .version-corner { display: none; } }

@@ -10,6 +10,7 @@ import { Button, Loading } from '../components/ui.jsx';
 
 const BookFlow = lazy(() => import('./BookFlow.jsx'));
 const P = {
+  claim: lazy(() => import('./ClaimPoints.jsx')),
   home: lazy(() => import('./Pages.jsx').then((m) => ({ default: m.HomePage }))),
   rooms: lazy(() => import('./Pages.jsx').then((m) => ({ default: m.RoomsPage }))),
   packages: lazy(() => import('./Pages.jsx').then((m) => ({ default: m.PackagesPage }))),
@@ -140,6 +141,7 @@ function Shell() {
             <Route path="booking/:token" element={<P.booking />} />
             <Route path="contact" element={<P.contact />} />
             <Route path="signup" element={<P.signup />} />
+            <Route path="claim/:token" element={<P.claim />} />
           </Routes>
           )}
         </Suspense>

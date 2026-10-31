@@ -7,6 +7,7 @@ import { notify, dispatchPendingMessages, queueLineMessage, bookingMessage, send
 import { emitStaff, emitSync } from '../lib/realtime.js';
 import { sessionTiming } from '@beatbox/shared/roomPricing.js';
 import { runBackup } from './backup.js';
+import { lineTick } from './lineFlow.js';
 import { addPointTx } from './points.js';
 import { logActivity } from '../lib/activity.js';
 import { autoAcceptRoomOrders, sweepKitchenTickets } from './roomService.js';
@@ -104,6 +105,7 @@ async function reservationTick() {
       sendBookingSms('BOOKING_REMINDER', r).catch((e) => console.error('[sms] reminder', e.message));
     }
   }
+  await lineTick(settings).catch((e) => console.error('[line] tick', e.message));
   await dispatchPendingMessages();
 }
 

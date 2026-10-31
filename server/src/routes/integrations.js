@@ -1,6 +1,7 @@
 // Admin → การเชื่อมต่อ: LINE, SMS, slip verification and payment terminal credentials + "test" buttons,
 // and the POS endpoints that push a payment to the terminal (EDC / Beam Bolt).
 import { Router } from 'express';
+import { config } from '../config.js';
 import multer from 'multer';
 import { pool, tx, one } from '../db/index.js';
 import { requireAuth, can, signToken } from '../lib/auth.js';
@@ -13,6 +14,7 @@ import { getSettings, invalidateSettings } from '../services/settings.js';
 import { maskedIntegrations, saveIntegration, INTEGRATION_FIELDS, fillTemplate } from '../services/integrations.js';
 import { tuyaTest } from '../providers/tuya.js';
 import { lineLogin, lineMessaging } from '../providers/line.js';
+import { webhookInfo } from './line.js';
 import { sendSms, smsConfig } from '../providers/sms.js';
 import { verifySlip, testSlipProvider } from '../providers/slip.js';
 import { getTerminal, terminalMethods } from '../providers/terminal.js';
@@ -23,7 +25,7 @@ r.use(requireAuth);
 r.get('/integrations', can('settings.manage'), async (_req, res) => res.json(await maskedIntegrations()));
 
 const SCHEMAS = {
-  line: z.object({ loginEnabled: z.boolean().optional(), loginChannelId: z.string().max(100).optional(), loginChannelSecret: z.string().max(200).nullable().optional(), callbackUrl: z.string().max(500).optional(), messagingAccessToken: z.string().max(1000).nullable().optional(), oaBasicId: z.string().max(100).optional() }),
+  line: z.object({ loginEnabled: z.boolean().optional(), loginChannelId: z.string().max(100).optional(), loginChannelSecret: z.string().max(200).nullable().optional(), callbackUrl: z.string().max(500).optional(), messagingAccessToken: z.string().max(1000).nullable().optional(), messagingChannelSecret: z.string().max(200).nullable().optional(), oaBasicId: z.string().max(100).optional() }),
   sms: z.object({
     enabled: z.boolean().optional(),
     provider: z.enum(['thsms', 'thaibulksms', 'smsmkt', 'twilio', 'webhook']).optional(),
@@ -87,6 +89,12 @@ r.put('/integrations/:section', can('settings.manage'), async (req, res) => {
   invalidateSettings();
   emitSync('settings');
   res.json(await maskedIntegrations());
+});
+
+/** LINE OA chat: the webhook address of this store to paste into LINE Developers, and whether it can answer yet. */
+r.get('/integrations/line/webhook', can('settings.manage'), async (_req, res) => {
+  const s = await getSettings();
+  res.json(await webhookInfo(config.publicUrl, s.store.slug));
 });
 
 r.post('/integrations/:section/test', can('settings.manage'), async (req, res) => {

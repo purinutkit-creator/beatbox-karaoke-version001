@@ -13,9 +13,14 @@ import { RESERVATION_STATUS_LABEL, RESERVATION_STATUS_COLOR } from '@beatbox/sha
 import { fmtDateTime, fmtTime, fmtDate, bkkDateStr } from '@beatbox/shared/format.js';
 import { formatMinutesShort } from '@beatbox/shared/roomPricing.js';
 
-export function StatusBadge({ status }) {
+export function StatusBadge({ status, rv }) {
   const { t } = useT();
-  return <Badge color={RESERVATION_STATUS_COLOR[status]}>{t(RESERVATION_STATUS_LABEL[status] || status)}</Badge>;
+  return (
+    <>
+      <Badge color={RESERVATION_STATUS_COLOR[status]}>{t(RESERVATION_STATUS_LABEL[status] || status)}</Badge>
+      {rv?.customer_confirmed_at && <Badge color="#06c755" title={t('ลูกค้ากดยืนยันการจองใน LINE')}>LINE ✓</Badge>}
+    </>
+  );
 }
 
 const toLocal = (d) => new Date(new Date(d).getTime() + 7 * 3600000).toISOString().slice(0, 16);
@@ -199,7 +204,7 @@ export function ReservationDrawer({ id, onClose, onChanged }) {
   };
   const store = settings?.store;
   return (
-    <Drawer title={<span className="row nowrap">{rv.booking_no} <StatusBadge status={rv.status} /></span>} onClose={onClose}>
+    <Drawer title={<span className="row nowrap">{rv.booking_no} <StatusBadge status={rv.status} rv={rv} /></span>} onClose={onClose}>
       <div className="col">
         <div className="grid grid-2">
           <div className="card flat">
@@ -334,7 +339,7 @@ export function ReservationTable({ rows, onOpen }) {
               <td className="right num">{money(r.estimated_total)}</td>
               <td className="right num">{money(r.deposit_paid)}</td>
               <td>{r.payment_status ? <Badge>{r.payment_status}</Badge> : '-'}{r.slip_result && <div className="xs muted">{t('สลิป')}: {r.slip_result}</div>}</td>
-              <td><StatusBadge status={r.status} /></td>
+              <td><StatusBadge status={r.status} rv={r} /></td>
               <td><Badge>{r.source}</Badge></td>
             </tr>
           ))}

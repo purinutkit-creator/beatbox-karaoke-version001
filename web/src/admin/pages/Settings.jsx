@@ -595,6 +595,17 @@ function LineTab() {
         { key: 'messagingEnabled', label: 'LINE Messaging API', type: 'switch', switchLabel: 'ส่งข้อความแจ้งเตือนผ่าน LINE OA' },
         ...[['notifyBookingConfirmed', 'ยืนยันการจอง'], ['notifyDeposit', 'แจ้งรับเงินมัดจำ'], ['notifyReminder', 'แจ้งเตือนก่อนถึงเวลาจอง'], ['notifyRoomChange', 'แจ้งเปลี่ยนห้อง'], ['notifyCancel', 'แจ้งยกเลิก'], ['notifyRefund', 'แจ้งคืนเงินมัดจำ'], ['notifyPoints', 'แจ้งคะแนนที่ได้รับ'], ['notifyRewards', 'แจ้ง Reward'], ['notifyPromotions', 'แจ้งโปรโมชั่น']].map(([key, label]) => ({ key, label, type: 'switch', switchLabel: 'ส่ง' })),
       ]} />
+      <h3 className="mt">{t('แชทกับลูกค้าใน LINE OA')}</h3>
+      <div className="small muted mb">{t('ลูกค้าพิมพ์เบอร์มือถือที่ใช้จองในแชท LINE OA ของร้าน → เห็นการจอง (รูปห้อง เวลา จำนวนคน ชื่อ เบอร์ นำทาง โทรหาร้าน) กดยืนยันเพื่อรับ QR/บาร์โค้ดการจอง หรือกดยกเลิก — ตั้ง Webhook ได้ที่แท็บ "การเชื่อมต่อ"')}</div>
+      <Grid v={s.v} set={s.set} fields={[
+        { key: 'chatBooking', label: 'ค้นหาการจองด้วยเบอร์มือถือในแชท', type: 'switch', switchLabel: 'เปิด' },
+        { key: 'notifyRoomOpen', label: 'การ์ดห้องเมื่อเปิดห้อง (เวลา สั่งอาหาร แจ้งปัญหา)', type: 'switch', switchLabel: 'ส่ง' },
+        { key: 'notifyReceipt', label: 'ใบเสร็จออนไลน์ + ปุ่มสะสมแต้ม หลังชำระเงิน', type: 'switch', switchLabel: 'ส่ง' },
+        { key: 'timeLeftMinutes', label: 'แจ้ง "ใกล้หมดเวลา" ก่อนหมด (นาที, 0 = ไม่ส่ง)', type: 'number' },
+      ]} />
+      <Field label="แจ้งเตือนให้มาที่ร้าน ก่อนถึงเวลาจอง (นาที คั่นด้วย ,)" style={{ maxWidth: 360 }}>
+        <Input value={(s.v.remindMinutes || []).join(', ')} onChange={(e) => s.set('remindMinutes', e.target.value.split(/[ ,]+/).map(Number).filter((n) => n > 0 && n <= 180))} placeholder="15, 5" />
+      </Field>
       <SaveBar onSave={s.save} busy={s.busy} />
     </div>
   );

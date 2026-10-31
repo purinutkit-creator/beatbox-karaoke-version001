@@ -5,6 +5,8 @@ import { taxSnapshot } from './settings.js';
 import { nextDepositNo } from './numbers.js';
 import { notify, queueLineMessage, bookingMessage, sendBookingSms } from './notifications.js';
 import { conflict } from '../lib/errors.js';
+import { logActivity } from '../lib/activity.js';
+import { calculateCancellationRefund } from '@beatbox/shared/calc.js';
 
 /** Estimated bill of a reservation using the central Calculation Engine. */
 export function estimateReservation({ room, pkg = null, durationMinutes, guestCount = 1, extraMics = 0, settings, promotion = null, member = null, startAt = new Date() }) {
@@ -93,4 +95,27 @@ export function assertBookable(reservation) {
   if (!reservation) throw conflict('ไม่พบการจอง');
   if (reservation.status === 'EXPIRED') throw conflict('การชำระเงินหมดอายุ ห้องถูกปล่อยให้ลูกค้าท่านอื่นแล้ว', 'HOLD_EXPIRED');
   if (reservation.status === 'HOLD' && reservation.hold_expires_at && new Date(reservation.hold_expires_at) < new Date()) throw conflict('การชำระเงินหมดอายุ ห้องถูกปล่อยให้ลูกค้าท่านอื่นแล้ว', 'HOLD_EXPIRED');
+}
+
+/** Bookings the customer may still cancel themselves (website / LINE). */
+export const canCancelOnline = (rv, settings) => !!settings.booking.cancellation.allowOnline && ['PENDING', 'CONFIRMED', 'DEPOSIT_PAID'].includes(rv.status) && new Date(rv.start_at) > new Date();
+
+/** What the customer gets back if they cancel now (verified deposits held, the store's cancellation tiers). */
+export async function cancelPreview(c, rv, settings) {
+  const held = (await c.query(`SELECT COALESCE(SUM(amount - refunded_amount),0) AS amt FROM deposits WHERE reservation_id = $1 AND status = 'RECEIVED' AND verification_status = 'VERIFIED'`, [rv.id])).rows[0];
+  return { ...calculateCancellationRefund(Number(held.amt), rv.start_at, settings.booking.cancellation), held: Number(held.amt) };
+}
+
+/**
+ * The customer cancels (website / LINE). rv is locked FOR UPDATE by the caller. Money is returned by staff: a refund
+ * request is raised for the POS; nothing to return → the deposit is forfeited.
+ */
+export async function cancelOnline(c, rv, { reason, settings, source = 'ONLINE' }) {
+  if (!canCancelOnline(rv, settings)) throw conflict('ไม่สามารถยกเลิกการจองนี้ทางออนไลน์ได้');
+  const preview = await cancelPreview(c, rv, settings);
+  await c.query(`UPDATE reservations SET status = 'CANCELLED', cancelled_at = now(), cancel_reason = $2, updated_at = now() WHERE id = $1`, [rv.id, `${reason} | คืนตามนโยบาย ${preview.percent}% = ${preview.amount} บาท`]);
+  if (preview.amount <= 0) await c.query(`UPDATE deposits SET status = 'FORFEITED' WHERE reservation_id = $1 AND status = 'RECEIVED'`, [rv.id]);
+  else await notify({ type: 'REFUND_REQUEST', level: 'warning', title: `คำขอคืนเงินมัดจำ (ลูกค้ายกเลิก${source === 'LINE' ? 'ผ่าน LINE' : 'ออนไลน์'})`, message: `${rv.booking_no} ${rv.customer_name} คืน ${preview.amount} บาท (${preview.percent}%)`, reservationId: rv.id, data: { refundAmount: preview.amount } }, c);
+  await logActivity(c, { employee: { id: null, name: source }, ip: null }, source === 'LINE' ? 'LINE_CANCEL' : 'ONLINE_CANCEL', 'reservation', rv.id, { reason, preview });
+  return preview;
 }

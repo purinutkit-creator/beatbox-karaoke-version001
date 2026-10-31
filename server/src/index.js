@@ -37,6 +37,9 @@ import fontRoutes, { serveFont } from './routes/fonts.js';
 import integrationRoutes, { terminalPublic } from './routes/integrations.js';
 import roomServiceRoutes, { publicRoom } from './routes/roomService.js';
 import floorRoutes, { publicGuide } from './routes/floors.js';
+import lineRoutes from './routes/line.js';
+import { APP_VERSION } from '@beatbox/shared/version.js';
+import onlineReceiptRoutes from './routes/onlineReceipt.js';
 import smartRoutes from './routes/smart.js';
 
 export function createApp() {
@@ -48,7 +51,8 @@ export function createApp() {
   app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(cors({ origin: config.corsOrigins.length ? config.corsOrigins : true, credentials: true }));
   app.use(compression());
-  app.use(express.json({ limit: '2mb' }));
+  // the LINE webhook is signed over the exact bytes LINE sent: keep them for that one route
+  app.use(express.json({ limit: '2mb', verify: (req, _res, buf) => req.originalUrl.startsWith('/api/public/line/webhook') && (req.rawBody = buf) }));
 
   // rate limiting
   app.use('/api/', rateLimit({ windowMs: 60000, limit: 600, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'มีการเรียกใช้งานถี่เกินไป กรุณาลองใหม่ภายหลัง' } }));
@@ -71,11 +75,13 @@ export function createApp() {
   // the build of the web app this server serves — open screens compare it with their own and reload after an update
   const indexHtml = path.join(config.webDist, 'index.html');
   const build = fs.existsSync(indexHtml) ? fs.readFileSync(indexHtml, 'utf8').match(/index-[\w-]+\.js/)?.[0] || null : null;
-  app.get('/api/version', (_req, res) => res.set('Cache-Control', 'no-store').json({ build }));
+  app.get('/api/version', (_req, res) => res.set('Cache-Control', 'no-store').json({ build, version: APP_VERSION }));
 
   app.use('/api/platform', platformRoutes);
   app.use('/api/public', publicRoom);
   app.use('/api/public', publicGuide);
+  app.use('/api/public', lineRoutes);
+  app.use('/api/public', onlineReceiptRoutes);
   app.use('/api/public', terminalPublic);
   app.use('/api/public', publicRoutes);
   app.use('/api/auth', authRoutes);

@@ -94,6 +94,10 @@ function LineCard({ all, setAll }) {
   const { t } = useT();
   const s = useIntegration('line', all, setAll);
   const [uid, setUid] = useState('');
+  const [hook, setHook] = useState(null);
+  useEffect(() => {
+    api.get('/integrations/line/webhook').then(setHook).catch(() => {});
+  }, [all]);
   const v = s.v;
   return (
     <div className="card">
@@ -106,8 +110,21 @@ function LineCard({ all, setAll }) {
         <Secret label="LINE Login Channel Secret" value={v.loginChannelSecret} onChange={(x) => s.set('loginChannelSecret', x)} />
         <Field label="Callback URL (เว้นว่าง = ค่าเริ่มต้น)"><Input value={v.callbackUrl === all.meta.lineCallbackUrl ? '' : v.callbackUrl || ''} onChange={(e) => s.set('callbackUrl', e.target.value)} placeholder={all.meta.lineCallbackUrl} /></Field>
         <Secret label="Messaging API Channel Access Token (long-lived)" value={v.messagingAccessToken} onChange={(x) => s.set('messagingAccessToken', x)} />
+        <Secret label="Messaging API Channel Secret (สำหรับแชทกับลูกค้า)" value={v.messagingChannelSecret} onChange={(x) => s.set('messagingChannelSecret', x)} />
         <Field label="LINE OA Basic ID"><Input value={v.oaBasicId || ''} onChange={(e) => s.set('oaBasicId', e.target.value)} placeholder="@beatbox" /></Field>
       </div>
+      {hook && (
+        <div className="card flat mt">
+          <b>{t('แชทจองห้องผ่าน LINE OA')}</b> {hook.ready ? <Badge color="#16a34a">{t('พร้อมใช้งาน')}</Badge> : <Badge color="#f97316">{t('ใส่ Access Token และ Channel Secret ก่อน')}</Badge>}
+          <CopyLine label="Webhook URL (ใส่ใน Messaging API Channel)" value={hook.url} />
+          <ol className="small muted" style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+            <li>{t('LINE Developers → Messaging API Channel → แท็บ Messaging API: วาง Webhook URL ด้านบน กด Verify แล้วเปิด "Use webhook"')}</li>
+            <li>{t('LINE Official Account Manager → ตอบกลับอัตโนมัติ: ปิด "ข้อความตอบกลับอัตโนมัติ" (ไม่ให้ตอบซ้อนกับระบบ)')}</li>
+            <li>{t('ตั้งค่าร้าน → แท็บ LINE: เปิด "ส่งข้อความแจ้งเตือนผ่าน LINE OA"')}</li>
+            <li>{t('ลูกค้าพิมพ์เบอร์มือถือที่ใช้จองในแชท LINE OA → เห็นการจอง กดยืนยัน/ยกเลิก รับ QR การจอง และได้รับแจ้งเตือนก่อนเวลา การ์ดห้อง และใบเสร็จ')}</li>
+          </ol>
+        </div>
+      )}
       <div className="small muted mt">{t('เลือกประเภทข้อความที่จะส่งได้ที่แท็บ "LINE"')}</div>
       <Results out={s.test} />
       <Bar s={s}>

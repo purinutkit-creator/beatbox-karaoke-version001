@@ -2,8 +2,10 @@
 // old behaviour (e.g. printing). The server reports its build; when it changes, the screen reloads itself as soon as
 // nobody is using it (or shows a button). A screen with unsaved work (a POS cart) is never reloaded by itself.
 import { useEffect, useRef, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Sparkles } from 'lucide-react';
 import { useT } from './i18n.jsx';
+import { Modal, Button } from '../components/ui.jsx';
+import { APP_VERSION, CHANGELOG } from '@beatbox/shared/version.js';
 
 /** The build this page runs (the main script's hashed file name), null in development. */
 const myBuild = () => (document.querySelector('script[type="module"][src*="/assets/index-"]')?.getAttribute('src') || '').match(/index-[\w-]+\.js/)?.[0] || null;
@@ -19,6 +21,7 @@ const IDLE_MS = 60_000;
 export function UpdateWatcher() {
   const { t } = useT();
   const [fresh, setFresh] = useState(null); // the new build, once the server reports one
+  const [freshVersion, setFreshVersion] = useState(null);
   const lastInput = useRef(Date.now());
   useEffect(() => {
     const mine = myBuild();
@@ -26,7 +29,10 @@ export function UpdateWatcher() {
     const check = async () => {
       try {
         const r = await fetch('/api/version', { cache: 'no-store' }).then((x) => x.json());
-        if (r.build && r.build !== mine) setFresh(r.build);
+        if (r.build && r.build !== mine) {
+          setFresh(r.build);
+          setFreshVersion(r.version || null);
+        }
       } catch {
         /* offline */
       }
@@ -76,7 +82,55 @@ export function UpdateWatcher() {
   if (!fresh) return null;
   return (
     <button type="button" className="update-banner" onClick={() => window.location.reload()}>
-      <RefreshCw size={16} /> {t('ระบบมีเวอร์ชันใหม่ — กดเพื่อโหลดใหม่')}
+      <RefreshCw size={16} /> {freshVersion && freshVersion !== APP_VERSION ? `${t('มีอัปเดตใหม่ เวอร์ชัน')} ${freshVersion} — ${t('กดเพื่อโหลดใหม่')}` : t('ระบบมีเวอร์ชันใหม่ — กดเพื่อโหลดใหม่')}
     </button>
   );
+}
+
+const SEEN = 'bb_seen_version';
+const read = () => {
+  try {
+    return localStorage.getItem(SEEN);
+  } catch {
+    return APP_VERSION; // storage blocked: never nag
+  }
+};
+
+/** "มีการอัปเดตใหม่ เวอร์ชัน X": once per version on the staff screens, with what changed since the last one seen. */
+export function WhatsNew() {
+  const { t } = useT();
+  const [seen, setSeen] = useState(read);
+  if (seen === APP_VERSION) return null;
+  const close = () => {
+    try {
+      localStorage.setItem(SEEN, APP_VERSION);
+    } catch {
+      /* storage blocked */
+    }
+    setSeen(APP_VERSION);
+  };
+  // everything newer than the version this screen saw last (all of it on a screen that never saw one)
+  const at = CHANGELOG.findIndex((c) => c.version === seen);
+  const news = CHANGELOG.slice(0, at === -1 ? 3 : at);
+  return (
+    <Modal
+      title={<span className="row nowrap"><Sparkles size={22} color="#f59e0b" /> {t('มีการอัปเดตใหม่')} {t('เวอร์ชัน')} {APP_VERSION}</span>}
+      onClose={close}
+      footer={<Button variant="primary" onClick={close}>{t('เข้าใจแล้ว')}</Button>}
+    >
+      <div className="whats-new">
+        {news.map((c) => (
+          <div key={c.version}>
+            <div className="whats-new-head"><span className="version-pill">v{c.version}</span> <span className="muted small">{c.date}</span></div>
+            <ul>{c.items.map((x, i) => <li key={i}>{t(x)}</li>)}</ul>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+/** The version in a corner. */
+export function VersionTag({ className = '' }) {
+  return <span className={`version-tag ${className}`}>v{APP_VERSION}</span>;
 }

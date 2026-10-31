@@ -51,22 +51,47 @@ export async function queueLineMessage({ memberId, type, title, message, reserva
   return r.rows[0]?.id || null;
 }
 
-/** Worker: deliver pending LINE messages with retry. */
+/**
+ * Queue LINE messages (text / image / Flex) for one LINE user — a customer who talks with the store's LINE OA. The
+ * store's switch "send LINE messages" still applies. dedupeKey: the same event is sent once.
+ */
+export async function queueLinePush({ lineUserId, type, title, messages, memberId = null, reservationId = null, roomId = null, dedupeKey = null }, client = pool) {
+  if (!lineUserId || !messages?.length) return null;
+  const settings = await getSettings();
+  const off = !settings.line.messagingEnabled;
+  const summary = messages.map((m) => m.altText || m.text).filter(Boolean).join(' | ') || title;
+  const r = await client.query(
+    `INSERT INTO notifications(channel, type, title, message, data, member_id, reservation_id, room_id, status, error, dedupe_key)
+     VALUES ('LINE',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (dedupe_key) DO NOTHING RETURNING id`,
+    [type, title, String(summary).slice(0, 1000), { lineUserId, messages }, memberId, reservationId, roomId, off ? 'SKIPPED' : 'PENDING', off ? 'ปิดการส่งข้อความ LINE ในการตั้งค่า' : null, dedupeKey],
+  );
+  return r.rows[0]?.id || null;
+}
+
+/** Worker: deliver pending LINE messages with retry. A row is taken (SENDING) first, so it is never sent twice. */
 export async function dispatchPendingMessages() {
   const rows = (
-    await pool.query(`SELECT * FROM notifications WHERE channel = 'LINE' AND status = 'PENDING' AND attempts < 5 ORDER BY id LIMIT 20`)
+    await pool.query(
+      `UPDATE notifications SET status = 'SENDING' WHERE id IN (
+         SELECT id FROM notifications WHERE channel = 'LINE' AND status = 'PENDING' AND attempts < 5 ORDER BY id LIMIT 20 FOR UPDATE SKIP LOCKED
+       ) RETURNING *`,
+    )
   ).rows;
-  if (rows.length && !(await lineMessaging.enabled())) {
+  if (!rows.length) return;
+  if (!(await lineMessaging.enabled())) {
     await pool.query(`UPDATE notifications SET status = 'SKIPPED', error = 'ยังไม่ได้ตั้งค่า LINE Messaging API' WHERE id = ANY($1)`, [rows.map((n) => n.id)]);
     return;
   }
-  for (const n of rows) {
+  for (const n of rows.sort((x, y) => Number(x.id) - Number(y.id))) {
     try {
-      await lineMessaging.push(n.data.lineUserId, n.message);
+      if (!n.data?.lineUserId) throw new Error('ไม่มีผู้รับ LINE');
+      if (n.data.messages?.length) await lineMessaging.pushMessages(n.data.lineUserId, n.data.messages);
+      else await lineMessaging.push(n.data.lineUserId, n.message);
       await pool.query(`UPDATE notifications SET status = 'SENT', sent_at = now(), attempts = attempts + 1, error = NULL WHERE id = $1`, [n.id]);
     } catch (e) {
       const attempts = n.attempts + 1;
-      await pool.query(`UPDATE notifications SET status = $3, attempts = $2, error = $4 WHERE id = $1`, [n.id, attempts, attempts >= 5 ? 'FAILED' : 'PENDING', String(e.message).slice(0, 500)]);
+      const final = attempts >= 5 || !n.data?.lineUserId || /\(400\)/.test(e.message); // a refused message never gets better
+      await pool.query(`UPDATE notifications SET status = $3, attempts = $2, error = $4 WHERE id = $1`, [n.id, attempts, final ? 'FAILED' : 'PENDING', String(e.message).slice(0, 500)]);
     }
   }
 }
