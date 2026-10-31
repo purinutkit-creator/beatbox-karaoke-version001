@@ -82,12 +82,12 @@ export function bookingBubble(rv, settings) {
       sep(),
       txt(longDate(rv.start_at), { size: 'sm', color: '#444444', margin: 'lg' }),
       txt(timeRange(rv), { size: 'xl', weight: 'bold', color: PURPLE }),
-      txt(`⏳ ${timeUntil(rv.start_at)}`, { size: 'sm', color: '#ea580c', weight: 'bold' }),
       { type: 'box', layout: 'vertical', spacing: 'sm', margin: 'md', contents: [row('ระยะเวลา', minutesText(minutes)), row('จำนวน', `${rv.guest_count || 1} คน`), row('ชื่อผู้จอง', rv.customer_name), row('เบอร์โทร', rv.phone), row('เลขที่จอง', rv.booking_no)] },
     ],
     buttons: [
       open && !confirmed ? postBtn('✅ ยืนยันการจอง', `a=confirm&r=${rv.id}`, 'ยืนยันการจอง', 'primary', '#16a34a') : null,
       open && confirmed ? postBtn('🎫 แสดง QR การจอง', `a=pass&r=${rv.id}`, 'ขอ QR การจอง', 'primary', PURPLE) : null,
+      open ? uriBtn('⏱️ ดูเวลาก่อนถึงเวลาของคุณ', passPage(rv)) : null,
       uriBtn('🗺️ นำทาง Google Maps', mapsUrl(settings)),
       uriBtn(`📞 โทรหาร้าน ${settings.store?.phone || ''}`.trim(), telUrl(settings.store?.phone)),
       open && ['PENDING', 'CONFIRMED', 'DEPOSIT_PAID'].includes(rv.status) ? postBtn('ยกเลิกการจอง', `a=cancel&r=${rv.id}`, 'ยกเลิกการจอง', 'link', '#dc2626') : null,
@@ -101,30 +101,10 @@ export function bookingsMessage(rows, settings) {
   return flex(`การจอง ${first.room_name} ${fmtDate(first.start_at)} ${timeRange(first)}`, bubbles.length === 1 ? bubbles[0] : { type: 'carousel', contents: bubbles });
 }
 
-/** The booking pass after confirming: the picture to save and a card with the details. */
-/** "อีก 2 วัน 3 ชม. 15 นาที" until the booking starts, as it is when the message is sent. */
-export function timeUntil(at, now = Date.now()) {
-  let m = Math.max(0, Math.ceil((new Date(at) - now) / 60000));
-  if (m <= 0) return 'ถึงเวลาแล้ว';
-  const d = Math.floor(m / 1440);
-  m -= d * 1440;
-  const h = Math.floor(m / 60);
-  m -= h * 60;
-  return `อีก ${[d && `${d} วัน`, h && `${h} ชม.`, m && `${m} นาที`].filter(Boolean).join(' ')}`;
-}
-/** The live countdown page (days, hours, minutes, seconds) with the booking QR / barcode. */
+/** The live countdown page (days, hours, minutes, seconds) with the booking QR / barcode — LINE messages cannot tick. */
 export const passPage = (rv) => link(`/pass/${rv.check_in_token}`);
 
-const countdownBox = (rv) => ({
-  type: 'box',
-  layout: 'vertical',
-  backgroundColor: '#f5f3ff',
-  cornerRadius: 'lg',
-  paddingAll: 'md',
-  contents: [txt('⏳ นับถอยหลังถึงเวลาของคุณ', { size: 'xs', color: MUTED, align: 'center' }), txt(timeUntil(rv.start_at), { size: 'xl', weight: 'bold', color: PURPLE, align: 'center' })],
-});
-
-/** The booking pass after confirming: one card — the QR + barcode picture, the time left and the live countdown. */
+/** The booking pass after confirming: one card — the QR + barcode picture and a button to the live countdown. */
 export function passMessages(rv, settings, codeUrl, { justConfirmed = false } = {}) {
   const img = httpsUrl(codeUrl);
   const card = bubble({
@@ -136,17 +116,16 @@ export function passMessages(rv, settings, codeUrl, { justConfirmed = false } = 
       txt('บัตรเข้าใช้ห้อง', { size: 'xs', color: PURPLE, weight: 'bold' }),
       txt(`${rv.room_name} · ${timeRange(rv)}`, { size: 'lg', weight: 'bold' }),
       txt(longDate(rv.start_at), { size: 'sm', color: '#444444' }),
-      countdownBox(rv),
       txt(`แสดง QR หรือบาร์โค้ดนี้ที่เคาน์เตอร์ · ${rv.booking_no}`, { size: 'sm', color: MUTED }),
     ],
     buttons: [
-      uriBtn('⏱️ นับถอยหลังแบบสด + QR', passPage(rv), 'primary', PURPLE),
+      uriBtn('⏱️ ดูเวลาก่อนถึงเวลาของคุณ', passPage(rv), 'primary', PURPLE),
       img ? uriBtn('🔍 เปิดรูป QR เต็ม (บันทึกรูป)', img) : null,
       uriBtn('🗺️ นำทาง Google Maps', mapsUrl(settings)),
       uriBtn('📞 โทรหาร้าน', telUrl(settings.store?.phone)),
     ],
   });
-  return [flex(`บัตรเข้าใช้ห้อง ${rv.booking_no} ${timeUntil(rv.start_at)}`, card)];
+  return [flex(`บัตรเข้าใช้ห้อง ${rv.booking_no} ${rv.room_name} ${fmtTime(rv.start_at)} น.`, card)];
 }
 
 export function reminderMessage(rv, minutes, settings) {
@@ -162,14 +141,13 @@ export function reminderMessage(rv, minutes, settings) {
         txt(`${rv.customer_name} · ${rv.guest_count || 1} คน · ${rv.booking_no}`, { size: 'sm', color: MUTED }),
         txt(now ? 'เชิญที่เคาน์เตอร์ แสดง QR การจองเพื่อเข้าห้องได้เลย' : 'แสดง QR การจองที่เคาน์เตอร์เมื่อมาถึง', { size: 'sm', color: '#444444' }),
       ],
-      buttons: [uriBtn('⏱️ นับถอยหลัง + QR การจอง', passPage(rv), 'primary', PURPLE), uriBtn('🗺️ นำทาง Google Maps', mapsUrl(settings)), uriBtn('📞 โทรหาร้าน', telUrl(settings.store?.phone))],
+      buttons: [uriBtn('⏱️ ดูเวลาก่อนถึงเวลาของคุณ', passPage(rv), 'primary', PURPLE), uriBtn('🗺️ นำทาง Google Maps', mapsUrl(settings)), uriBtn('📞 โทรหาร้าน', telUrl(settings.store?.phone))],
     }),
   );
 }
 
 /** The room is open: when it ends (big), and the live page (countdown, order food, report a problem), the way. */
 export function roomOpenMessage(s, settings) {
-  const left = Math.max(0, Math.round((new Date(s.scheduled_end_at) - Date.now()) / 60000));
   const page = link(`/order/${s.order_token}`);
   return flex(
     `ห้อง ${s.room_name} เปิดแล้ว หมดเวลา ${fmtTime(s.scheduled_end_at)} น.`,
@@ -177,12 +155,11 @@ export function roomOpenMessage(s, settings) {
       heroUrl: s.room_image,
       body: [
         txt(`🎤 ห้อง ${s.room_name} พร้อมแล้ว`, { size: 'lg', weight: 'bold', color: PURPLE }),
-        { type: 'box', layout: 'vertical', backgroundColor: '#f5f3ff', cornerRadius: 'lg', paddingAll: 'lg', contents: [txt('เวลาคงเหลือ', { size: 'sm', color: MUTED, align: 'center' }), txt(minutesText(left), { size: '3xl', weight: 'bold', color: '#111111', align: 'center' }), txt(`หมดเวลา ${fmtTime(s.scheduled_end_at)} น.`, { size: 'md', weight: 'bold', color: '#dc2626', align: 'center' })] },
+        { type: 'box', layout: 'vertical', backgroundColor: '#f5f3ff', cornerRadius: 'lg', paddingAll: 'lg', contents: [txt('หมดเวลา', { size: 'sm', color: MUTED, align: 'center' }), txt(`${fmtTime(s.scheduled_end_at)} น.`, { size: '3xl', weight: 'bold', color: '#dc2626', align: 'center' })] },
         { type: 'box', layout: 'vertical', spacing: 'sm', contents: [row('เริ่ม', `${fmtTime(s.started_at)} น.`), row('จำนวน', `${s.guest_count || 1} คน`), row('แพ็กเกจ', s.package_name || 'รายชั่วโมง'), row('ชื่อ', s.customer_name)] },
-        txt('กด "ดูเวลานับถอยหลัง" เพื่อดูเวลาแบบสด', { size: 'xs', color: MUTED }),
       ],
       buttons: [
-        uriBtn('⏱️ ดูเวลานับถอยหลัง', page, 'primary', PURPLE),
+        uriBtn('⏱️ ดูเวลาคงเหลือ', page, 'primary', PURPLE),
         uriBtn('🍔 สั่งอาหาร / เครื่องดื่ม', `${page}?tab=menu`, 'primary', '#ea580c'),
         uriBtn('🛠️ แจ้งปัญหา / เรียกพนักงาน', `${page}?issue=1`),
         s.guide_token ? uriBtn('🧭 ทางไปห้อง', link(`/guide/${s.guide_token}`)) : null,
@@ -197,7 +174,7 @@ export function timeLeftMessage(s, minutes) {
     `ห้อง ${s.room_name} เหลือเวลา ${minutes} นาที`,
     bubble({
       body: [txt(`⏳ เหลือเวลา ${minutes} นาที`, { size: 'xl', weight: 'bold', color: '#dc2626' }), txt(`ห้อง ${s.room_name} หมดเวลา ${fmtTime(s.scheduled_end_at)} น.`, { size: 'md', weight: 'bold' }), txt('ต้องการเพิ่มเวลา แจ้งพนักงานได้เลย', { size: 'sm', color: MUTED })],
-      buttons: [uriBtn('⏱️ ดูเวลานับถอยหลัง', page, 'primary', PURPLE), uriBtn('🙋 ขอเพิ่มเวลา / เรียกพนักงาน', `${page}?issue=1`)],
+      buttons: [uriBtn('⏱️ ดูเวลาคงเหลือ', page, 'primary', PURPLE), uriBtn('🙋 ขอเพิ่มเวลา / เรียกพนักงาน', `${page}?issue=1`)],
     }),
   );
 }

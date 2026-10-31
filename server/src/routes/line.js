@@ -192,7 +192,7 @@ async function onPostback(ev, userId, settings) {
     if (!rv.customer_confirmed_at) {
       await tx(async (c) => {
         await c.query('UPDATE reservations SET customer_confirmed_at = now(), updated_at = now() WHERE id = $1 AND customer_confirmed_at IS NULL', [rv.id]);
-        // the pass card shows the time left: reminders for marks already reached count as sent (not "it is time")
+        // they have the pass card in hand right now: reminders for marks already reached count as sent (not "it is time")
         const left = minutesLeft(rv.start_at);
         const reached = reminderMarks(settings).filter((m) => m > 0 && m >= left);
         if (reached.length) await c.query(`UPDATE reservations SET line_reminders = (SELECT jsonb_agg(DISTINCT x) FROM jsonb_array_elements(line_reminders || $2::jsonb) x) WHERE id = $1`, [rv.id, JSON.stringify(reached)]);

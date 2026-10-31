@@ -143,7 +143,8 @@ test('confirm → booking pass (QR + barcode picture); only the tied LINE user c
   const text = allText(reply);
   assert.equal(reply.messages.length, 1, 'one message: the pass card (the QR is not sent twice)');
   assert.match(text, /ยืนยันการจองเรียบร้อย/);
-  assert.match(text, /อีก \d+ นาที/);
+  assert.doesNotMatch(text, /อีก \d+ นาที/, 'no frozen countdown in LINE');
+  assert.match(text, /ดูเวลาก่อนถึงเวลาของคุณ/);
   assert.match(text, new RegExp(`/pass/${rv.check_in_token}`));
   const page = await api('GET', `/public/line/booking/${rv.check_in_token}`, null, { auth: false });
   assert.equal(page.status, 200);
@@ -158,9 +159,9 @@ test('confirm → booking pass (QR + barcode picture); only the tied LINE user c
   assert.ok(after.customer_confirmed_at, 'the staff side sees the customer confirmed');
 });
 
-test('reminders: none right after confirming (the pass said the time left), then "it is time" at the start', async () => {
+test('reminders: none right after confirming (the pass card was just sent), then "it is time" at the start', async () => {
   await tick();
-  assert.equal(pushesTo('Uaaa').length, 0, 'the 15-minute mark was already covered by the pass card');
+  assert.equal(pushesTo('Uaaa').length, 0, 'the 15-minute mark is covered by the pass card just sent');
   // the start arrives
   await db(`UPDATE reservations SET start_at = now() - interval '1 minute', end_at = now() + interval '59 minutes' WHERE id = $1`, [rv.id]);
   await tick();

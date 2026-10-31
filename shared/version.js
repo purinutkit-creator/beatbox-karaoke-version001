@@ -1,8 +1,16 @@
 // The app version people see (corner tag, "new version" pop-up). Every release that goes live adds 0.1 (2.0 → 2.1 →
 // 2.2 …) with a line or two of what changed at the top of CHANGELOG; the screen shows what is new once per version.
-export const APP_VERSION = '2.4';
+export const APP_VERSION = '2.5';
 
 export const CHANGELOG = [
+  {
+    version: '2.5',
+    date: '2026-10-31',
+    items: [
+      'ริชเมนู: เลือกชุดสี สีพื้นหลัง สีปุ่ม สีตัวอักษร สีไอคอน ความเข้มของปุ่ม ฟอนต์ และรูปแบบปุ่มได้ (บันทึกแบบไว้ใช้ครั้งต่อไป)',
+      'LINE: เอาเวลานับถอยหลังที่ไม่เดินออกจากข้อความ ใช้ปุ่ม "ดูเวลาก่อนถึงเวลาของคุณ" / "ดูเวลาคงเหลือ" ที่เปิดหน้านับเวลาแบบสดแทน',
+    ],
+  },
   {
     version: '2.4',
     date: '2026-10-31',
