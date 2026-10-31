@@ -712,7 +712,8 @@ r.post('/auth/profile', async (req, res) => {
 r.get('/auth/line/start', async (req, res) => {
   const redirect = String(req.query.redirect || '/book/account');
   if (!(await lineLogin.enabled())) {
-    if (config.isProd) throw badRequest('ยังไม่ได้ตั้งค่า LINE Login');
+    // not set up (e.g. the channel secret is missing): back to the login page with a message, not a bare 400
+    if (config.isProd) return res.redirect(`/book/login?error=line_off&redirect=${encodeURIComponent(redirect)}`);
     return res.redirect(`/book/line-demo?redirect=${encodeURIComponent(redirect)}`);
   }
   const nonce = randomToken(12);

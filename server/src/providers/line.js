@@ -46,7 +46,16 @@ export const lineLogin = {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'client_credentials', client_id: c.loginChannelId, client_secret: c.loginChannelSecret }),
     });
-    if (r.ok) return { ok: true, message: 'LINE Login: Channel ID / Secret ถูกต้อง' };
+    if (!r.ok) return { ok: false, message: `LINE Login ตอบกลับ ${r.status}: ${(await r.text()).slice(0, 200)}` };
+    // the ID / secret pair is also accepted for a Messaging API channel: open the real login page the way a customer
+    // does — LINE answers 400 when the channel is not a LINE Login channel or the callback URL is not registered
+    const page = await fetch(await this.authorizeUrl('test', 'test'), { redirect: 'manual' }).catch(() => null);
+    if (page && page.status === 400) {
+      const body = (await page.text()).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+      const why = /redirect_uri/i.test(body) ? `Callback URL ยังไม่ได้ลงทะเบียนใน Channel นี้ — ใส่ ${c.callbackUrl} ที่แท็บ LINE Login → Callback URL` : /client_id/i.test(body) ? `Channel ID ${c.loginChannelId} ไม่ใช่ Channel แบบ LINE Login (อาจเป็น Channel ของ Messaging API)` : body.slice(0, 160);
+      return { ok: false, message: `LINE Login หน้าเข้าสู่ระบบตอบ 400: ${why}` };
+    }
+    if (r.ok) return { ok: true, message: 'LINE Login: Channel ID / Secret และ Callback URL ถูกต้อง' };
     return { ok: false, message: `LINE Login ตอบกลับ ${r.status}: ${(await r.text()).slice(0, 200)}` };
   },
 };

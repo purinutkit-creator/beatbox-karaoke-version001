@@ -2998,4 +2998,6 @@ export const EN = {
   "ปุ่มแรก (จองห้อง)": "First button (Book a room)",
   "เน้นให้เด่นกว่า": "Make it stand out",
   "ค่าเริ่มต้น": "Defaults",
+  "ร้านยังตั้งค่าเข้าสู่ระบบด้วย LINE ไม่ครบ — เข้าสู่ระบบด้วยเบอร์โทรได้ตามปกติ": "The store has not finished setting up LINE login — sign in with your phone number as usual",
+  "ทดสอบการเชื่อมต่อ LINE Login ตรวจหน้าเข้าสู่ระบบจริง และบอกว่า Channel ID หรือ Callback URL ผิด": "The LINE Login connection test opens the real login page and says whether the Channel ID or Callback URL is wrong",
 };
