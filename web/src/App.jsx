@@ -13,6 +13,7 @@ const RoomGuide = lazy(() => import('./guide/RoomGuide.jsx'));
 const OnlineReceipt = lazy(() => import('./receipt/OnlineReceipt.jsx'));
 const BookingPass = lazy(() => import('./guide/BookingPass.jsx'));
 const PrivacyPolicy = lazy(() => import('./guide/PrivacyPolicy.jsx'));
+const TermsOfUse = lazy(() => import('./guide/TermsOfUse.jsx'));
 
 function LangBoot({ children }) {
   return children;
@@ -52,6 +53,8 @@ export default function App() {
                     <Route path="/pass/:token" element={<BookingPass />} />
                     <Route path="/privacy-policy-lineofficialaccount" element={<PrivacyPolicy />} />
                     <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+                    <Route path="/terms-of-use-lineofficialaccount" element={<TermsOfUse />} />
+                    <Route path="/terms-of-use" element={<TermsOfUse />} />
                     <Route
                       path="/*"
                       element={

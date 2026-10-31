@@ -89,7 +89,11 @@ function en(s) {
   ];
 }
 
-export default function PrivacyPolicy() {
+/**
+ * A legal page of the store (privacy policy, terms of use): header with the store, Thai / English switch, numbered
+ * sections and the store's contacts last. content(info, settings, isEn) → { title, subtitle, updated, sections }.
+ */
+export function LegalPage({ content }) {
   const { lang, setLang } = useT();
   const [s, setS] = useState(null);
   useEffect(() => {
@@ -99,7 +103,7 @@ export default function PrivacyPolicy() {
   const store = s.store || {};
   const info = { name: store.name || 'BEATBOX Karaoke', oa: s.booking?.lineOaUrl ? s.booking.lineOaUrl.replace(/^https?:\/\/line\.me\/R\/ti\/p\//, '') : '' };
   const isEn = lang === 'en';
-  const sections = isEn ? en(info) : th(info);
+  const doc = content(info, s, isEn);
   const contact = [store.name, store.address, store.phone && `${isEn ? 'Tel.' : 'โทร'} ${store.phone}`, s.booking?.contactEmail && `${isEn ? 'E-mail' : 'อีเมล'} ${s.booking.contactEmail}`, s.booking?.lineOaUrl && `LINE: ${s.booking.lineOaUrl}`].filter(Boolean);
   return (
     <div className="rg pp">
@@ -107,25 +111,39 @@ export default function PrivacyPolicy() {
         {store.logoUrl ? <img src={store.logoUrl} alt="" /> : <div className="brand-logo"><Mic2 size={22} /></div>}
         <div className="grow">
           <div className="rg-store">{store.name}</div>
-          <div className="rg-muted">{isEn ? 'Privacy Policy — LINE Official Account & website' : 'นโยบายความเป็นส่วนตัว — LINE Official Account และเว็บไซต์'}</div>
+          <div className="rg-muted">{doc.subtitle}</div>
         </div>
         <button type="button" className="btn sm" onClick={() => setLang(isEn ? 'th' : 'en')}><Globe size={16} /> {isEn ? 'ไทย' : 'EN'}</button>
       </div>
       <div className="rg-card pp-body">
-        <h1>{isEn ? 'Privacy Policy' : 'นโยบายความเป็นส่วนตัว'}</h1>
-        <p className="rg-muted">{isEn ? `Last updated ${UPDATED_EN}` : `ปรับปรุงล่าสุด ${UPDATED}`}</p>
-        {sections.map(([title, items]) => (
+        <h1>{doc.title}</h1>
+        <p className="rg-muted">{isEn ? `Last updated ${doc.updated.en}` : `ปรับปรุงล่าสุด ${doc.updated.th}`}</p>
+        {doc.sections.map(([title, items]) => (
           <section key={title}>
             <h2>{title}</h2>
             {items.length === 1 ? <p>{items[0]}</p> : <ul>{items.map((x) => <li key={x}>{x}</li>)}</ul>}
           </section>
         ))}
         <section>
-          <h2>{isEn ? '10. Contact us' : '10. ติดต่อเรา'}</h2>
-          <p>{isEn ? 'For questions or requests about your personal data, contact:' : 'หากมีคำถามหรือต้องการใช้สิทธิเกี่ยวกับข้อมูลส่วนบุคคล ติดต่อ:'}</p>
+          <h2>{`${doc.sections.length + 1}. ${isEn ? 'Contact us' : 'ติดต่อเรา'}`}</h2>
+          <p>{doc.contactNote}</p>
           <ul>{contact.map((x) => <li key={x}>{x}</li>)}</ul>
         </section>
       </div>
     </div>
+  );
+}
+
+export default function PrivacyPolicy() {
+  return (
+    <LegalPage
+      content={(info, _s, isEn) => ({
+        title: isEn ? 'Privacy Policy' : 'นโยบายความเป็นส่วนตัว',
+        subtitle: isEn ? 'Privacy Policy — LINE Official Account & website' : 'นโยบายความเป็นส่วนตัว — LINE Official Account และเว็บไซต์',
+        updated: { th: UPDATED, en: UPDATED_EN },
+        sections: isEn ? en(info) : th(info),
+        contactNote: isEn ? 'For questions or requests about your personal data, contact:' : 'หากมีคำถามหรือต้องการใช้สิทธิเกี่ยวกับข้อมูลส่วนบุคคล ติดต่อ:',
+      })}
+    />
   );
 }

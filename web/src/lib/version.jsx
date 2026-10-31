@@ -55,7 +55,7 @@ export function UpdateWatcher() {
     if (!fresh) return;
     const p = window.location.pathname;
     // customer-facing pages in the middle of a booking / order only get the button
-    const auto = !['/book', '/order', '/guide', '/pass', '/r/', '/privacy'].some((x) => p.startsWith(x));
+    const auto = !['/book', '/order', '/guide', '/pass', '/r/', '/privacy', '/terms'].some((x) => p.startsWith(x));
     // reload by itself at most once per new build (while old and new servers overlap during an update the page could
     // still get the old one — then the button stays instead of reloading again and again)
     let tried = null;
