@@ -1,8 +1,18 @@
 // The app version people see (corner tag, "new version" pop-up). Every release that goes live adds 0.1 (2.0 → 2.1 →
 // 2.2 …) with a line or two of what changed at the top of CHANGELOG; the screen shows what is new once per version.
-export const APP_VERSION = '2.2';
+export const APP_VERSION = '2.3';
 
 export const CHANGELOG = [
+  {
+    version: '2.3',
+    date: '2026-10-31',
+    items: [
+      'แก้แจ้งเตือน LINE ก่อนถึงเวลา 15 / 5 นาที ที่ไม่ส่ง และเพิ่มแจ้ง "ถึงเวลาของคุณแล้ว" ตอนถึงเวลาจอง',
+      'สมาชิกเชื่อมบัญชีกับ LINE ได้จากแชท (ปุ่ม "สมาชิก") แล้วดูบัตรสมาชิก แต้ม และการจองของตัวเองใน LINE',
+      'ริชเมนู 3 ปุ่ม: จองห้อง · ตรวจสอบการจอง (พิมพ์เบอร์โทรในแชท) · สมาชิก',
+      'เซิร์ฟเวอร์ไม่หลับ เพื่อให้แจ้งเตือนส่งตรงเวลา',
+    ],
+  },
   {
     version: '2.2',
     date: '2026-10-31',

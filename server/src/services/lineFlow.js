@@ -20,23 +20,36 @@ const target = async (lineUserId, memberId) => lineUserId || (await memberLine(m
 
 const storeLink = (path, settings) => `${config.publicUrl}${path}${path.includes('?') ? '&' : '?'}store=${encodeURIComponent(settings.store?.slug || '')}`;
 
+/** The reminder marks of the store: minutes before the start (15, 5 …) and 0 = "it is time" at the start. */
+export function reminderMarks(settings) {
+  const marks = [...new Set((settings.line.remindMinutes || []).map(Number).filter((m) => m > 0 && m <= 180))];
+  if (settings.line.remindAtStart !== false) marks.push(0);
+  return marks.sort((a, b) => b - a);
+}
+
+/** Minutes until the start (0 once it has started). */
+export const minutesLeft = (startAt) => Math.max(0, Math.ceil((new Date(startAt) - Date.now()) / 60000));
+
 async function reminders(settings) {
-  const marks = [...new Set((settings.line.remindMinutes || []).map(Number).filter((m) => m > 0 && m <= 180))].sort((a, b) => b - a);
+  const marks = reminderMarks(settings);
   if (!marks.length) return;
+  // up to 10 minutes after the start for the "it is time" message (a booking not checked in yet)
   const rows = await many(
-    `${BOOKING_ROWS} WHERE rv.status = ANY($1) AND rv.start_at > now() AND rv.start_at <= now() + ($2 || ' minutes')::interval
+    `${BOOKING_ROWS} WHERE rv.status = ANY($1) AND rv.start_at > now() - interval '10 minutes' AND rv.start_at <= now() + ($2 || ' minutes')::interval
        AND (rv.line_user_id IS NOT NULL OR rv.member_id IS NOT NULL)`,
-    [ACTIVE_BOOKING, String(marks[0])],
+    [ACTIVE_BOOKING, String(Math.max(marks[0], 1))],
   );
   for (const rv of rows) {
-    const left = Math.max(1, Math.ceil((new Date(rv.start_at) - Date.now()) / 60000));
+    const left = minutesLeft(rv.start_at);
     const sent = (rv.line_reminders || []).map(Number);
     const due = marks.filter((m) => m >= left && !sent.includes(m));
     if (!due.length) continue;
+    // nobody to tell yet (e.g. the booking is tied to a LINE chat a minute later): nothing is marked, so it goes out then
+    const to = await target(rv.line_user_id, rv.member_id);
+    if (!to) continue;
     // one message with the real time left; every mark at or above it counts as sent (no "15" and "5" together)
     await pool.query('UPDATE reservations SET line_reminders = $2 WHERE id = $1', [rv.id, JSON.stringify([...new Set([...sent, ...marks.filter((m) => m >= left)])])]);
-    const to = await target(rv.line_user_id, rv.member_id);
-    if (to) await queueLinePush({ lineUserId: to, type: 'LINE_REMINDER', title: `อีก ${left} นาที ถึงเวลาจอง`, messages: [reminderMessage(rv, left, settings, codePath(rv))], memberId: rv.member_id, reservationId: rv.id, dedupeKey: `line-remind:${rv.id}:${Math.min(...due)}` });
+    await queueLinePush({ lineUserId: to, type: 'LINE_REMINDER', title: left > 0 ? `อีก ${left} นาที ถึงเวลาจอง` : 'ถึงเวลาจองแล้ว', messages: [reminderMessage(rv, left, settings, codePath(rv))], memberId: rv.member_id, reservationId: rv.id, dedupeKey: `line-remind:${rv.id}:${Math.min(...due)}` });
   }
 }
 

@@ -149,17 +149,18 @@ export function passMessages(rv, settings, codeUrl, { justConfirmed = false } = 
   return [flex(`บัตรเข้าใช้ห้อง ${rv.booking_no} ${timeUntil(rv.start_at)}`, card)];
 }
 
-export function reminderMessage(rv, minutes, settings, codeUrl) {
+export function reminderMessage(rv, minutes, settings) {
+  const now = minutes <= 0;
   return flex(
-    `อีก ${minutes} นาที ถึงเวลาเข้าห้อง ${rv.room_name}`,
+    now ? `ถึงเวลาของคุณแล้ว ห้อง ${rv.room_name}` : `อีก ${minutes} นาที ถึงเวลาเข้าห้อง ${rv.room_name}`,
     bubble({
       heroUrl: rv.room_image,
       body: [
-        txt(`⏰ อีก ${minutes} นาที ถึงเวลาของคุณ`, { size: 'lg', weight: 'bold', color: '#ea580c' }),
+        txt(now ? '🎤 ถึงเวลาของคุณแล้ว!' : `⏰ อีก ${minutes} นาที ถึงเวลาของคุณ`, { size: 'lg', weight: 'bold', color: now ? '#16a34a' : '#ea580c' }),
         txt(rv.room_name, { size: 'xxl', weight: 'bold' }),
         txt(timeRange(rv), { size: 'xl', weight: 'bold', color: PURPLE }),
         txt(`${rv.customer_name} · ${rv.guest_count || 1} คน · ${rv.booking_no}`, { size: 'sm', color: MUTED }),
-        txt('แสดง QR การจองที่เคาน์เตอร์เมื่อมาถึง', { size: 'sm', color: '#444444' }),
+        txt(now ? 'เชิญที่เคาน์เตอร์ แสดง QR การจองเพื่อเข้าห้องได้เลย' : 'แสดง QR การจองที่เคาน์เตอร์เมื่อมาถึง', { size: 'sm', color: '#444444' }),
       ],
       buttons: [uriBtn('⏱️ นับถอยหลัง + QR การจอง', passPage(rv), 'primary', PURPLE), uriBtn('🗺️ นำทาง Google Maps', mapsUrl(settings)), uriBtn('📞 โทรหาร้าน', telUrl(settings.store?.phone))],
     }),
@@ -241,4 +242,45 @@ export function helpMessage(settings, text) {
     text: text || `สวัสดีค่ะ ${settings.store?.name || ''} ยินดีให้บริการ 🎤\nพิมพ์เบอร์มือถือที่ใช้จอง (เช่น 0812345678) เพื่อดูการจองของคุณ`,
     quickReply: { items: [{ type: 'action', action: { type: 'uri', label: 'จองห้อง', uri: link(`/book?store=${encodeURIComponent(settings.store?.slug || '')}`) } }, ...(telUrl(settings.store?.phone) ? [{ type: 'action', action: { type: 'uri', label: 'โทรหาร้าน', uri: telUrl(settings.store?.phone) } }] : [])] },
   };
+}
+
+const TIER = { color: PURPLE };
+/** The member's card in LINE: QR + barcode of the member number on top, name, tier, points, links. */
+export function memberMessage(m, settings, { codeUrl, pointsUrl, rewardsUrl, bookUrl }) {
+  return flex(
+    `บัตรสมาชิก ${m.first_name} · ${Number(m.points_balance)} แต้ม`,
+    bubble({
+      heroUrl: codeUrl,
+      heroRatio: '4:5',
+      heroMode: 'fit',
+      body: [
+        { type: 'box', layout: 'horizontal', contents: [txt(settings.store?.name || 'BEATBOX', { size: 'xs', color: PURPLE, weight: 'bold', flex: 6 }), txt(m.tier_name || 'Member', { size: 'xs', color: m.tier_color || TIER.color, weight: 'bold', align: 'end', flex: 4 })] },
+        txt(`${m.first_name} ${m.last_name || ''}`.trim(), { size: 'xl', weight: 'bold' }),
+        txt(`เลขสมาชิก ${m.member_code}`, { size: 'sm', color: MUTED }),
+        { type: 'box', layout: 'vertical', backgroundColor: '#f0fdf4', cornerRadius: 'lg', paddingAll: 'md', contents: [txt('แต้มสะสม', { size: 'xs', color: MUTED, align: 'center' }), txt(`${Number(m.points_balance).toLocaleString('th-TH')} แต้ม`, { size: 'xxl', weight: 'bold', color: '#16a34a', align: 'center' })] },
+        txt('แสดง QR หรือบาร์โค้ดนี้ที่เคาน์เตอร์เพื่อสะสมแต้ม', { size: 'xs', color: MUTED }),
+      ],
+      buttons: [
+        uriBtn('⭐ แต้มและประวัติการใช้บริการ', pointsUrl, 'primary', '#16a34a'),
+        uriBtn('🎁 แลกของรางวัล', rewardsUrl),
+        uriBtn('🎤 จองห้อง', bookUrl),
+        postBtn('ตรวจสอบการจองของฉัน', 'a=check', 'ตรวจสอบการจอง', 'link'),
+      ],
+    }),
+  );
+}
+
+/** Not a member on this LINE yet: link (sign in) or sign up — the link carries this LINE user. */
+export function linkMessage(url, settings) {
+  return flex(
+    'เชื่อมบัญชีสมาชิกกับ LINE',
+    bubble({
+      body: [
+        txt('👤 สมาชิก ' + (settings.store?.name || ''), { size: 'lg', weight: 'bold', color: PURPLE }),
+        txt('เชื่อมบัญชีสมาชิกกับ LINE นี้ เพื่อดูแต้ม บัตรสมาชิก และรับแจ้งเตือนการจองทาง LINE', { size: 'sm', color: '#444444' }),
+        txt('เป็นสมาชิกแล้ว: เข้าสู่ระบบด้วยเบอร์โทรและรหัสผ่าน · ยังไม่เป็นสมาชิก: สมัครได้ในหน้าเดียวกัน', { size: 'xs', color: MUTED }),
+      ],
+      buttons: [uriBtn('🔗 เชื่อมบัญชี / สมัครสมาชิก', url, 'primary', PURPLE)],
+    }),
+  );
 }

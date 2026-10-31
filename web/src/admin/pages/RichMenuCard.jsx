@@ -1,5 +1,6 @@
-// LINE rich menu (the menu under the chat) "เว็บไซต์จองห้อง": a picture drawn here in the store's colours (or the
-// store's own picture, 2500 × 843) — tapping anywhere on it opens the booking website.
+// LINE rich menu (the menu under the chat): three buttons — จองห้อง (the booking website), ตรวจสอบการจอง (the chat
+// asks for the phone number) and สมาชิก (member card, or linking the member account) — on a picture drawn here in the
+// store's colours, or the store's own picture (2500 × 843 in three equal columns).
 import { useEffect, useRef, useState } from 'react';
 import { LayoutPanelTop, Upload, Trash2, Send } from 'lucide-react';
 import { Button, Field, Input, Badge, useToast, useDialog } from '../../components/ui.jsx';
@@ -20,18 +21,47 @@ function roundRect(g, x, y, w, h, r) {
   g.closePath();
 }
 
-const loadImg = (src) =>
-  new Promise((ok) => {
-    if (!src) return ok(null);
-    const i = new Image();
-    i.crossOrigin = 'anonymous'; // a picture from elsewhere without permission is left out (the menu still works)
-    i.onload = () => ok(i);
-    i.onerror = () => ok(null);
-    i.src = src;
-  });
+// simple white icons drawn on the picture (no icon font needed)
+function iconCalendar(g, cx, cy, s) {
+  g.lineWidth = s * 0.07;
+  g.strokeStyle = '#fff';
+  roundRect(g, cx - s / 2, cy - s * 0.42, s, s * 0.88, s * 0.12);
+  g.stroke();
+  g.fillStyle = '#fff';
+  g.fillRect(cx - s / 2, cy - s * 0.42, s, s * 0.22);
+  for (const dx of [-0.25, 0.25]) g.fillRect(cx + dx * s - s * 0.04, cy - s * 0.56, s * 0.08, s * 0.24);
+  for (let r = 0; r < 2; r++) for (let c = 0; c < 3; c++) g.fillRect(cx - s * 0.33 + c * s * 0.26, cy - s * 0.02 + r * s * 0.2, s * 0.14, s * 0.12);
+}
+function iconSearch(g, cx, cy, s) {
+  g.lineWidth = s * 0.1;
+  g.strokeStyle = '#fff';
+  g.beginPath();
+  g.arc(cx - s * 0.08, cy - s * 0.08, s * 0.32, 0, Math.PI * 2);
+  g.stroke();
+  g.lineCap = 'round';
+  g.beginPath();
+  g.moveTo(cx + s * 0.16, cy + s * 0.16);
+  g.lineTo(cx + s * 0.45, cy + s * 0.45);
+  g.stroke();
+  g.lineCap = 'butt';
+}
+function iconMember(g, cx, cy, s) {
+  g.lineWidth = s * 0.07;
+  g.strokeStyle = '#fff';
+  roundRect(g, cx - s * 0.55, cy - s * 0.38, s * 1.1, s * 0.76, s * 0.1);
+  g.stroke();
+  g.fillStyle = '#fff';
+  g.beginPath();
+  g.arc(cx - s * 0.22, cy - s * 0.06, s * 0.13, 0, Math.PI * 2);
+  g.fill();
+  g.beginPath();
+  g.arc(cx - s * 0.22, cy + s * 0.27, s * 0.22, Math.PI, 0);
+  g.fill();
+  for (const dy of [-0.12, 0.04, 0.2]) g.fillRect(cx + s * 0.05, cy + dy * s, s * 0.34, s * 0.07);
+}
 
-/** Draw the menu picture: store colours, logo, the big title, a line under it and a "book now" button. */
-async function drawMenu(canvas, { title, subtitle, button, primary, accent, logoUrl, storeName, font }) {
+/** Draw the menu picture: three buttons (จองห้อง | ตรวจสอบการจอง | สมาชิก) in the store colours. */
+async function drawMenu(canvas, { tiles, primary, accent, font }) {
   const g = canvas.getContext('2d');
   await document.fonts?.ready;
   const bg = g.createLinearGradient(0, 0, W, H);
@@ -39,56 +69,24 @@ async function drawMenu(canvas, { title, subtitle, button, primary, accent, logo
   bg.addColorStop(1, accent);
   g.fillStyle = bg;
   g.fillRect(0, 0, W, H);
-  // soft circles
-  g.fillStyle = 'rgba(255,255,255,0.08)';
-  for (const [x, y, r] of [[2250, 120, 360], [1850, 820, 260], [120, 760, 220]]) {
-    g.beginPath();
-    g.arc(x, y, r, 0, Math.PI * 2);
+  const cols = [[0, 833], [833, 834], [1667, 833]];
+  const icons = [iconCalendar, iconSearch, iconMember];
+  cols.forEach(([x, w], i) => {
+    // each button: a lighter card, the icon, the label and a small line
+    g.fillStyle = i === 0 ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.12)';
+    roundRect(g, x + 40, 40, w - 80, H - 80, 60);
     g.fill();
-  }
-  const logo = await loadImg(logoUrl);
-  let x = 140;
-  if (logo) {
-    g.save();
-    roundRect(g, x, 160, 300, 300, 70);
-    g.clip();
+    icons[i](g, x + w / 2, 300, 230);
     g.fillStyle = '#fff';
-    g.fillRect(x, 160, 300, 300);
-    const s = Math.min(280 / logo.width, 280 / logo.height);
-    g.drawImage(logo, x + 150 - (logo.width * s) / 2, 310 - (logo.height * s) / 2, logo.width * s, logo.height * s);
-    g.restore();
-    x += 360;
-  }
-  g.fillStyle = '#fff';
-  g.textBaseline = 'alphabetic';
-  g.font = `600 64px ${font}`;
-  g.globalAlpha = 0.85;
-  g.fillText(storeName, x, 250);
-  g.globalAlpha = 1;
-  g.font = `800 170px ${font}`;
-  g.fillText(title, x, 430, 1380 - (x - 140));
-  g.font = `500 70px ${font}`;
-  g.globalAlpha = 0.92;
-  g.fillText(subtitle, x, 560, 1380 - (x - 140));
-  g.globalAlpha = 1;
-  // the button
-  roundRect(g, 1700, 260, 660, 280, 140);
-  g.fillStyle = '#ffffff';
-  g.shadowColor = 'rgba(0,0,0,0.25)';
-  g.shadowBlur = 40;
-  g.fill();
-  g.shadowBlur = 0;
-  g.fillStyle = primary;
-  g.font = `800 110px ${font}`;
-  g.textAlign = 'center';
-  g.fillText(`${button} ›`, 2030, 440, 600);
+    g.textAlign = 'center';
+    g.font = `800 120px ${font}`;
+    g.fillText(tiles[i].title, x + w / 2, 610, w - 120);
+    g.font = `500 58px ${font}`;
+    g.globalAlpha = 0.9;
+    g.fillText(tiles[i].sub, x + w / 2, 700, w - 120);
+    g.globalAlpha = 1;
+  });
   g.textAlign = 'left';
-  // a strip at the bottom
-  g.fillStyle = 'rgba(0,0,0,0.18)';
-  g.fillRect(0, H - 110, W, 110);
-  g.fillStyle = '#fff';
-  g.font = `600 56px ${font}`;
-  g.fillText('ดูห้องว่าง · เลือกเวลา · จองและชำระมัดจำออนไลน์', 140, H - 38, W - 280);
 }
 
 export function RichMenuCard({ ready, current, onChanged }) {
@@ -97,13 +95,20 @@ export function RichMenuCard({ ready, current, onChanged }) {
   const { confirm } = useDialog();
   const { settings } = useAuth();
   const canvas = useRef(null);
-  const [f, setF] = useState({ title: 'จองห้องคาราโอเกะ', subtitle: 'BOOK A ROOM · จองง่าย ได้ห้องทันที', button: 'จองเลย', bar: 'จองห้อง' });
+  const [f, setF] = useState({
+    bar: 'เมนู',
+    tiles: [
+      { title: 'จองห้อง', sub: 'เว็บไซต์จองห้อง' },
+      { title: 'ตรวจสอบการจอง', sub: 'พิมพ์เบอร์โทรในแชท' },
+      { title: 'สมาชิก', sub: 'บัตร · แต้มสะสม' },
+    ],
+  });
   const [own, setOwn] = useState(null); // a picture of the store's own
   const [busy, setBusy] = useState(false);
   const font = getComputedStyle(document.documentElement).getPropertyValue('--font-ui').trim() || 'sans-serif';
   useEffect(() => {
     if (own || !canvas.current) return;
-    drawMenu(canvas.current, { ...f, primary: settings.general?.primaryColor || '#8b5cf6', accent: settings.general?.accentColor || '#ec4899', logoUrl: settings.store?.logoUrl, storeName: settings.store?.name || '', font });
+    drawMenu(canvas.current, { tiles: f.tiles, primary: settings.general?.primaryColor || '#8b5cf6', accent: settings.general?.accentColor || '#ec4899', font });
   }, [f, own]);
   const pickOwn = (file) => {
     if (!file) return;
@@ -134,28 +139,32 @@ export function RichMenuCard({ ready, current, onChanged }) {
       toast.error(e);
     }
   };
-  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   return (
     <div className="card flat mt">
       <div className="row between">
-        <b className="row nowrap"><LayoutPanelTop size={18} /> {t('ริชเมนู LINE OA: เว็บไซต์จองห้อง')}</b>
+        <b className="row nowrap"><LayoutPanelTop size={18} /> {t('ริชเมนู LINE OA')}</b>
         {current ? <Badge color="#16a34a">{t('ใช้งานอยู่')}</Badge> : <Badge color="#6b7280">{t('ยังไม่มีริชเมนู')}</Badge>}
       </div>
-      <div className="small muted">{t('เมนูใต้ช่องแชทของลูกค้า กดที่ไหนก็ได้บนรูปเพื่อเปิดเว็บไซต์จองห้องของร้าน')}</div>
+      <div className="small muted">{t('เมนูใต้ช่องแชทของลูกค้า 3 ปุ่ม: จองห้อง (เปิดเว็บไซต์จอง) · ตรวจสอบการจอง (ให้พิมพ์เบอร์โทรในแชท) · สมาชิก (บัตรสมาชิก แต้ม หรือเชื่อมบัญชีกับ LINE)')}</div>
       <div className="richmenu-preview mt">
         {own ? <img src={own.url} alt="" /> : <canvas ref={canvas} width={W} height={H} />}
       </div>
       {!own && (
-        <div className="grid grid-2 mt">
-          <Field label="หัวข้อใหญ่"><Input value={f.title} onChange={(e) => set('title', e.target.value)} /></Field>
-          <Field label="บรรทัดรอง"><Input value={f.subtitle} onChange={(e) => set('subtitle', e.target.value)} /></Field>
-          <Field label="ข้อความบนปุ่ม"><Input value={f.button} onChange={(e) => set('button', e.target.value)} /></Field>
-          <Field label="ข้อความแถบเมนู (ไม่เกิน 14 ตัว)"><Input maxLength={14} value={f.bar} onChange={(e) => set('bar', e.target.value)} /></Field>
+        <div className="grid grid-3 mt">
+          {f.tiles.map((tile, i) => (
+            <div key={i} className="col" style={{ gap: 6 }}>
+              <Field label={`${t('ปุ่ม')} ${i + 1}: ${t(['เปิดเว็บไซต์จองห้อง', 'ถามเบอร์โทร / แสดงการจอง', 'บัตรสมาชิก / เชื่อมบัญชี'][i])}`}>
+                <Input value={tile.title} onChange={(e) => setF((x) => ({ ...x, tiles: x.tiles.map((y, k) => (k === i ? { ...y, title: e.target.value } : y)) }))} />
+              </Field>
+              <Input value={tile.sub} onChange={(e) => setF((x) => ({ ...x, tiles: x.tiles.map((y, k) => (k === i ? { ...y, sub: e.target.value } : y)) }))} />
+            </div>
+          ))}
+          <Field label="ข้อความแถบเมนู (ไม่เกิน 14 ตัว)"><Input maxLength={14} value={f.bar} onChange={(e) => setF((x) => ({ ...x, bar: e.target.value }))} /></Field>
         </div>
       )}
       <div className="row mt">
         <label className="btn">
-          <Upload size={16} /> {t('ใช้รูปของร้านเอง (2500 × 843)')}
+          <Upload size={16} /> {t('ใช้รูปของร้านเอง (2500 × 843 แบ่ง 3 ช่องเท่ากัน)')}
           <input type="file" accept="image/png,image/jpeg" hidden onChange={(e) => pickOwn(e.target.files?.[0])} />
         </label>
         {own && <Button onClick={() => setOwn(null)}>{t('ใช้แบบที่ระบบออกแบบ')}</Button>}

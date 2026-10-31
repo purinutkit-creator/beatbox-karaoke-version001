@@ -51,6 +51,17 @@ async function tick() {
   await runWithStore(1, () => roomTick());
   await runWithStore(1, () => reservationTick());
 }
+async function db(sql, params) {
+  const { pool } = await import('../src/db/index.js');
+  const c = await pool.connect();
+  try {
+    await c.query(`SELECT set_config('app.bypass_rls','on',false)`);
+    return (await c.query(sql, params)).rows;
+  } finally {
+    await c.query(`SELECT set_config('app.bypass_rls','',false)`);
+    c.release();
+  }
+}
 const pushesTo = (userId) => sent.filter((s) => s.kind === 'push' && s.body.to === userId);
 
 before(async () => {
@@ -147,13 +158,30 @@ test('confirm → booking pass (QR + barcode picture); only the tied LINE user c
   assert.ok(after.customer_confirmed_at, 'the staff side sees the customer confirmed');
 });
 
-test('reminder before the start: once, with the real minutes left', async () => {
+test('reminders: none right after confirming (the pass said the time left), then "it is time" at the start', async () => {
+  await tick();
+  assert.equal(pushesTo('Uaaa').length, 0, 'the 15-minute mark was already covered by the pass card');
+  // the start arrives
+  await db(`UPDATE reservations SET start_at = now() - interval '1 minute', end_at = now() + interval '59 minutes' WHERE id = $1`, [rv.id]);
   await tick();
   const p = pushesTo('Uaaa');
   assert.equal(p.length, 1, allText(sent.map((s) => s.kind)));
-  assert.match(allText(p[0].body), /อีก (9|10) นาที/);
+  assert.match(allText(p[0].body), /ถึงเวลาของคุณแล้ว/);
   await tick();
   assert.equal(pushesTo('Uaaa').length, 1, 'not sent again');
+});
+
+test('a booking tied to LINE a moment after it was made still gets its reminder (nothing marked without a receiver)', async () => {
+  const m = (await api('POST', '/members', { firstName: 'สมาชิกจอง', phone: '0891230000' })).body;
+  const start = new Date(Date.now() + 4 * 60000);
+  const r = (await api('POST', '/reservations', { roomId: 7, startAt: start.toISOString(), durationMinutes: 60, customerName: 'สมาชิกจอง', phone: '0891230000', guestCount: 2, memberId: m.id })).body;
+  await tick(); // the member has no LINE yet: nobody to tell
+  assert.deepEqual((await db('SELECT line_reminders FROM reservations WHERE id = $1', [r.id]))[0].line_reminders, []);
+  await say('Uddd', '0891230000'); // the booking is tied to this LINE now
+  await tick();
+  const p = pushesTo('Uddd');
+  assert.equal(p.length, 1);
+  assert.match(allText(p[0].body), /อีก [1-4] นาที/);
 });
 
 test('the room opens → room card (end time, live countdown page, order food, report a problem)', async () => {
@@ -238,4 +266,39 @@ test('rich menu "booking website": picture checked, created, made the default, t
   const r2 = await (await post(png(2500, 843))).json();
   assert.ok(lineCalls.some((c) => c.method === 'DELETE' && c.url.endsWith(`/richmenu/${b1.richMenuId}`)), 'the old menu is removed');
   assert.equal((await api('GET', '/integrations')).body.line.richMenuId, r2.richMenuId);
+});
+
+test('rich menu has three buttons: booking website | check a booking | member', async () => {
+  const create = lineCalls.filter((c) => c.method === 'POST' && /\/v2\/bot\/richmenu$/.test(c.url)).at(-1);
+  const areas = JSON.parse(create.body).areas;
+  assert.equal(areas.length, 3);
+  assert.equal(areas[0].action.type, 'uri');
+  assert.equal(areas[1].action.data, 'a=check');
+  assert.equal(areas[2].action.data, 'a=member');
+  assert.equal(areas.reduce((w, a) => w + a.bounds.width, 0), 2500);
+});
+
+test('"ตรวจสอบการจอง" asks for the phone number; "สมาชิก" links the member account, then shows the member card', async () => {
+  assert.match(allText((await tap('Ueee', 'a=check')).reply), /พิมพ์เบอร์มือถือที่ใช้จอง/);
+  const link = await tap('Ueee', 'a=member');
+  const url = allText(link.reply).match(/\/book\/line-link\?link=([^&"]+)/);
+  assert.ok(url, allText(link.reply));
+  await api('POST', '/members', { firstName: 'ไลน์เมมเบอร์', phone: '0897771234' });
+  const login = await api('POST', '/public/auth/login?store=beatbox1', { phone: '0897771234', password: '1234', linkToken: decodeURIComponent(url[1]), consent: true }, { auth: false });
+  assert.equal(login.status, 200, JSON.stringify(login.body));
+  await tick();
+  assert.match(allText(pushesTo('Ueee').at(-1)?.body), /เชื่อมบัญชีสมาชิก ไลน์เมมเบอร์ กับ LINE เรียบร้อย/);
+  const card = await say('Ueee', 'สมาชิก');
+  const text = allText(card.reply);
+  assert.match(text, /ไลน์เมมเบอร์/);
+  assert.match(text, /แต้ม/);
+  assert.match(text, /\/book\/points\?store=/);
+  // the same LINE cannot be linked to a second member
+  await api('POST', '/members', { firstName: 'คนที่สอง', phone: '0897775678' });
+  const second = await api('POST', '/public/auth/login?store=beatbox1', { phone: '0897775678', password: '5678', linkToken: decodeURIComponent(url[1]), consent: true }, { auth: false });
+  assert.equal(second.status, 409);
+  // a linked member checking bookings does not need to type the phone
+  const start = new Date(Date.now() + 2 * 86400000);
+  await api('POST', '/reservations', { roomId: 8, startAt: start.toISOString(), durationMinutes: 60, customerName: 'ไลน์เมมเบอร์', phone: '0897771234', guestCount: 3 });
+  assert.match(allText((await tap('Ueee', 'a=check')).reply), /ไลน์เมมเบอร์/);
 });

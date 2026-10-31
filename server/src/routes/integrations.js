@@ -98,8 +98,8 @@ r.get('/integrations/line/webhook', can('settings.manage'), async (_req, res) =>
 });
 
 /**
- * LINE rich menu "เว็บไซต์จองห้อง": the picture (made on the settings page, or the store's own) is sent as the body;
- * the whole menu opens the booking website.
+ * LINE rich menu: the picture (made on the settings page, or the store's own, three equal columns) is sent as the body.
+ * Left: the booking website · middle: check a booking · right: member card / link the member account.
  */
 r.post('/integrations/line/richmenu', can('settings.manage'), express.raw({ type: ['image/jpeg', 'image/png'], limit: '1mb' }), async (req, res) => {
   const type = String(req.headers['content-type'] || '').split(';')[0];
@@ -108,14 +108,19 @@ r.post('/integrations/line/richmenu', can('settings.manage'), express.raw({ type
   if (!size || size.width !== 2500 || ![843, 1686].includes(size.height)) throw badRequest('รูปริชเมนูต้องมีขนาด 2500 × 843 หรือ 2500 × 1686 พิกเซล');
   const s = await getSettings();
   const integ = await getIntegrations();
-  const label = String(req.query.label || 'เว็บไซต์จองห้อง').slice(0, 20);
+  const label = 'จองห้อง';
   const uri = `${config.publicUrl}/book?store=${encodeURIComponent(s.store.slug || '')}`;
   const menu = {
     size: { width: 2500, height: size.height },
     selected: true,
     name: `${s.store.name} booking`.slice(0, 300),
     chatBarText: String(req.query.bar || 'จองห้อง').slice(0, 14),
-    areas: [{ bounds: { x: 0, y: 0, width: 2500, height: size.height }, action: { type: 'uri', label, uri } }],
+    // three equal buttons: จองห้อง (the booking website) | ตรวจสอบการจอง | สมาชิก (answered in the chat)
+    areas: [
+      { bounds: { x: 0, y: 0, width: 833, height: size.height }, action: { type: 'uri', label, uri } },
+      { bounds: { x: 833, y: 0, width: 834, height: size.height }, action: { type: 'postback', label: 'ตรวจสอบการจอง', data: 'a=check', displayText: 'ตรวจสอบการจอง' } },
+      { bounds: { x: 1667, y: 0, width: 833, height: size.height }, action: { type: 'postback', label: 'สมาชิก', data: 'a=member', displayText: 'สมาชิก' } },
+    ],
   };
   let id;
   try {

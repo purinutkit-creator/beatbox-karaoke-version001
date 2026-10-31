@@ -133,6 +133,11 @@ export async function start() {
   initRealtime(server, config.corsOrigins);
   startScheduler();
   server.listen(config.port, () => console.log(`[server] BEATBOX POS running on :${config.port} (${config.appEnv}, payment=${config.paymentMode})`));
+  // Render's free plan puts a service to sleep after 15 minutes without visitors, and a sleeping server sends no LINE
+  // reminders, room alerts or backups. A visit to its own address every 10 minutes keeps it awake (KEEP_AWAKE=false: off).
+  if (process.env.RENDER && process.env.KEEP_AWAKE !== 'false' && config.publicUrl.startsWith('https://')) {
+    setInterval(() => fetch(`${config.publicUrl}/api/health`).catch(() => {}), 10 * 60000).unref();
+  }
   return server;
 }
 

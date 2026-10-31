@@ -17,7 +17,8 @@ import { expireStaleHolds, lockRoom, assertRoomFree, searchRooms, suggestAlterna
 import { estimateReservation, confirmOnlineDeposit, assertBookable, cancelOnline } from '../services/booking.js';
 import { nextBookingNo, nextMemberCode, randomToken } from '../services/numbers.js';
 import { refreshRoomStatuses } from '../services/rooms.js';
-import { notify } from '../services/notifications.js';
+import { notify, queueLinePush, dispatchPendingMessages } from '../services/notifications.js';
+import { memberCard } from './line.js';
 import { getSlipProvider, fileHash, verifySlip } from '../providers/slip.js';
 import { getPaymentProvider } from '../providers/payment.js';
 import { lineLogin } from '../providers/line.js';
@@ -632,12 +633,23 @@ async function createMember(c, { firstName, lastName, phone, source, birthday = 
 }
 
 async function attachLine(c, memberId, line) {
+  // a link made for another store's LINE OA is never used here
+  if (line.st && Number(line.st) !== Number(currentStoreId())) throw badRequest('ลิงก์เชื่อมบัญชี LINE นี้เป็นของร้านอื่น');
   const taken = (await c.query(`SELECT member_id FROM member_auth_identities WHERE provider = 'LINE' AND provider_user_id = $1 AND status = 'ACTIVE'`, [line.lineUserId])).rows[0];
   if (taken && taken.member_id !== memberId) throw conflict('บัญชี LINE นี้เชื่อมกับสมาชิกอื่นแล้ว');
   if (!taken) {
     await c.query(`INSERT INTO member_auth_identities(member_id, provider, provider_user_id, display_name, picture_url, last_login_at) VALUES ($1,'LINE',$2,$3,$4,now())`, [memberId, line.lineUserId, line.displayName, line.pictureUrl]);
     await c.query(`INSERT INTO line_connections(member_id, line_user_id, display_name, picture_url, messaging_consent, last_login_at) VALUES ($1,$2,$3,$4,$5,now())`, [memberId, line.lineUserId, line.displayName, line.pictureUrl, !!line.consent]);
     await c.query(`UPDATE members SET photo_url = COALESCE(photo_url, $2) WHERE id = $1`, [memberId, line.pictureUrl]);
+  } else if (line.consent !== undefined) {
+    await c.query(`UPDATE line_connections SET messaging_consent = $3 WHERE member_id = $1 AND line_user_id = $2 AND status = 'CONNECTED'`, [memberId, line.lineUserId, !!line.consent]);
+  }
+  // linked from the store's LINE OA chat: the member card goes back to that chat
+  if (line.via === 'chat') {
+    const m = (await c.query(`SELECT m.*, t.name AS tier_name, t.color AS tier_color FROM members m LEFT JOIN member_tiers t ON t.id = m.tier_id WHERE m.id = $1`, [memberId])).rows[0];
+    const settings = await getSettings(c);
+    await queueLinePush({ lineUserId: line.lineUserId, type: 'LINE_MEMBER_LINKED', title: 'เชื่อมบัญชีสมาชิกกับ LINE', messages: [{ type: 'text', text: `✅ เชื่อมบัญชีสมาชิก ${m.first_name} กับ LINE เรียบร้อย` }, memberCard(m, settings)], memberId, dedupeKey: `line-linked:${memberId}:${line.lineUserId}` }, c);
+    setTimeout(() => dispatchPendingMessages().catch(() => {}), 500);
   }
 }
 

@@ -218,6 +218,7 @@ export const DEFAULT_SETTINGS = {
     // chat with the store's LINE OA (webhook): customers type the phone number they booked with
     chatBooking: true,
     remindMinutes: [15, 5], // "time to come" messages before the booking starts
+    remindAtStart: true, // "it is your time" when the booking starts
     notifyRoomOpen: true, // room card (end time, order food, report a problem) when the room opens
     timeLeftMinutes: 10, // "time almost up" message (0 = off)
     notifyReceipt: true, // online receipt + "collect points" after paying

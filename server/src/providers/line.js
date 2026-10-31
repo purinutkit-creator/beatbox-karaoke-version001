@@ -108,6 +108,13 @@ export const lineMessaging = {
     await fetch('https://api.line.me/v2/bot/user/all/richmenu', { method: 'DELETE', headers: auth }).catch(() => {});
     await fetch(`https://api.line.me/v2/bot/richmenu/${id}`, { method: 'DELETE', headers: auth }).catch(() => {});
   },
+  /** Name and picture of a LINE user who talks with the OA (null when LINE does not say). */
+  async profile(userId) {
+    const token = (await cfg()).messagingAccessToken;
+    if (!token) return null;
+    const r = await fetch(`https://api.line.me/v2/bot/profile/${encodeURIComponent(userId)}`, { headers: { Authorization: `Bearer ${token}` } }).catch(() => null);
+    return r?.ok ? r.json() : null;
+  },
   /** The webhook really comes from LINE: HMAC-SHA256 of the raw body with the channel secret. */
   async verifySignature(rawBody, signature) {
     const secret = (await cfg()).messagingChannelSecret;

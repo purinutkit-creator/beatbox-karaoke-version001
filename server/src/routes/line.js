@@ -3,7 +3,9 @@
 // first LINE user to look a booking up is tied to it: only they can confirm or cancel it, and they get its booking
 // pass, the reminders, the room card and the receipt. Phone look-ups are limited per LINE user.
 import { Router } from 'express';
-import { pool, tx, one, many } from '../db/index.js';
+import { pool, tx, one, many, currentStoreId } from '../db/index.js';
+import { signToken } from '../lib/auth.js';
+import { config } from '../config.js';
 import { useStoreOf } from '../lib/tenant.js';
 import { emitSync } from '../lib/realtime.js';
 import { logActivity } from '../lib/activity.js';
@@ -14,7 +16,8 @@ import { notify } from '../services/notifications.js';
 import { lineMessaging } from '../providers/line.js';
 import { cancelOnline, cancelPreview, canCancelOnline } from '../services/booking.js';
 import { bookingCodePng } from '../services/bookingCode.js';
-import { bookingsMessage, passMessages, helpMessage, mapsUrl, ACTIVE_BOOKING } from '../services/lineFlex.js';
+import { bookingsMessage, passMessages, helpMessage, mapsUrl, memberMessage, linkMessage, ACTIVE_BOOKING } from '../services/lineFlex.js';
+import { reminderMarks, minutesLeft } from '../services/lineFlow.js';
 import { normalizePhone, maskPhone } from '@beatbox/shared/format.js';
 
 export const MAX_LOOKUPS = 8; // phone look-ups per LINE user …
@@ -37,6 +40,13 @@ r.get('/line/pass/:token.png', async (req, res) => {
 });
 
 /** The booking pass page (link in LINE): live countdown, QR / barcode, room, store contacts. The token is the key. */
+/** The member's QR + barcode picture (the member number is printed on their card anyway). */
+r.get('/line/member/:code.png', async (req, res) => {
+  const code = String(req.params.code).toUpperCase();
+  if (!/^[A-Z0-9-]{4,32}$/.test(code)) throw notFound();
+  res.set('Content-Type', 'image/png').set('Cache-Control', 'public, max-age=86400').send(bookingCodePng(`MEMBER:${code}`, code, { accent: [22, 163, 74] }));
+});
+
 r.get('/line/booking/:token', async (req, res) => {
   const token = String(req.params.token);
   if (!(await useStoreOf('reservations', 'check_in_token', token))) throw notFound('ไม่พบการจอง');
@@ -84,6 +94,51 @@ async function chatUser(userId) {
 const reply = (ev, messages) => (ev.replyToken ? lineMessaging.reply(ev.replyToken, Array.isArray(messages) ? messages : [messages]) : null);
 const textMsg = (text, settings) => helpMessage(settings, text);
 
+/** The member this LINE user is linked to (connected), with the tier. */
+export function lineMember(userId) {
+  return one(
+    `SELECT m.*, t.name AS tier_name, t.color AS tier_color FROM line_connections lc JOIN members m ON m.id = lc.member_id LEFT JOIN member_tiers t ON t.id = m.tier_id
+     WHERE lc.line_user_id = $1 AND lc.status = 'CONNECTED' AND m.deleted_at IS NULL ORDER BY lc.linked_at DESC LIMIT 1`,
+    [userId],
+  );
+}
+
+const storeUrl = (path, settings) => `${config.publicUrl}${path}${path.includes('?') ? '&' : '?'}store=${encodeURIComponent(settings.store?.slug || '')}`;
+
+export function memberCard(m, settings) {
+  return memberMessage(m, settings, {
+    codeUrl: `/api/public/line/member/${encodeURIComponent(m.member_code)}.png`,
+    pointsUrl: storeUrl('/book/points', settings),
+    rewardsUrl: storeUrl('/book/rewards', settings),
+    bookUrl: storeUrl('/book', settings),
+  });
+}
+
+/** "สมาชิก": the member card, or the link to sign in / sign up with this LINE. */
+async function onMember(ev, userId, settings) {
+  const m = await lineMember(userId);
+  if (m) return reply(ev, memberCard(m, settings));
+  const p = (await lineMessaging.profile(userId)) || {};
+  const link = signToken({ typ: 'line-link', via: 'chat', lineUserId: userId, displayName: p.displayName || 'LINE', pictureUrl: p.pictureUrl || null, st: currentStoreId() }, '30m');
+  const url = storeUrl(`/book/line-link?link=${encodeURIComponent(link)}&name=${encodeURIComponent(p.displayName || '')}&redirect=${encodeURIComponent('/book/account')}`, settings);
+  return reply(ev, linkMessage(url, settings));
+}
+
+/** "ตรวจสอบการจอง": a linked member sees their bookings at once; anyone else is asked for the phone number. */
+async function onCheck(ev, userId, settings) {
+  const m = await lineMember(userId);
+  if (m) {
+    const rows = await many(`${BOOKING_ROWS} WHERE (rv.member_id = $1 OR rv.phone = $2) AND rv.status = ANY($3) AND rv.end_at > now() ORDER BY rv.start_at LIMIT 10`, [m.id, m.phone, ACTIVE_BOOKING]);
+    const mine = rows.filter((x) => !x.line_user_id || x.line_user_id === userId);
+    if (mine.length) {
+      await pool.query('UPDATE reservations SET line_user_id = $2 WHERE id = ANY($1::int[]) AND line_user_id IS NULL', [mine.map((x) => x.id), userId]);
+      return reply(ev, bookingsMessage(mine, settings));
+    }
+    return reply(ev, textMsg(`คุณ${m.first_name} ยังไม่มีการจองที่กำลังจะถึง\nจองห้องได้ที่ปุ่ม "จองห้อง" หรือพิมพ์เบอร์โทรอื่นที่ใช้จอง`, settings));
+  }
+  return reply(ev, textMsg('📱 พิมพ์เบอร์มือถือที่ใช้จองในช่องแชทได้เลย (เช่น 0812345678)', settings));
+}
+
 export async function handleEvent(ev, settings) {
   const userId = ev.source?.userId;
   if (!userId) return;
@@ -100,6 +155,8 @@ export async function handleEvent(ev, settings) {
 
 async function onText(ev, userId, settings) {
   const raw = String(ev.message.text || '').trim();
+  if (/^(ตรวจสอบการจอง|เช็คการจอง|เช็กการจอง|การจองของฉัน)$/.test(raw)) return onCheck(ev, userId, settings);
+  if (/^(สมาชิก|บัตรสมาชิก|แต้ม|แต้มสะสม)$/.test(raw)) return onMember(ev, userId, settings);
   const phone = normalizePhone(raw);
   const looksLikePhone = /^[\d\s+()-]+$/.test(raw) && /^0\d{8,9}$/.test(phone);
   if (!looksLikePhone) return reply(ev, helpMessage(settings));
@@ -125,6 +182,8 @@ async function onPostback(ev, userId, settings) {
   const p = new URLSearchParams(ev.postback?.data || '');
   const id = Number(p.get('r'));
   const a = p.get('a');
+  if (a === 'check') return onCheck(ev, userId, settings);
+  if (a === 'member') return onMember(ev, userId, settings);
   const rv = id ? await one(`${BOOKING_ROWS} WHERE rv.id = $1`, [id]) : null;
   if (!rv || rv.line_user_id !== userId) return reply(ev, textMsg('ไม่พบการจองนี้ในบัญชี LINE ของคุณ พิมพ์เบอร์โทรที่ใช้จองเพื่อค้นหาอีกครั้ง', settings));
   const codeUrl = codePath(rv);
@@ -133,6 +192,10 @@ async function onPostback(ev, userId, settings) {
     if (!rv.customer_confirmed_at) {
       await tx(async (c) => {
         await c.query('UPDATE reservations SET customer_confirmed_at = now(), updated_at = now() WHERE id = $1 AND customer_confirmed_at IS NULL', [rv.id]);
+        // the pass card shows the time left: reminders for marks already reached count as sent (not "it is time")
+        const left = minutesLeft(rv.start_at);
+        const reached = reminderMarks(settings).filter((m) => m > 0 && m >= left);
+        if (reached.length) await c.query(`UPDATE reservations SET line_reminders = (SELECT jsonb_agg(DISTINCT x) FROM jsonb_array_elements(line_reminders || $2::jsonb) x) WHERE id = $1`, [rv.id, JSON.stringify(reached)]);
         await logActivity(c, { employee: { id: null, name: 'LINE' }, ip: null }, 'LINE_CONFIRM', 'reservation', rv.id, { bookingNo: rv.booking_no });
         await notify({ type: 'BOOKING_CUSTOMER_CONFIRMED', level: 'info', title: 'ลูกค้ายืนยันการจองผ่าน LINE', message: `${rv.booking_no} ${rv.customer_name} · ${rv.room_name}`, reservationId: rv.id, roomId: rv.room_id, dedupeKey: `line-confirm-customer:${rv.id}` }, c);
       });
