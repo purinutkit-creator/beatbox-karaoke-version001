@@ -1,8 +1,13 @@
 // The app version people see (corner tag, "new version" pop-up). Every release that goes live adds 0.1 (2.0 → 2.1 →
 // 2.2 …) with a line or two of what changed at the top of CHANGELOG; the screen shows what is new once per version.
-export const APP_VERSION = '3.2';
+export const APP_VERSION = '3.3';
 
 export const CHANGELOG = [
+  {
+    version: '3.3',
+    date: '2026-11-03',
+    items: ['เปลี่ยน Channel LINE Login แล้ว ระบบยกเลิกการเชื่อม LINE เก่าที่ใช้กับ LINE OA ไม่ได้ให้อัตโนมัติ และแถบเตือนบอกเลข Channel ที่ใช้อยู่'],
+  },
   {
     version: '3.2',
     date: '2026-11-02',

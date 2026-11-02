@@ -351,3 +351,14 @@ test('a member with two LINE ids (LINE Login in another Provider): messages go t
   const t = (await api('POST', '/integrations/line/test', {})).body;
   assert.ok(t.results.some((r) => /คนละ Provider/.test(r.message)), JSON.stringify(t.results));
 });
+
+test('changing the LINE Login channel unlinks LINE ids from the old one that the OA never saw; the warning goes', async () => {
+  await api('PUT', '/integrations/line', { loginChannelId: '1111111111' });
+  await db(`UPDATE member_auth_identities SET status = 'ACTIVE' WHERE provider_user_id = 'Ulogin-other-provider'`);
+  const r = await api('PUT', '/integrations/line', { loginChannelId: '2222222222' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal((await db(`SELECT status FROM member_auth_identities WHERE provider_user_id = 'Ulogin-other-provider'`))[0].status, 'DISCONNECTED');
+  assert.equal((await db(`SELECT status FROM line_connections WHERE line_user_id = 'Uggg'`))[0].status, 'CONNECTED', 'the id the OA knows stays');
+  const t = (await api('POST', '/integrations/line/test', {})).body;
+  assert.ok(!t.results.some((x) => /คนละ Provider/.test(x.message)), JSON.stringify(t.results));
+});

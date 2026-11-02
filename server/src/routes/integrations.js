@@ -82,7 +82,19 @@ r.put('/integrations/:section', can('settings.manage'), async (req, res) => {
   if (!SCHEMAS[section]) throw notFound();
   const body = parse(SCHEMAS[section], req.body);
   await tx(async (c) => {
+    const before = section === 'line' ? (await c.query(`SELECT config->>'loginChannelId' AS id FROM integration_settings WHERE key = 'line'`)).rows[0]?.id : null;
     const changed = await saveIntegration(c, section, body, req.employee.id);
+    // a different LINE Login channel: LINE ids from the old one that the OA has never seen (another Provider) are
+    // unlinked — those members sign in with LINE once more and get the id that works everywhere
+    if (section === 'line' && body.loginChannelId && before && body.loginChannelId.trim() !== before) {
+      const gone = await c.query(
+        `UPDATE member_auth_identities i SET status = 'DISCONNECTED', disconnected_at = now()
+         WHERE i.provider = 'LINE' AND i.status = 'ACTIVE' AND NOT EXISTS (SELECT 1 FROM line_chat_users cu WHERE cu.line_user_id = i.provider_user_id)
+         RETURNING i.member_id, i.provider_user_id`,
+      );
+      for (const g of gone.rows) await c.query(`UPDATE line_connections SET status = 'DISCONNECTED', disconnected_at = now() WHERE member_id = $1 AND line_user_id = $2 AND status = 'CONNECTED'`, [g.member_id, g.provider_user_id]);
+      if (gone.rows.length) await logActivity(c, req, 'LINE_LOGIN_CHANNEL_CHANGED', 'integration', 'line', { from: before, to: body.loginChannelId, unlinked: gone.rows.length });
+    }
     // never log secret values — only which fields changed
     const safe = Object.fromEntries(Object.entries(body).filter(([k]) => !INTEGRATION_FIELDS[section][k]?.secret));
     await logActivity(c, req, 'INTEGRATION_UPDATE', 'integration', section, { changed, values: safe });
@@ -188,8 +200,9 @@ r.post('/integrations/:section/test', can('settings.manage'), async (req, res) =
        WHERE i.provider = 'LINE' AND i.status = 'ACTIVE' AND NOT EXISTS (SELECT 1 FROM line_chat_users cu WHERE cu.line_user_id = i.provider_user_id)
          AND EXISTS (SELECT 1 FROM line_connections lc JOIN line_chat_users cu ON cu.line_user_id = lc.line_user_id WHERE lc.member_id = i.member_id AND lc.line_user_id <> i.provider_user_id)`,
     );
+    const integ = await getIntegrations();
     if (Number(split?.n) > 0)
-      out.results.push({ ok: false, message: 'LINE Login กับ LINE OA อยู่คนละ Provider (ลูกค้าคนเดียวได้รหัส LINE คนละตัว) — สร้าง Channel LINE Login ใหม่ใน Provider เดียวกับ LINE OA แล้วใส่ Channel ID / Secret ใหม่ที่นี่' });
+      out.results.push({ ok: false, message: `LINE Login (Channel ID ${integ.line.loginChannelId}) กับ LINE OA อยู่คนละ Provider (ลูกค้าคนเดียวได้รหัส LINE คนละตัว) — สร้าง Channel LINE Login ใหม่ใน Provider เดียวกับ LINE OA แล้วใส่ Channel ID / Secret ใหม่ที่นี่และกดบันทึก (สมาชิกที่เชื่อมด้วย Channel เก่าจะถูกยกเลิกการเชื่อมให้อัตโนมัติ)` });
     if (req.body?.lineUserId && msg.ok) {
       await lineMessaging.push(req.body.lineUserId, 'ทดสอบการส่งข้อความจากระบบ BEATBOX POS');
       out.results.push({ ok: true, message: 'ส่งข้อความทดสอบแล้ว' });

@@ -3030,4 +3030,5 @@ export const EN = {
   "เข้าสู่ระบบด้วย LINE เสถียรขึ้น: ข้อความแจ้งชัดเจนเมื่อเข้าไม่ได้ ลิงก์อยู่ได้นานขึ้น และกันบัญชีสมาชิกที่ถูกลบ": "Sign in with LINE is steadier: clear messages when it fails, a longer-lived link, deleted members handled",
   "ข้อความ LINE ส่งไปที่บัญชี LINE ที่ร้านรู้จักเสมอ แม้ลูกค้ามีรหัส LINE หลายตัว": "LINE messages always go to the LINE account the store's OA knows, even when a customer has several LINE ids",
   "ปุ่มทดสอบการเชื่อมต่อเตือนเมื่อ LINE Login กับ LINE OA อยู่คนละ Provider": "The connection test warns when LINE Login and the LINE OA are in different Providers",
+  "เปลี่ยน Channel LINE Login แล้ว ระบบยกเลิกการเชื่อม LINE เก่าที่ใช้กับ LINE OA ไม่ได้ให้อัตโนมัติ และแถบเตือนบอกเลข Channel ที่ใช้อยู่": "After changing the LINE Login channel, old LINE links that cannot work with the LINE OA are removed automatically, and the warning shows the channel in use",
 };
