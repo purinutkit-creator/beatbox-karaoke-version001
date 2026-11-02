@@ -418,7 +418,18 @@ export function LoginPage() {
     <div className="card" style={{ maxWidth: 440, margin: '0 auto' }}>
       <h1>{t('เข้าสู่ระบบสมาชิก')}</h1>
       <p className="muted">{t('ใช้เบอร์โทรศัพท์และรหัสผ่าน — ไม่ต้องใช้รหัส OTP')}</p>
-      {params.get('error') && <p style={{ color: 'var(--danger)' }}>{params.get('error') === 'line_off' ? t('ร้านยังตั้งค่าเข้าสู่ระบบด้วย LINE ไม่ครบ — เข้าสู่ระบบด้วยเบอร์โทรได้ตามปกติ') : t('เข้าสู่ระบบด้วย LINE ไม่สำเร็จ')}</p>}
+      {params.get('error') && (
+        <div className="alert danger">
+          {t(
+            {
+              line_off: 'ร้านยังตั้งค่าเข้าสู่ระบบด้วย LINE ไม่ครบ — เข้าสู่ระบบด้วยเบอร์โทรได้ตามปกติ',
+              line_state: 'ลิงก์เข้าสู่ระบบหมดเวลาแล้ว กรุณากด "เข้าสู่ระบบด้วย LINE" อีกครั้ง',
+              line_denied: 'ยังไม่ได้อนุญาตให้ร้านใช้บัญชี LINE — กด "เข้าสู่ระบบด้วย LINE" แล้วกดอนุญาต หรือเข้าสู่ระบบด้วยเบอร์โทร',
+              line_suspended: 'บัญชีสมาชิกนี้ถูกระงับ กรุณาติดต่อร้าน',
+            }[params.get('error')] || 'เข้าสู่ระบบด้วย LINE ไม่สำเร็จ กรุณาลองอีกครั้ง หรือเข้าสู่ระบบด้วยเบอร์โทร',
+          )}
+        </div>
+      )}
       <form className="col" onSubmit={submit}>
         <Field label="เบอร์โทรศัพท์"><Input type="tel" autoComplete="username" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="08xxxxxxxx" required /></Field>
         <Field label="รหัสผ่าน" hint="สมาชิกใหม่: รหัสผ่านเริ่มต้นคือเลข 4 ตัวท้ายของเบอร์โทรศัพท์"><Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>

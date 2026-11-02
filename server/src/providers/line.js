@@ -55,7 +55,7 @@ export const lineLogin = {
       const why = /redirect_uri/i.test(body) ? `Callback URL ยังไม่ได้ลงทะเบียนใน Channel นี้ — ใส่ ${c.callbackUrl} ที่แท็บ LINE Login → Callback URL` : /client_id/i.test(body) ? `Channel ID ${c.loginChannelId} ไม่ใช่ Channel แบบ LINE Login (อาจเป็น Channel ของ Messaging API)` : body.slice(0, 160);
       return { ok: false, message: `LINE Login หน้าเข้าสู่ระบบตอบ 400: ${why}` };
     }
-    if (r.ok) return { ok: true, message: 'LINE Login: Channel ID / Secret และ Callback URL ถูกต้อง' };
+    if (r.ok) return { ok: true, message: 'LINE Login: Channel ID / Secret และ Callback URL ถูกต้อง — ตรวจด้วยว่า Channel อยู่ในสถานะ Published (ถ้ายังเป็น Developing จะเข้าได้เฉพาะผู้ดูแล Channel)' };
     return { ok: false, message: `LINE Login ตอบกลับ ${r.status}: ${(await r.text()).slice(0, 200)}` };
   },
 };

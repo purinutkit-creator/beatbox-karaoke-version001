@@ -181,6 +181,15 @@ r.post('/integrations/:section/test', can('settings.manage'), async (req, res) =
     const login = await lineLogin.test().catch((e) => ({ ok: false, message: e.message }));
     const msg = await lineMessaging.test().catch((e) => ({ ok: false, message: e.message }));
     out = { ok: login.ok || msg.ok, results: [login, msg] };
+    // LINE gives a different user id per Provider: a member with a LINE Login id the OA has never seen and another id
+    // the OA does know means LINE Login and the OA are in different Providers
+    const split = await one(
+      `SELECT COUNT(DISTINCT i.member_id) AS n FROM member_auth_identities i
+       WHERE i.provider = 'LINE' AND i.status = 'ACTIVE' AND NOT EXISTS (SELECT 1 FROM line_chat_users cu WHERE cu.line_user_id = i.provider_user_id)
+         AND EXISTS (SELECT 1 FROM line_connections lc JOIN line_chat_users cu ON cu.line_user_id = lc.line_user_id WHERE lc.member_id = i.member_id AND lc.line_user_id <> i.provider_user_id)`,
+    );
+    if (Number(split?.n) > 0)
+      out.results.push({ ok: false, message: 'LINE Login กับ LINE OA อยู่คนละ Provider (ลูกค้าคนเดียวได้รหัส LINE คนละตัว) — สร้าง Channel LINE Login ใหม่ใน Provider เดียวกับ LINE OA แล้วใส่ Channel ID / Secret ใหม่ที่นี่' });
     if (req.body?.lineUserId && msg.ok) {
       await lineMessaging.push(req.body.lineUserId, 'ทดสอบการส่งข้อความจากระบบ BEATBOX POS');
       out.results.push({ ok: true, message: 'ส่งข้อความทดสอบแล้ว' });

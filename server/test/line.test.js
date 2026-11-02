@@ -339,3 +339,15 @@ test('sign up from LINE: phone only, no password, signed in with LINE (no passwo
   // the LINE user is now this member in the chat
   assert.match(allText((await say('Ufff', 'สมาชิก')).reply), /ไลน์ใหม่/);
 });
+
+test('a member with two LINE ids (LINE Login in another Provider): messages go to the id the OA knows; the test warns', async () => {
+  const m = (await api('POST', '/members', { firstName: 'สองไอดี', phone: '0895550001' })).body;
+  await say('Uggg', 'สวัสดี'); // the OA knows Uggg
+  await db(`INSERT INTO line_connections(store_id, member_id, line_user_id, messaging_consent, linked_at) VALUES (1, $1, 'Uggg', true, now() - interval '1 day'), (1, $1, 'Ulogin-other-provider', true, now())`, [m.id]);
+  await db(`INSERT INTO member_auth_identities(store_id, member_id, provider, provider_user_id) VALUES (1, $1, 'LINE', 'Ulogin-other-provider')`, [m.id]);
+  const { memberLine } = await import('../src/services/lineFlow.js');
+  const { runWithStore } = await import('../src/db/index.js');
+  assert.equal(await runWithStore(1, () => memberLine(m.id)), 'Uggg');
+  const t = (await api('POST', '/integrations/line/test', {})).body;
+  assert.ok(t.results.some((r) => /คนละ Provider/.test(r.message)), JSON.stringify(t.results));
+});

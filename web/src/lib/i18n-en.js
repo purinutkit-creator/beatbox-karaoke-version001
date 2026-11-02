@@ -3023,4 +3023,11 @@ export const EN = {
   "แตะบัตรเพื่อพลิกดูด้านหลัง": "Tap the card to see the back",
   "แสดง QR นี้ที่เคาน์เตอร์": "Show this QR at the counter",
   "เลขสมาชิก": "Member number",
+  "ลิงก์เข้าสู่ระบบหมดเวลาแล้ว กรุณากด \"เข้าสู่ระบบด้วย LINE\" อีกครั้ง": "The sign-in link expired — please tap \"Sign in with LINE\" again",
+  "ยังไม่ได้อนุญาตให้ร้านใช้บัญชี LINE — กด \"เข้าสู่ระบบด้วย LINE\" แล้วกดอนุญาต หรือเข้าสู่ระบบด้วยเบอร์โทร": "The store was not allowed to use your LINE account — tap \"Sign in with LINE\" and allow it, or sign in with your phone",
+  "บัญชีสมาชิกนี้ถูกระงับ กรุณาติดต่อร้าน": "This member account is suspended, please contact the store",
+  "เข้าสู่ระบบด้วย LINE ไม่สำเร็จ กรุณาลองอีกครั้ง หรือเข้าสู่ระบบด้วยเบอร์โทร": "Signing in with LINE failed — please try again, or sign in with your phone",
+  "เข้าสู่ระบบด้วย LINE เสถียรขึ้น: ข้อความแจ้งชัดเจนเมื่อเข้าไม่ได้ ลิงก์อยู่ได้นานขึ้น และกันบัญชีสมาชิกที่ถูกลบ": "Sign in with LINE is steadier: clear messages when it fails, a longer-lived link, deleted members handled",
+  "ข้อความ LINE ส่งไปที่บัญชี LINE ที่ร้านรู้จักเสมอ แม้ลูกค้ามีรหัส LINE หลายตัว": "LINE messages always go to the LINE account the store's OA knows, even when a customer has several LINE ids",
+  "ปุ่มทดสอบการเชื่อมต่อเตือนเมื่อ LINE Login กับ LINE OA อยู่คนละ Provider": "The connection test warns when LINE Login and the LINE OA are in different Providers",
 };

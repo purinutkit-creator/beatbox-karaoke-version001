@@ -11,9 +11,16 @@ import { BOOKING_ROWS, codePath } from '../routes/line.js';
 import { calculatePoints } from '@beatbox/shared/calc.js';
 
 /** The connected LINE of a member who agreed to messages. */
-async function memberLine(memberId) {
+// A member may have more than one LINE id: LINE gives a different id per Provider, so when LINE Login and the OA sit in
+// different Providers the LINE Login id cannot receive OA messages. The id the OA has seen (chat / follow) comes first.
+export async function memberLine(memberId) {
   if (!memberId) return null;
-  const c = await one(`SELECT line_user_id FROM line_connections WHERE member_id = $1 AND status = 'CONNECTED' AND messaging_consent ORDER BY linked_at DESC LIMIT 1`, [memberId]);
+  const c = await one(
+    `SELECT lc.line_user_id FROM line_connections lc LEFT JOIN line_chat_users cu ON cu.line_user_id = lc.line_user_id
+     WHERE lc.member_id = $1 AND lc.status = 'CONNECTED' AND lc.messaging_consent
+     ORDER BY (cu.id IS NOT NULL AND cu.followed) DESC, lc.linked_at DESC LIMIT 1`,
+    [memberId],
+  );
   return c?.line_user_id || null;
 }
 const target = async (lineUserId, memberId) => lineUserId || (await memberLine(memberId));

@@ -721,13 +721,20 @@ r.get('/auth/line/start', async (req, res) => {
     return res.redirect(`/book/line-demo?redirect=${encodeURIComponent(redirect)}`);
   }
   const nonce = randomToken(12);
-  const state = signToken({ typ: 'line-state', nonce, redirect, st: currentStoreId() }, '10m');
+  const state = signToken({ typ: 'line-state', nonce, redirect, st: currentStoreId() }, '30m');
   res.redirect(await lineLogin.authorizeUrl(state, nonce));
 });
 
 async function handleLineProfile(profile, redirect) {
   return tx(async (c) => {
-    const ident = (await c.query(`SELECT * FROM member_auth_identities WHERE provider = 'LINE' AND provider_user_id = $1 AND status = 'ACTIVE'`, [profile.lineUserId])).rows[0];
+    let ident = (await c.query(`SELECT i.*, m.status AS member_status, m.deleted_at AS member_deleted FROM member_auth_identities i JOIN members m ON m.id = i.member_id WHERE i.provider = 'LINE' AND i.provider_user_id = $1 AND i.status = 'ACTIVE'`, [profile.lineUserId])).rows[0];
+    // the member was deleted: the LINE link goes with it (they can sign up again)
+    if (ident?.member_deleted) {
+      await c.query(`UPDATE member_auth_identities SET status = 'DISCONNECTED', disconnected_at = now() WHERE id = $1`, [ident.id]);
+      await c.query(`UPDATE line_connections SET status = 'DISCONNECTED', disconnected_at = now() WHERE member_id = $1 AND line_user_id = $2 AND status = 'CONNECTED'`, [ident.member_id, profile.lineUserId]);
+      ident = null;
+    }
+    if (ident && ident.member_status !== 'ACTIVE') return '/book/login?error=line_suspended';
     if (ident) {
       await c.query(`UPDATE member_auth_identities SET last_login_at = now(), display_name = $2, picture_url = $3 WHERE id = $1`, [ident.id, profile.displayName, profile.pictureUrl]);
       await c.query(`UPDATE line_connections SET last_login_at = now(), display_name = $2, picture_url = $3 WHERE line_user_id = $1 AND status = 'CONNECTED'`, [profile.lineUserId, profile.displayName, profile.pictureUrl]);
@@ -744,9 +751,13 @@ async function handleLineProfile(profile, redirect) {
 
 r.get('/auth/line/callback', async (req, res) => {
   const st = verifyToken(String(req.query.state || ''));
+  // the sign-in took longer than the link allows, or was opened twice: start again
   if (!st || st.typ !== 'line-state') return res.redirect('/book/login?error=line_state');
   if (st.st) setContextStore(st.st);
-  if (req.query.error) return res.redirect('/book/login?error=line_denied');
+  if (req.query.error) {
+    console.warn('[line] login refused by LINE', String(req.query.error), String(req.query.error_description || '').slice(0, 200));
+    return res.redirect(`/book/login?error=line_denied&redirect=${encodeURIComponent(st.redirect || '/book/account')}`);
+  }
   try {
     const tok = await lineLogin.exchangeCode(String(req.query.code));
     const idp = await lineLogin.verifyIdToken(tok.id_token, st.nonce);
@@ -754,7 +765,7 @@ r.get('/auth/line/callback', async (req, res) => {
     res.redirect(url);
   } catch (e) {
     console.error('[line] callback', e.message);
-    res.redirect('/book/login?error=line_failed');
+    res.redirect(`/book/login?error=line_failed&redirect=${encodeURIComponent(st.redirect || '/book/account')}`);
   }
 });
 
