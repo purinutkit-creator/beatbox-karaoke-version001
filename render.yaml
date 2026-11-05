@@ -56,6 +56,10 @@ services:
         sync: false
       - key: LINE_MESSAGING_ACCESS_TOKEN
         sync: false
+      # Moving to another database: DATABASE_URL = the new, empty one, COPY_FROM_DATABASE_URL = the old one —
+      # everything is copied once on start (server/src/db/copyFrom.js)
+      - key: COPY_FROM_DATABASE_URL
+        sync: false
 
 databases:
   - name: beatbox-db

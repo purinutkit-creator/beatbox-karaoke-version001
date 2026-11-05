@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { copyFromOldDatabase } from './db/copyFrom.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -121,6 +122,7 @@ export function createApp() {
 }
 
 export async function start() {
+  await copyFromOldDatabase();
   await migrate();
   const role = await ensureAppRole();
   if (role) console.log(`[db] connected as superuser → queries run as restricted role "${role}" so row-level security applies`);

@@ -1,8 +1,13 @@
 // The app version people see (corner tag, "new version" pop-up). Every release that goes live adds 0.1 (2.0 → 2.1 →
 // 2.2 …) with a line or two of what changed at the top of CHANGELOG; the screen shows what is new once per version.
-export const APP_VERSION = '3.3';
+export const APP_VERSION = '3.4';
 
 export const CHANGELOG = [
+  {
+    version: '3.4',
+    date: '2026-11-05',
+    items: ['ย้ายข้อมูลทั้งหมดไปฐานข้อมูลใหม่ได้ในครั้งเดียว (ตั้ง COPY_FROM_DATABASE_URL) ข้อมูลเดิมไม่หาย'],
+  },
   {
     version: '3.3',
     date: '2026-11-03',
