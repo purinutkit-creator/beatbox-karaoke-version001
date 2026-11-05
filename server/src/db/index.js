@@ -112,6 +112,9 @@ export async function ensureAppRole() {
     }
     const role = 'beatbox_app';
     await c.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role}') THEN CREATE ROLE ${role} NOLOGIN NOSUPERUSER NOBYPASSRLS; END IF; END $$`);
+    // a hosted "owner" that bypasses row-level security without being a superuser (e.g. Neon's neondb_owner) may only
+    // switch to a role it is a member of (PostgreSQL 16+ no longer makes the creator one)
+    if (!me.rolsuper) await c.query(`GRANT ${role} TO CURRENT_USER`).catch(() => {});
     await c.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
     await c.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
     await c.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
